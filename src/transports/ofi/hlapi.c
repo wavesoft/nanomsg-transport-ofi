@@ -1,5 +1,5 @@
 /**
- * NanoMsg libFabric Transport - Shared Functions
+ * NanoMsg libFabric Transport - High-Level API To libFabric
  * Copyright (c) 2015 Ioannis Charalampidis
  * 
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -30,7 +30,7 @@
 #include <netdb.h>
 #include <unistd.h>
 
-#include "libfabric_api.h"
+#include "hlapi.h"
 
 #define FT_PRINTERR(call, retv) \
 	do { fprintf(stderr, "OFI: Error on " call "(): %s:%d, ret=%d (%s)\n", __FILE__, __LINE__, (int) retv, fi_strerror((int) -retv)); } while (0)

@@ -1,11 +1,23 @@
 
+OFI_DIR=../src/transports/ofi
+
 .PHONY: all
 
-all: fabric_msg fabric_dgram
+all: test_msg test_dgram
 
-fabric_msg: fabric_msg.c
-	gcc ../src/transports/ofi/libfabric_api.c fabric_msg.c -I../src/transports/ofi -lfabric -g -o fabric_msg
+hlapi.o: $(OFI_DIR)/hlapi.c
+	gcc -c -I$(OFI_DIR) $(OFI_DIR)/hlapi.c -g -o hlapi.o
 
-fabric_dgram: fabric_dgram.c
-	gcc ../src/transports/ofi/libfabric_api.c fabric_dgram.c -I../src/transports/ofi -lfabric -g -o fabric_dgram
+test_dgram: hlapi.o fabric_dgram.c
+	gcc -I$(OFI_DIR) hlapi.o fabric_dgram.c -lfabric -g -o test_dgram
 
+test_msg: hlapi.o fabric_msg.c
+	gcc -I$(OFI_DIR) hlapi.o fabric_msg.c -lfabric -g -o test_msg
+
+clean:
+	rm -rf \
+		hlapi.o \
+		test_dgram \
+		test_dgram.dSYM \
+		test_msg \
+		test_msg.dSYM

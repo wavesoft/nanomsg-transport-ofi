@@ -13,8 +13,8 @@
      src/transports/ws/sha1.c
  
 +TRANSPORTS_OFI = \
-+    src/transports/ofi/shared.h \
-+    src/transports/ofi/shared.c \
++    src/transports/ofi/hlapi.h \
++    src/transports/ofi/hlapi.c \
 +    src/transports/ofi/bofi.h \
 +    src/transports/ofi/bofi.c \
 +    src/transports/ofi/cofi.h \

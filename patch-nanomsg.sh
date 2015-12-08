@@ -11,7 +11,7 @@ popd > /dev/null
 [ ! -f "${NANOMSG_DIR}/libnanomsg.pc.in" ] && echo -e "** FAILED **\nThis does not look like a nanomsg directory!" && exit 1
 
 # Check if we already have the ofi directory
-NANOMSG_SRC_DIR="${NANOMSG_DIR}/src/transports"
+NANOMSG_SRC_DIR="${NANOMSG_DIR}/src"
 NANOMSG_TRANSPORTS_OFI_DIR="${NANOMSG_SRC_DIR}/transports/ofi"
 [ -L "${NANOMSG_TRANSPORTS_OFI_DIR}" ] && echo -e "** FAILED **\nOFI Transport seems to be installed already!" && exit 1
 [ -d "${NANOMSG_TRANSPORTS_OFI_DIR}" ] && echo -e "** FAILED **\nOFI Transport seems to be installed by another source!" && exit 1
@@ -32,6 +32,11 @@ cp -v -r ${CURR_PATH}/src/transports/ofi ${NANOMSG_TRANSPORTS_OFI_DIR}
 [ $? -ne 0 ] && echo -e "** FAILED **\nUnable to copy sources!" && exit 1
 cp -v -r ${CURR_PATH}/src/ofi.h ${NANOMSG_SRC_DIR}/ofi.h
 [ $? -ne 0 ] && echo -e "** FAILED **\nUnable to copy sources!" && exit 1
+
+# Running autoreconf
+echo "Re-creating autoconfig files (to apply patches)..."
+(cd ${NANOMSG_DIR} && aclocal && autoconf && automake -a)
+[ $? -ne 0 ] && echo -e "** FAILED **\nUnable to run aclocal/autoconf/automake!" && exit 1
 
 # We are done
 echo "** SUCCESS **"

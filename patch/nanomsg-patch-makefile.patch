@@ -1,0 +1,46 @@
+--- Makefile.am	2015-11-20 18:16:48.000000000 +0100
++++ Makefile.am	2015-12-04 12:05:42.000000000 +0100
+@@ -35,6 +35,7 @@
+     src/ipc.h \
+     src/tcp.h \
+     src/ws.h \
++    src/ofi.h \
+     src/pair.h \
+     src/pubsub.h \
+     src/reqrep.h \
+@@ -306,6 +307,16 @@
+     src/transports/ws/sha1.h \
+     src/transports/ws/sha1.c
+ 
++TRANSPORTS_OFI = \
++    src/transports/ofi/shared.h \
++    src/transports/ofi/shared.c \
++    src/transports/ofi/bofi.h \
++    src/transports/ofi/bofi.c \
++    src/transports/ofi/cofi.h \
++    src/transports/ofi/cofi.c \
++    src/transports/ofi/ofi.h \
++    src/transports/ofi/ofi.c 
++
+ TRANSPORTS_TCPMUX = \
+     src/transports/tcpmux/atcpmux.h \
+     src/transports/tcpmux/atcpmux.c \
+@@ -324,7 +335,8 @@
+     $(TRANSPORTS_IPC) \
+     $(TRANSPORTS_TCP) \
+     $(TRANSPORTS_WS) \
+-    $(TRANSPORTS_TCPMUX)
++    $(TRANSPORTS_TCPMUX) \
++    $(TRANSPORTS_OFI)
+ 
+ libnanomsg_la_SOURCES = \
+     src/transport.h \
+@@ -339,7 +351,7 @@
+ pkgconfigdir = $(libdir)/pkgconfig
+ pkgconfig_DATA = libnanomsg.pc
+ 
+-libnanomsg_la_LDFLAGS = -no-undefined -version-info @NN_LIBTOOL_VERSION@
++libnanomsg_la_LDFLAGS = -lfabric -no-undefined -version-info @NN_LIBTOOL_VERSION@
+ libnanomsg_la_CFLAGS = -DNN_EXPORTS
+ 
+ ################################################################################

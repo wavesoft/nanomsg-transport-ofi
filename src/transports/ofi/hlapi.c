@@ -30,6 +30,13 @@
 #include <netdb.h>
 #include <unistd.h>
 
+#ifndef __STANDALONE_TESTS
+#include "../../utils/alloc.h"
+#include "../../utils/err.h"
+#else
+#include <nn_standalone_func.h>
+#endif
+
 #include "hlapi.h"
 
 #define FT_PRINTERR(call, retv) \
@@ -129,7 +136,8 @@ int ft_wait(struct fid_cq *cq)
  */
 static int ft_dupaddr(void **dst_addr, size_t *dst_addrlen, void *src_addr, size_t src_addrlen)
 {
-	*dst_addr = malloc(src_addrlen);
+	*dst_addr = nn_alloc (src_addrlen, "hofi");
+    alloc_assert (*dst_addr);
 	if (!*dst_addr) {
 		FT_ERR("address allocation failed\n");
 		return EAI_MEMORY;
@@ -388,7 +396,8 @@ int ofi_open_active_ep( struct ofi_resources * R, struct ofi_active_endpoint * E
 	EP->buf_size = MAX(EP->tx_size, FT_MAX_CTRL_MSG) + MAX(EP->rx_size, FT_MAX_CTRL_MSG);
 
 	/* Allocate buffer */
-	EP->buf = malloc(EP->buf_size);
+	EP->buf = nn_alloc (EP->buf_size, "hofi");
+    alloc_assert (EP->buf);
 	if (!EP->buf) {
 		perror("malloc");
 		return -FI_ENOMEM;

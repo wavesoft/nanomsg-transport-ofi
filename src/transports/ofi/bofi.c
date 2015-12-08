@@ -23,6 +23,7 @@
 #include "ofi.h"
 #include "bofi.h"
 #include "sofi.h"
+#include "hlapi.h"
 
 #include "../../utils/err.h"
 #include "../../utils/cont.h"

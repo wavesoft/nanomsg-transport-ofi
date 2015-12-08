@@ -2,7 +2,7 @@
 
 Nanomsg transport for interfacing with the OpenFabrics Interfaces (OFI) Library (libfabric).
 
-__This project is under development and will not compile!__
+__This project is under development and might not compile and/or work!__
 
 ## How to compile
 

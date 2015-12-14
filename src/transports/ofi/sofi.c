@@ -263,7 +263,7 @@ static void nn_sofi_poller_thread (void *arg)
 
         /* Receive data from OFI */
         ret = ofi_rx( self->ep, MAX_MSG_SIZE );
-        if (ret == 1) /* Cancelled, part of shutdown */
+        if (ret == -FI_ECANCELED) /* Cancelled, part of shutdown */
             break;
 
         /* Handle errors */

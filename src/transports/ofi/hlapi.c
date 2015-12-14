@@ -120,17 +120,19 @@ int ft_wait(struct fid_cq *cq)
 			return 0;
 
 		} else if (ret < 0 && ret != -FI_EAGAIN) {
-			/* Check if the operation was cancelled (ex. terminating connection) */
-			if (ret == 1) {
-				return 1;
-
-			/* Error */
-			} else if (ret == -FI_EAVAIL) {
+			if (ret == -FI_EAVAIL) {
 				struct fi_cq_err_entry err_entry;
 
 				/* Handle error */
 				ret = fi_cq_readerr(cq, &err_entry, 0);
-				printf("OFI: Error %s %s\n",
+
+				/* Check if the operation was cancelled (ex. terminating connection) */
+				if (err_entry.err == FI_ECANCELED) {
+					return -err_entry.err;
+				}
+
+				/* Display other erors */
+				printf("OFI: %s (%s)\n",
 					fi_strerror(err_entry.err),
 					fi_cq_strerror(cq, err_entry.prov_errno, err_entry.err_data, NULL, 0)
 				);
@@ -278,9 +280,9 @@ ssize_t ofi_tx( struct ofi_active_endpoint * R, size_t size )
 
 	/* Wait for Tx CQ */
 	ret = ft_wait(R->tx_cq);
-	if (ret == 1) { /* Cancelled */
-		return 1;
-	}
+	if (ret == -FI_ECANCELED) /* Cancelled */
+		return ret;
+
 	if (ret) {
 		FT_PRINTERR("ft_wait<tx_cq>", ret);
 		return ret;
@@ -307,9 +309,9 @@ ssize_t ofi_rx( struct ofi_active_endpoint * R, size_t size )
 
 	/* Wait for Rx CQ */
 	ret = ft_wait(R->rx_cq);
-	if (ret == 1) { /* Cancelled */
-		return 1;
-	}
+	if (ret == -FI_ECANCELED) /* Cancelled */
+		return ret;
+
 	if (ret) {
 		FT_PRINTERR("ft_wait<rx_cq>", ret);
 		return ret;

@@ -60,7 +60,7 @@ struct nn_sofi {
 
     /* Output buffers */
     struct nn_msg outmsg;
-    int outstate;
+    uint8_t outhdr [8];
 
     /*  This member can be used by owner to keep individual atcps in a list. */
     struct nn_list_item item;

@@ -85,8 +85,6 @@ void nn_sofi_init (struct nn_sofi *self,
     /* Initialize buffes */
     self->instate = -1;
     nn_msg_init (&self->inmsg, 0);
-    self->outstate = -1;    
-    nn_msg_init (&self->outmsg, 0);
 
     /* Initialize pipe base */
     printf("OFI: SOFI: Replacing pipebase\n");
@@ -130,26 +128,56 @@ static void nn_sofi_shutdown (struct nn_fsm *self, int src, int type,
 {
     printf("OFI: SOFI: Shutdown\n");
 
-    // Nothing now
+    /* TODO: Implement */
 }
 
 static int nn_sofi_send (struct nn_pipebase *self, struct nn_msg *msg)
 {
-    printf("OFI: SOFI: Send\n");
+    int ret;
     struct nn_sofi *sofi;
     sofi = nn_cont (self, struct nn_sofi, pipebase);
 
-    return -ECONNRESET;
+    /* * * * * * * * * * * * * * * * * * * * * * * * * * * */
+    /* WARNING : WE ARE BREAKING THE ZERO-COPY PRINCIPLE!  */
+    /* * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+    /*  Start async sending. */
+    size_t sz_outhdr = sizeof(sofi->outhdr);
+    size_t sz_sphdr = nn_chunkref_size (&msg->sphdr);
+    size_t sz_body = nn_chunkref_size (&msg->body);
+
+    /*  Serialise the message header. */
+    nn_putll (sofi->outhdr, sz_sphdr + sz_body);
+
+    /* TODO: Check maximum length */
+
+    /* Serialize data to the tx buffer */
+    memcpy( sofi->ep->tx_buf, &sofi->outhdr, sizeof(sofi->outhdr) );
+    memcpy( sofi->ep->tx_buf + sz_outhdr, 
+        nn_chunkref_data (&msg->sphdr), sz_sphdr );
+    memcpy( sofi->ep->tx_buf + sz_outhdr + sz_sphdr, 
+        nn_chunkref_data (&msg->body), sz_body );
+
+    /* Send buffer */
+    printf("OFI: SOFI: Send ing data (size=%lu)\n", sz_outhdr+sz_sphdr+sz_body );
+    ret = ofi_tx( sofi->ep, sz_outhdr+sz_sphdr+sz_body );
+    if (ret) {
+        /* TODO: Handle errors */
+        printf("OFI: SOFI: Error sending data!\n");
+        return -ECONNRESET;
+    }
+
+    /* Success */
+    return 0;
 }
 
 static int nn_sofi_recv (struct nn_pipebase *self, struct nn_msg *msg)
 {
-    printf("OFI: SOFI: Receive\n");
     int rc;
     struct nn_sofi *sofi;
     sofi = nn_cont (self, struct nn_sofi, pipebase);
 
-    /*  Move received message to the user. */
+    /* Move received message to the user. */
     nn_msg_mv (msg, &sofi->inmsg);
 
     /* Success */
@@ -163,6 +191,7 @@ static int nn_sofi_recv (struct nn_pipebase *self, struct nn_msg *msg)
 static void nn_sofi_poller_thread (void *arg)
 {
     ssize_t ret;
+    size_t size;
     struct nn_sofi * self = (struct nn_sofi *) arg;
 
     /* Infinite loop */
@@ -179,12 +208,32 @@ static void nn_sofi_poller_thread (void *arg)
         if (self->state != NN_SOFI_STATE_CONNECTED)
             break;
 
+        /*  Message header was received. Check that message size
+            is acceptable by comparing with NN_RCVMAXSIZE;
+            if it's too large, drop the connection. */
+        size = nn_getll ( self->ep->rx_buf );
+
+        /* Check for invalid sizes */
+        if (size > self->ep->rx_size) {
+            printf("OFI: SOFI: Discarding incoming packaget due to invalid size"
+                    " (len=%lu, max=%lu)\n", size, self->ep->rx_size );
+            continue;
+        }
+
         /* Initialize msg with rx chunk */
         nn_msg_term (&self->inmsg);
-        nn_msg_init_chunk( &self->inmsg, self->ep->rx_buf );
+        nn_msg_init( &self->inmsg, size );
+
+        /* * * * * * * * * * * * * * * * * * * * * * * * * * * */
+        /* WARNING : WE ARE BREAKING THE ZERO-COPY PRINCIPLE!  */
+        /* * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+        /* Copy body */
+        printf("OFI: SOFI: Received data (len=%lu)\n", size);
+        memcpy( nn_chunkref_data (&self->inmsg.body), 
+                self->ep->rx_buf + 8, size );
 
         /* Notify FSM for the fact that we have received data  */
-        printf("OFI: SOFI: Received data: '%s'\n", self->ep->rx_buf);
         nn_ctx_enter( self->fsm.ctx );
         self->instate = NN_SOFI_INSTATE_HASMSG;
         nn_fsm_action ( &self->fsm, NN_SOFI_DATA );

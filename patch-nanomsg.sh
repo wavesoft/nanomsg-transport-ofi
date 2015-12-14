@@ -16,15 +16,15 @@ NANOMSG_TRANSPORTS_OFI_DIR="${NANOMSG_SRC_DIR}/transports/ofi"
 [ -L "${NANOMSG_TRANSPORTS_OFI_DIR}" ] && echo -e "** FAILED **\nOFI Transport seems to be installed already!" && exit 1
 [ -d "${NANOMSG_TRANSPORTS_OFI_DIR}" ] && echo -e "** FAILED **\nOFI Transport seems to be installed by another source!" && exit 1
 
-# Apply patch to global source
+# Apply patches
 echo ${NANOMSG_DIR}
 echo "Patching..."
 patch -p0 -d ${NANOMSG_DIR} < ${CURR_PATH}/patch/nanomsg-patch-global.patch
-[ $? -ne 0 ] && echo -e "** FAILED **\nUnable to apply patch!" && exit 1
-
-# Apply patch to makefile
+[ $? -ne 0 ] && echo -e "** FAILED **\nUnable to apply patch to src/core/global.c!" && exit 1
+patch -p0 -d ${NANOMSG_DIR} < ${CURR_PATH}/patch/nanomsg-patch-symbol.patch
+[ $? -ne 0 ] && echo -e "** FAILED **\nUnable to apply patch to src/core/symbol.c!" && exit 1
 patch -d ${NANOMSG_DIR} < ${CURR_PATH}/patch/nanomsg-patch-makefile.patch
-[ $? -ne 0 ] && echo -e "** FAILED **\nUnable to apply patch!" && exit 1
+[ $? -ne 0 ] && echo -e "** FAILED **\nUnable to apply patch to Makefile.am!" && exit 1
 
 # Link sources directory
 echo "Copying..."

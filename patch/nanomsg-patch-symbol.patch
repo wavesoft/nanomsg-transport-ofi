@@ -1,0 +1,19 @@
+--- src/core/symbol.c	2015-11-20 18:16:48.000000000 +0100
++++ src/core/symbol.c	2015-12-11 15:03:55.000000000 +0100
+@@ -26,6 +26,7 @@
+ #include "../inproc.h"
+ #include "../ipc.h"
+ #include "../tcp.h"
++#include "../ofi.h"
+ 
+ #include "../pair.h"
+ #include "../pubsub.h"
+@@ -102,6 +103,8 @@
+         NN_TYPE_NONE, NN_UNIT_NONE},
+     {NN_TCP, "NN_TCP", NN_NS_TRANSPORT,
+         NN_TYPE_NONE, NN_UNIT_NONE},
++    {NN_OFI, "NN_OFI", NN_NS_TRANSPORT,
++        NN_TYPE_NONE, NN_UNIT_NONE},
+ 
+     {NN_PAIR, "NN_PAIR", NN_NS_PROTOCOL,
+         NN_TYPE_NONE, NN_UNIT_NONE},

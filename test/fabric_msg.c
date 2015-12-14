@@ -76,6 +76,11 @@ int main(int argc, char ** argv)
 		if (ret)
 			return ret;
 
+		/* Setup memory region */
+		ret = ofi_active_ep_init_mr( &ofi, &ep, 1024, 1024 );
+		if (ret)
+			return ret;
+
 		/* Receive data */
 		printf("Receiving data...");
 		ret = ofi_rx( &ep, MAX_MSG_SIZE );
@@ -105,6 +110,11 @@ int main(int argc, char ** argv)
 
 		/* Create a client & connect */
 		ret = ofi_init_client( &ofi, &ep, FI_SOCKADDR, node, service );
+		if (ret)
+			return ret;
+
+		/* Setup memory region */
+		ret = ofi_active_ep_init_mr( &ofi, &ep, 1024, 1024 );
 		if (ret)
 			return ret;
 

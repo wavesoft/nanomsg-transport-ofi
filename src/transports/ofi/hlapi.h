@@ -137,6 +137,11 @@ int ofi_init_server( struct ofi_resources * R, struct ofi_passive_endpoint * PEP
 int ofi_server_accept( struct ofi_resources * R, struct ofi_passive_endpoint * PEP, struct ofi_active_endpoint * EP );
 
 /**
+ * Initialize memory regions of an active endpoint (use this before tx/rx operations!)
+ */
+int ofi_active_ep_init_mr( struct ofi_resources * R, struct ofi_active_endpoint * EP, size_t rx_size, size_t tx_size );
+
+/**
  * Initialize as a connectionless endpoint, bound on 
  * the specified node/service
  */

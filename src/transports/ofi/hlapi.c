@@ -385,36 +385,6 @@ int ofi_open_active_ep( struct ofi_resources * R, struct ofi_active_endpoint * E
 	EP->rx_prefix_size = ft_rx_prefix_size( fi );
 	EP->tx_prefix_size = ft_tx_prefix_size( fi );
 
-	/* ==== Allocate Memory Region =============== */
-
-	/* Calculate tx size */
-	EP->tx_size = buffer_size;
-	if (EP->tx_size > fi->ep_attr->max_msg_size)
-		EP->tx_size = fi->ep_attr->max_msg_size;
-	EP->rx_size = EP->tx_size + EP->rx_prefix_size;
-	EP->tx_size += EP->tx_prefix_size;
-	EP->buf_size = MAX(EP->tx_size, FT_MAX_CTRL_MSG) + MAX(EP->rx_size, FT_MAX_CTRL_MSG);
-
-	/* Allocate buffer */
-	EP->buf = nn_alloc (EP->buf_size, "hofi");
-    alloc_assert (EP->buf);
-	if (!EP->buf) {
-		perror("malloc");
-		return -FI_ENOMEM;
-	}
-
-	/* Setup rx/tx buf */
-	EP->rx_buf = EP->buf;
-	EP->tx_buf = (char *) EP->buf + MAX(EP->rx_size, FT_MAX_CTRL_MSG);
-
-	/* Register buffer */
-	ret = fi_mr_reg(EP->domain, EP->buf, EP->buf_size, FI_RECV | FI_SEND,
-			0, 0, 0, &EP->mr, NULL);
-	if (ret) {
-		FT_PRINTERR("fi_mr_reg", ret);
-		return ret;
-	}
-
 	/* ==== Open Completion Queues =============== */
 
 	/* Prepare structures */
@@ -478,6 +448,44 @@ int ofi_open_active_ep( struct ofi_resources * R, struct ofi_active_endpoint * E
 	ret = fi_enable(EP->ep);
 	if (ret) {
 		FT_PRINTERR("fi_enable", ret);
+		return ret;
+	}
+
+	/* Success */
+	return 0;
+}
+
+/**
+ * Initialize memory regions of active endpoint
+ */
+int ofi_active_ep_init_mr( struct ofi_resources * R, struct ofi_active_endpoint * EP, size_t rx_size, size_t tx_size )
+{
+	int ret;
+
+	/* ==== Allocate Memory Region =============== */
+
+	/* Calculate tx,rx and buffer size */
+	EP->rx_size = rx_size + EP->rx_prefix_size;
+	EP->tx_size = tx_size + EP->tx_prefix_size;
+	EP->buf_size = MAX(EP->tx_size, FT_MAX_CTRL_MSG) + MAX(EP->rx_size, FT_MAX_CTRL_MSG);
+
+	/* Allocate buffer */
+	EP->buf = nn_alloc (EP->buf_size, "hofi");
+    alloc_assert (EP->buf);
+	if (!EP->buf) {
+		perror("malloc");
+		return -FI_ENOMEM;
+	}
+
+	/* Setup rx/tx buf */
+	EP->rx_buf = EP->buf;
+	EP->tx_buf = (char *) EP->buf + MAX(EP->rx_size, FT_MAX_CTRL_MSG);
+
+	/* Register buffer */
+	ret = fi_mr_reg(EP->domain, EP->buf, EP->buf_size, FI_RECV | FI_SEND,
+			0, 0, 0, &EP->mr, NULL);
+	if (ret) {
+		FT_PRINTERR("fi_mr_reg", ret);
 		return ret;
 	}
 

@@ -27,13 +27,17 @@
 #include "../../utils/err.h"
 #include "../../utils/alloc.h"
 
-#define NN_AOFI_STATE_IDLE 1
+#define NN_AOFI_STATE_IDLE       1
+#define NN_AOFI_STATE_ACCEPTING  2
+#define NN_AOFI_STATE_ACCEPTED   3
 
 /*  Private functions. */
 static void nn_aofi_handler (struct nn_fsm *self, int src, int type,
     void *srcptr);
 static void nn_aofi_shutdown (struct nn_fsm *self, int src, int type,
     void *srcptr);
+
+// static void nn_sofi_accept_thread (void *arg);
 
 /**
  * Initialize AOFI FSM
@@ -73,6 +77,34 @@ void nn_aofi_start (struct nn_aofi *self )
 
 }
 
+// /**
+//  * The internal thread that keeps blocking until we have an accept operation
+//  */
+// static void nn_sofi_poller_thread (void *arg)
+// {
+//     ssize_t ret;
+//     struct nn_sofi * self = (struct nn_sofi *) arg;
+
+//     /* Infinite loop */
+//     while (1) {
+
+//         /* Listen for incoming connections */
+//         ret = ofi_server_accept( aofi->ofi, aofi->pep, &aofi->ep );
+//         if (ret < 0) {
+//             printf("OFI: AOFI: ERROR: Cannot accept!\n");
+//             /* TODO: What do I do? */
+//             return;
+//         }
+
+//         printf("OFI: SOFI: Received data: '%s'\n", self->ep->rx_buf);
+//         nn_ctx_enter( self->fsm.ctx );
+//         nn_fsm_raise ( &self->fsm, &self->datain, NN_SOFI_DATA );
+//         nn_ctx_leave( self->fsm.ctx );
+//         // nn_fsm_action( &self->fsm, NN_SOFI_DATA );
+
+//     }
+// }
+
 static void nn_aofi_shutdown (struct nn_fsm *self, int src, int type,
     void *srcptr)
 {
@@ -107,14 +139,7 @@ static void nn_aofi_handler (struct nn_fsm *self, int src, int type,
         case NN_FSM_ACTION:
             switch (type) {
             case NN_FSM_START:
-                printf("OFI: AOFI: Accepting\n");
-
-                /* Listen for incoming connections */
-                ret = ofi_server_accept( aofi->ofi, aofi->pep, &aofi->ep );
-                if (ret < 0) {
-                    printf("OFI: AOFI: ERROR: Cannot accept!\n");
-                    return;
-                }
+            
 
                 /* Start SOFI to handle the connection from now on */
                 nn_sofi_init(&aofi->sofi, aofi->ofi, &aofi->ep, aofi->epbase, 

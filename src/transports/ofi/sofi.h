@@ -54,6 +54,17 @@ struct nn_sofi {
     struct ofi_resources        * ofi;
     struct ofi_active_endpoint  * ep;
 
+    /* Input buffers */
+    struct nn_msg inmsg;
+    int instate;
+
+    /* Output buffers */
+    struct nn_msg outmsg;
+    int outstate;
+
+    /*  This member can be used by owner to keep individual atcps in a list. */
+    struct nn_list_item item;
+
     /* The OFI Poller thread */
     struct nn_thread thread;
     

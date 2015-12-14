@@ -37,8 +37,8 @@ struct nn_ofisock {
     int state;
 
     /* The high-level api structures */
-    struct ofi_resources        ofi;
-    struct ofi_passive_endpoint pep;
+    struct ofi_resources        * ofi;
+    struct ofi_active_endpoint  * ep;
 
     /*  Events raised by the usock. */
     struct nn_fsm_event event_established;
@@ -47,7 +47,8 @@ struct nn_ofisock {
     struct nn_fsm_event event_error;
 
 };
-/*  State machine managing accepting OpenFabrics Interface socket. */
+
+/* State machine managing accepting OpenFabrics Interface socket. */
 int nn_ofisock_create (struct nn_ofisock *self, int src, struct nn_fsm *owner);
 
 #endif

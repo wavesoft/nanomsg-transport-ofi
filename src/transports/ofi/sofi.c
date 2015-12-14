@@ -28,12 +28,17 @@
 #include "../../utils/err.h"
 #include "../../utils/cont.h"
 #include "../../utils/alloc.h"
-
+#include "../../utils/wire.h"
 
 #define NN_SOFI_STATE_IDLE      1
 #define NN_SOFI_STATE_CONNECTED 2
 
 #define NN_SOFI_DATA            3000
+
+/*  Possible states of the inbound part of the object. */
+#define NN_SOFI_INSTATE_HDR     1
+#define NN_SOFI_INSTATE_BODY    2
+#define NN_SOFI_INSTATE_HASMSG  3
 
 /*  State machine functions. */
 static void nn_sofi_handler (struct nn_fsm *self, int src, int type, 
@@ -59,6 +64,8 @@ void nn_sofi_init (struct nn_sofi *self,
     struct ofi_resources *ofi, struct ofi_active_endpoint *ep, 
     struct nn_epbase *epbase, int src, struct nn_fsm *owner)
 {    
+    int ret;
+
     /* Initialize FSM */
     nn_fsm_init (&self->fsm, nn_sofi_handler, nn_sofi_shutdown,
         src, self, owner);
@@ -68,13 +75,44 @@ void nn_sofi_init (struct nn_sofi *self,
     self->ofi = ofi;
     self->ep = ep;
 
+    /* Initialize list item */
+    nn_list_item_init (&self->item);
+
     /* Initialize fsm events */ 
     nn_fsm_event_init (&self->connected);
     nn_fsm_event_init (&self->datain);
 
+    /* Initialize buffes */
+    self->instate = -1;
+    nn_msg_init (&self->inmsg, 0);
+    self->outstate = -1;    
+    nn_msg_init (&self->outmsg, 0);
+
     /* Initialize pipe base */
     printf("OFI: SOFI: Replacing pipebase\n");
     nn_pipebase_init (&self->pipebase, &nn_sofi_pipebase_vfptr, epbase);
+
+    /* Get maximum size of receive buffer */
+    int recv_size;
+    int send_size;
+    size_t opt_sz = sizeof (recv_size);
+
+    /* Get buffer sizes */
+    nn_epbase_getopt (epbase, NN_SOL_SOCKET, NN_SNDBUF,
+        &send_size, &opt_sz);
+    nn_epbase_getopt (epbase, NN_SOL_SOCKET, NN_RCVBUF,
+        &recv_size, &opt_sz);
+
+    /* Initialize OFI memory region */
+    printf("OFI: SOFI: Initializing MR with tx_size=%i, rx_size=%i\n",
+        send_size, recv_size);
+    ret = ofi_active_ep_init_mr( self->ofi, self->ep, (unsigned)recv_size, 
+        (unsigned)send_size );
+    if (ret) {
+        /* TODO: Handle error */
+        printf("OFI: SOFI: ERROR: Unable to allocate memory region for EP!\n");
+        return;
+    }
 
     /* Start FSM */
     nn_fsm_start (&self->fsm);
@@ -95,7 +133,6 @@ static void nn_sofi_shutdown (struct nn_fsm *self, int src, int type,
     // Nothing now
 }
 
-
 static int nn_sofi_send (struct nn_pipebase *self, struct nn_msg *msg)
 {
     printf("OFI: SOFI: Send\n");
@@ -111,11 +148,17 @@ static int nn_sofi_recv (struct nn_pipebase *self, struct nn_msg *msg)
     int rc;
     struct nn_sofi *sofi;
     sofi = nn_cont (self, struct nn_sofi, pipebase);
-    return -ECONNRESET;
+
+    /*  Move received message to the user. */
+    nn_msg_mv (msg, &sofi->inmsg);
+
+    /* Success */
+    return 0;
 }
 
 /**
- * The internal poller thread, since OFI does not have blocking UNIX file descriptors
+ * The internal poller thread, since OFI does not 
+ * have blocking UNIX file descriptors
  */
 static void nn_sofi_poller_thread (void *arg)
 {
@@ -132,12 +175,20 @@ static void nn_sofi_poller_thread (void *arg)
             break;
         }
 
+        /* If exited the connected state, stop thread */
+        if (self->state != NN_SOFI_STATE_CONNECTED)
+            break;
+
+        /* Initialize msg with rx chunk */
+        nn_msg_term (&self->inmsg);
+        nn_msg_init_chunk( &self->inmsg, self->ep->rx_buf );
+
+        /* Notify FSM for the fact that we have received data  */
         printf("OFI: SOFI: Received data: '%s'\n", self->ep->rx_buf);
-        nn_assert_state (self, NN_SOFI_STATE_CONNECTED);
         nn_ctx_enter( self->fsm.ctx );
-        nn_fsm_raise ( &self->fsm, &self->datain, NN_SOFI_DATA );
+        self->instate = NN_SOFI_INSTATE_HASMSG;
+        nn_fsm_action ( &self->fsm, NN_SOFI_DATA );
         nn_ctx_leave( self->fsm.ctx );
-        // nn_fsm_action( &self->fsm, NN_SOFI_DATA );
 
     }
 }
@@ -152,7 +203,8 @@ static void nn_sofi_handler (struct nn_fsm *self, int src, int type,
 
     /* Continue with the next OFI Event */
     sofi = nn_cont (self, struct nn_sofi, fsm);
-    printf("> nn_sofi_handler state=%i, src=%i, type=%i\n", sofi->state, src, type);
+    printf("> nn_sofi_handler state=%i, src=%i, type=%i\n", sofi->state, src, 
+        type);
 
     /* Handle new state */
     switch (sofi->state) {
@@ -169,14 +221,10 @@ static void nn_sofi_handler (struct nn_fsm *self, int src, int type,
 
                 /* Start pipe */
                 nn_pipebase_start( &sofi->pipebase );
-                sofi->state = NN_SOFI_STATE_CONNECTED;
 
                 /* Start poller thread */
+                sofi->state = NN_SOFI_STATE_CONNECTED;
                 nn_thread_init (&sofi->thread, nn_sofi_poller_thread, sofi);
-
-                /* We are started */
-                printf("OFI: SOFI: Started\n");
-                // nn_fsm_raise (self, &sofi->connected, NN_SOFI_CONNECTED);
 
                 return;
             default:
@@ -198,8 +246,8 @@ static void nn_sofi_handler (struct nn_fsm *self, int src, int type,
             switch (type) {
             case NN_SOFI_DATA:
 
-                /* We received some incoming data */
-                printf("OFI: SOFI: Got incoming data\n");
+                /* Notify pipebase that we have some data */
+                nn_pipebase_received (&sofi->pipebase);
 
                 return;
             default:

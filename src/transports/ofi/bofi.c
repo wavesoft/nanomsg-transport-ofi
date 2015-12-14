@@ -79,8 +79,6 @@ static void nn_bofi_handler (struct nn_fsm *self, int src, int type,
     void *srcptr);
 static void nn_bofi_shutdown (struct nn_fsm *self, int src, int type, 
     void *srcptr);
-static void nn_bofi_start_listening (struct nn_bofi *self);
-static void nn_bofi_start_accepting (struct nn_bofi *self);
 
 /* Thread functions */
 static void nn_bofi_accept_thread (void *arg);
@@ -92,7 +90,6 @@ int nn_bofi_create (void *hint, struct nn_epbase **epbase)
 {
     int ret;
     struct nn_bofi *self;
-    const char * addr;
     const char * domain;
     const char * service;
 
@@ -158,21 +155,6 @@ int nn_bofi_create (void *hint, struct nn_epbase **epbase)
 }
 
 /**
- * Stop the Bound OFI FSM
- */
-static void nn_bofi_stop (struct nn_epbase *self)
-{
-    printf("OFI: Stopping OFI\n");
-
-    /* Get reference to the bofi structure */
-    struct nn_bofi *bofi;
-    bofi = nn_cont(self, struct nn_bofi, epbase);
-
-    /* Stop the FSM */
-    nn_fsm_stop (&bofi->fsm);
-}
-
-/**
  * The internal thread that takes care of the blocking accept() operations
  */
 static void nn_bofi_accept_thread (void *arg)
@@ -225,6 +207,23 @@ static void nn_bofi_accept_thread (void *arg)
 }
 
 /**
+ * Stop the Bound OFI FSM
+ */
+static void nn_bofi_stop (struct nn_epbase *self)
+{
+    printf("OFI: Stopping OFI\n");
+
+    /* Get reference to the bofi structure */
+    struct nn_bofi *bofi;
+    bofi = nn_cont(self, struct nn_bofi, epbase);
+
+    /* TODO: Implement */
+
+    /* Stop the FSM */
+    nn_fsm_stop (&bofi->fsm);
+}
+
+/**
  * Destroy the OFI FSM
  */
 static void nn_bofi_destroy (struct nn_epbase *self)
@@ -234,6 +233,8 @@ static void nn_bofi_destroy (struct nn_epbase *self)
     /* Get reference to the bofi structure */
     struct nn_bofi *bofi;
     bofi = nn_cont(self, struct nn_bofi, epbase);
+
+    /* TODO: Implement */
 
     /* Free structures */
     nn_list_term (&bofi->sofis);
@@ -251,7 +252,8 @@ static void nn_bofi_shutdown (struct nn_fsm *self, int src, int type,
 {
     printf("OFI: Shutting down OFI\n");
 
-    // Nothing now
+    /* TODO: Implement */
+
 }
 
 /**

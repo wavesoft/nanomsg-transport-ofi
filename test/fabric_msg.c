@@ -76,6 +76,15 @@ int main(int argc, char ** argv)
 		if (ret)
 			return ret;
 
+		/* Receive data */
+		printf("Receiving data...");
+		ret = ofi_rx( &ep, MAX_MSG_SIZE );
+		if (ret) {
+			printf("Error sending message!\n");
+			return 1;
+		}
+		printf("'%s'\n", ep.rx_buf );
+
 		/* Send data */
 		printf("Sending data...");
 		sprintf( ep.tx_buf, "Hello World" );
@@ -86,14 +95,6 @@ int main(int argc, char ** argv)
 		}
 		printf("OK\n");
 
-		/* Receive data */
-		printf("Receiving data...");
-		ret = ofi_rx( &ep, MAX_MSG_SIZE );
-		if (ret) {
-			printf("Error sending message!\n");
-			return 1;
-		}
-		printf("'%s'\n", ep.rx_buf );
 
 	} else if (!strcmp(argv[1], "client")) {
 
@@ -107,15 +108,6 @@ int main(int argc, char ** argv)
 		if (ret)
 			return ret;
 
-		/* Receive data */
-		printf("Receiving data...");
-		ret = ofi_rx( &ep, MAX_MSG_SIZE );
-		if (ret) {
-			printf("Error sending message!\n");
-			return 1;
-		}
-		printf("'%s'\n", ep.rx_buf );
-
 		/* Send data */
 		printf("Sending data...");
 		sprintf( ep.tx_buf, "Hello World" );
@@ -125,6 +117,15 @@ int main(int argc, char ** argv)
 			return 1;
 		}
 		printf("OK\n");
+
+		/* Receive data */
+		printf("Receiving data...");
+		ret = ofi_rx( &ep, MAX_MSG_SIZE );
+		if (ret) {
+			printf("Error sending message!\n");
+			return 1;
+		}
+		printf("'%s'\n", ep.rx_buf );
 
 	} else {
 		printf("ERROR: Unknown action! Second argument must be 'server' or 'client'\n");

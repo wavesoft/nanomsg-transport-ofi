@@ -1,5 +1,5 @@
 --- Makefile.am	2015-11-20 18:16:48.000000000 +0100
-+++ Makefile.am	2015-12-04 12:05:42.000000000 +0100
++++ Makefile.am	2015-12-08 15:26:56.000000000 +0100
 @@ -35,6 +35,7 @@
      src/ipc.h \
      src/tcp.h \
@@ -8,13 +8,15 @@
      src/pair.h \
      src/pubsub.h \
      src/reqrep.h \
-@@ -306,6 +307,16 @@
+@@ -306,6 +307,18 @@
      src/transports/ws/sha1.h \
      src/transports/ws/sha1.c
  
 +TRANSPORTS_OFI = \
 +    src/transports/ofi/hlapi.h \
 +    src/transports/ofi/hlapi.c \
++    src/transports/ofi/aofi.h \
++    src/transports/ofi/aofi.c \
 +    src/transports/ofi/bofi.h \
 +    src/transports/ofi/bofi.c \
 +    src/transports/ofi/cofi.h \
@@ -25,7 +27,7 @@
  TRANSPORTS_TCPMUX = \
      src/transports/tcpmux/atcpmux.h \
      src/transports/tcpmux/atcpmux.c \
-@@ -324,7 +335,8 @@
+@@ -324,7 +337,8 @@
      $(TRANSPORTS_IPC) \
      $(TRANSPORTS_TCP) \
      $(TRANSPORTS_WS) \
@@ -35,7 +37,7 @@
  
  libnanomsg_la_SOURCES = \
      src/transport.h \
-@@ -339,7 +351,7 @@
+@@ -339,7 +353,7 @@
  pkgconfigdir = $(libdir)/pkgconfig
  pkgconfig_DATA = libnanomsg.pc
  

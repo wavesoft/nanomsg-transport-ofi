@@ -30,3 +30,7 @@
 
 # Debug files
 *.dSYM/
+
+test/test_dgram
+
+test/test_msg

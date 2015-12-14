@@ -22,7 +22,7 @@
 
 #include "ofi.h"
 #include "bofi.h"
-#include "sofi.h"
+#include "aofi.h"
 #include "hlapi.h"
 
 #include "../../utils/err.h"
@@ -30,13 +30,25 @@
 #include "../../utils/alloc.h"
 
 #define NN_BOFI_STATE_IDLE      1
-#define NN_BOFI_STATE_CLOSING   2
+#define NN_BOFI_STATE_ACTIVE    2
+#define NN_BOFI_STATE_PENDING   3
+
+#define NN_BOFI_SRC_SOFI        1
+#define NN_BTCP_SRC_AOFI        2
 
 struct nn_bofi {
 
     /*  The state machine. */
     struct nn_fsm fsm;
     int state;
+
+    /* The high-level api structures */
+    struct ofi_resources        ofi;
+    struct ofi_passive_endpoint pep;
+
+    /* The Accepting OFI */
+    struct nn_aofi *            aofi;
+    struct nn_list              aofis;
 
     /*  This object is a specific type of endpoint.
         Thus it is derived from epbase. */
@@ -65,74 +77,50 @@ static void nn_bofi_start_accepting (struct nn_bofi *self);
  */
 int nn_bofi_create (void *hint, struct nn_epbase **epbase)
 {
-    const char * addr;
-    const char * local_domain;
-    const char * local_service;
-    const char * remote_domain;
-    const char * remote_service;
+    int ret;
     struct nn_bofi *self;
+    const char * addr;
+    const char * domain;
+    const char * service;
 
     /*  Allocate the new endpoint object. */
-    self = nn_alloc (sizeof (struct nn_bofi), "ctcp");
+    self = nn_alloc (sizeof (struct nn_bofi), "bofi");
     alloc_assert (self);
 
     /*  Initalise the endpoint. */
     nn_epbase_init (&self->epbase, &nn_bofi_epbase_vfptr, hint);
-    local_domain = nn_epbase_getaddr (&self->epbase);
+    domain = nn_epbase_getaddr (&self->epbase);
 
-    /* Separate local/remote endpoints */
-    remote_domain = strrchr( local_domain, '@' );
-    if (remote_domain == NULL) {
-
-        /* No remote configuration */
-        remote_service = NULL;
-
-        /* Get local service */
-        local_service = strrchr (local_domain, ':');
-        if (local_service == NULL) {
-            nn_epbase_term (&self->epbase);
-            return -EINVAL;
-        }
-        *(char*)(local_service) = '\0'; /* << TODO: That's a HACK! */
-        local_service++;
-
-    } else {
-
-        /* Separate remote domain */
-        *(char*)(remote_domain) = '\0'; /* << TODO: That's a HACK! */
-        remote_domain++;
-
-        /* Get local service */
-        local_service = strrchr (local_domain, ':');
-        if (local_service == NULL) {
-            nn_epbase_term (&self->epbase);
-            return -EINVAL;
-        }
-        *(char*)(local_service) = '\0'; /* << TODO: That's a HACK! */
-        local_service++;
-
-        /* Get remote service */
-        remote_service = strrchr (remote_domain, ':');
-        if (remote_service == NULL) {
-            nn_epbase_term (&self->epbase);
-            return -EINVAL;
-        }
-        *(char*)(remote_service) = '\0'; /* << TODO: That's a HACK! */
-        remote_service++;
-
+    /* Get local service */
+    service = strrchr (domain, ':');
+    if (service == NULL) {
+        nn_epbase_term (&self->epbase);
+        return -EINVAL;
     }
+    *(char*)(service) = '\0'; /* << TODO: That's a HACK! */
+    service++;
 
     /* Debug */
-    printf("OFI: Creating bound OFI socket "
-        "(domain=%s, service=%s, remote=%s, remote-service=%s)\n", 
-        local_domain, local_service, remote_domain, remote_service );
+    printf("OFI: Creating bound OFI socket (domain=%s, service=%s)\n", domain, service );
 
-    /*  Initialise the FSM. */
+    /* Initialize ofi */
+    ret = ofi_alloc( &self->ofi, FI_EP_MSG );
+    if (ret < 0) return ret;
+
+    /* Start server */
+    ret = ofi_init_server( &self->ofi, &self->pep, FI_SOCKADDR, domain, service );
+    if (ret < 0) return ret;
+
+    /*  Initialise the root FSM. */
     nn_fsm_init_root(&self->fsm, 
         nn_bofi_handler, 
         nn_bofi_shutdown,
         nn_epbase_getctx( &self->epbase ));
     self->state = NN_BOFI_STATE_IDLE;
+
+    /* Initialize the list of Active OFI Connections */
+    self->aofi = NULL;
+    nn_list_init (&self->aofis);
 
     /*  Start FSM. */
     nn_fsm_start( &self->fsm );
@@ -169,9 +157,9 @@ static void nn_bofi_destroy (struct nn_epbase *self)
     struct nn_bofi *bofi;
     bofi = nn_cont(self, struct nn_bofi, epbase);
 
-    /* Free structure */
+    /* Free structures */
+    nn_list_term (&bofi->aofis);
     nn_free (bofi);
-
 }
 
 /**
@@ -212,7 +200,7 @@ static void nn_bofi_handler (struct nn_fsm *self, int src, int type,
         case NN_FSM_ACTION:
             switch (type) {
             case NN_FSM_START:
-                nn_bofi_start_listening (bofi);
+                nn_bofi_start_accepting (bofi);
                 return;
             default:
                 nn_fsm_bad_action (bofi->state, src, type);
@@ -223,11 +211,60 @@ static void nn_bofi_handler (struct nn_fsm *self, int src, int type,
         }
 
 /******************************************************************************/
-/*  CLOSING_USOCK state.                                                     */
-/*  usock object was asked to stop but it haven't stopped yet.                */
+/*  NN_BOFI_STATE_ACTIVE state.                                               */
+/*  the state machine is ready to handle incoming connections                 */
 /******************************************************************************/
-    case NN_BOFI_STATE_CLOSING:
-        nn_fsm_bad_source (bofi->state, src, type);
+    case NN_BOFI_STATE_ACTIVE:
+        switch (src) {
+
+        case NN_BTCP_SRC_AOFI:
+            switch (type) {
+            case NN_AOFI_ACCEPTED:
+
+                /*  Move the newly created connection to the list of existing
+                    connections. */
+                nn_list_insert (&bofi->aofis, &bofi->aofi->item,
+                    nn_list_end (&bofi->aofis));
+                bofi->aofi = NULL;
+
+                /* Wait until SOFI is connected before accepting another connection */
+                // self->state = NN_BOFI_STATE_PENDING;
+
+                /*  Start waiting for a new incoming connection. */
+                nn_bofi_start_accepting (bofi);
+
+                return;
+            default:
+                nn_fsm_bad_action (bofi->state, src, type);
+            }
+
+        default:
+            nn_fsm_bad_source (bofi->state, src, type);
+        }
+
+/******************************************************************************/
+/*  NN_BOFI_STATE_PENDING state.                                              */
+/*  waiting confirmation from SOFI before waiting for another connection      */
+/******************************************************************************/
+    case NN_BOFI_STATE_PENDING:
+        switch (src) {
+
+        case NN_BTCP_SRC_SOFI:
+            switch (type) {
+            case NN_SOFI_CONNECTED:
+
+                /*  Start waiting for a new incoming connection. */
+                nn_bofi_start_accepting (bofi);
+                self->state = NN_BOFI_STATE_ACTIVE;
+
+                return;
+            default:
+                nn_fsm_bad_action (bofi->state, src, type);
+            }
+
+        default:
+            nn_fsm_bad_source (bofi->state, src, type);
+        }
 
 /******************************************************************************/
 /*  Invalid state.                                                            */
@@ -243,18 +280,20 @@ static void nn_bofi_handler (struct nn_fsm *self, int src, int type,
 /*  State machine actions.                                                    */
 /******************************************************************************/
 
-static void nn_bofi_start_listening (struct nn_bofi *self)
-{
-
-    printf("OFI: Listening\n");
-
-    // Just stop for now
-    nn_fsm_stop(&self->fsm);
-    self->state = NN_BOFI_STATE_CLOSING;
-
-}
-
+/**
+ * Create a new accepting FSM
+ */
 static void nn_bofi_start_accepting (struct nn_bofi *self)
 {
+    /*  Allocate new aofi state machine. */
+    printf("OFI: Allocating new AOFI\n");
+    self->aofi = nn_alloc (sizeof (struct nn_aofi), "aofi");
+    alloc_assert (self->aofi);
+    nn_aofi_init (self->aofi, &self->ofi, &self->pep, &self->epbase, NN_BTCP_SRC_AOFI, &self->fsm);
+
+    /*  Start waiting for a new incoming connection. */
+    self->state = NN_BOFI_STATE_ACTIVE;
+    printf("OFI: Starting new AOFI\n");
+    nn_aofi_start (self->aofi);
 
 }

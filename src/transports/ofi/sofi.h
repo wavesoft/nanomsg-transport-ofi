@@ -34,7 +34,7 @@
 #define NN_BTCP_SRC_SOFI     10000
 
 /* Events from the SOFI */
-#define NN_SOFI_CONNECTED    2001
+#define NN_SOFI_STOPPED      2001
 
 /* Shared, Connected OFI FSM */
 struct nn_sofi {
@@ -56,7 +56,6 @@ struct nn_sofi {
 
     /* Input buffers */
     struct nn_msg inmsg;
-    int instate;
 
     /* Output buffers */
     struct nn_msg outmsg;
@@ -74,5 +73,14 @@ struct nn_sofi {
 void nn_sofi_init (struct nn_sofi *self, 
     struct ofi_resources *ofi, struct ofi_active_endpoint *ep, 
     struct nn_epbase *epbase, int src, struct nn_fsm *owner);
+
+/* Check if FSM is idle */
+int nn_sofi_isidle (struct nn_sofi *self);
+
+/*  Stop the state machine */
+void nn_sofi_stop (struct nn_sofi *sofi);
+
+/*  Cleanup the state machine */
+void nn_sofi_term (struct nn_sofi *sofi);
 
 #endif

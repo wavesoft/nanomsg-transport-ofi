@@ -69,6 +69,14 @@
 #define FT_PROCESS_EQ_ERR(rd, eq, fn, str) \
 	FT_PROCESS_QUEUE_ERR(dbg_readerr, rd, eq, fn, str)
 
+#define FT_CLOSE_FID(fd)			\
+	do {					\
+		if ((fd)) {			\
+			fi_close(&(fd)->fid);	\
+			fd = NULL;		\
+		}				\
+	} while (0)
+
 #define MAX(a,b) ((a>b) ? a : b)
 
 
@@ -112,8 +120,12 @@ int ft_wait(struct fid_cq *cq)
 			return 0;
 
 		} else if (ret < 0 && ret != -FI_EAGAIN) {
+			/* Check if the operation was cancelled (ex. terminating connection) */
+			if (ret == 1) {
+				return 1;
+
 			/* Error */
-			if (ret == -FI_EAVAIL) {
+			} else if (ret == -FI_EAVAIL) {
 				struct fi_cq_err_entry err_entry;
 
 				/* Handle error */
@@ -266,6 +278,9 @@ ssize_t ofi_tx( struct ofi_active_endpoint * R, size_t size )
 
 	/* Wait for Tx CQ */
 	ret = ft_wait(R->tx_cq);
+	if (ret == 1) { /* Cancelled */
+		return 1;
+	}
 	if (ret) {
 		FT_PRINTERR("ft_wait<tx_cq>", ret);
 		return ret;
@@ -292,6 +307,9 @@ ssize_t ofi_rx( struct ofi_active_endpoint * R, size_t size )
 
 	/* Wait for Rx CQ */
 	ret = ft_wait(R->rx_cq);
+	if (ret == 1) { /* Cancelled */
+		return 1;
+	}
 	if (ret) {
 		FT_PRINTERR("ft_wait<rx_cq>", ret);
 		return ret;
@@ -722,4 +740,59 @@ int ofi_init_client( struct ofi_resources * R, struct ofi_active_endpoint * EP, 
 	return 0;
 }
 
+//////////////////////////////////////////////////////////////////////////////////////////
+// OFI Cleanup Functions
+//////////////////////////////////////////////////////////////////////////////////////////
 
+/**
+ * Free hints and core structures
+ */
+int ofi_free( struct ofi_resources * R )
+{
+
+	/* Close FDs */
+	FT_CLOSE_FID( R->eq );
+	FT_CLOSE_FID( R->fabric );
+
+	/* Free resources */
+	fi_freeinfo( R->hints );
+	fi_freeinfo( R->fi );
+
+	/* Success */
+	return 0;
+}
+
+/**
+ * Free passive endpoint
+ */
+int ofi_free_pep( struct ofi_passive_endpoint * ep )
+{
+
+	/* Close endpoint */
+	FT_CLOSE_FID( ep->pep );
+
+	/* Success */
+	return 0;
+}
+
+/**
+ * Free active endpoint
+ */
+int ofi_free_ep( struct ofi_active_endpoint * ep )
+{
+
+	/* Close endpoint */
+	fi_cancel( &(ep->ep)->fid, &ep->tx_ctx );
+	fi_cancel( &(ep->ep)->fid, &ep->rx_ctx );
+	FT_CLOSE_FID( ep->ep );
+
+	/* Free structures */
+	FT_CLOSE_FID( ep->mr );
+	FT_CLOSE_FID( ep->av );
+	FT_CLOSE_FID( ep->tx_cq );
+	FT_CLOSE_FID( ep->rx_cq );
+	FT_CLOSE_FID( ep->domain );
+
+	/* Success */
+	return 0;
+}

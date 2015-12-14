@@ -29,9 +29,21 @@
 #include "../../utils/cont.h"
 #include "../../utils/alloc.h"
 
+/* Helper macro to enable or disable verbose logs on console */
+#ifdef OFI_DEBUG_LOG
+    /* Enable debug */
+    #define _ofi_debug(...)   printf(__VA_ARGS__)
+#else
+    /* Disable debug */
+    #define _ofi_debug(...)
+#endif
+
+/* State machine states */
 #define NN_COFI_STATE_IDLE              1
 #define NN_COFI_STATE_CONNECTED         2
+#define NN_COFI_STATE_STOPPING          3
 
+/* State machine sources */
 #define NN_COFI_SRC_SOFI                1
 
 /* nn_epbase virtual interface implementation. */
@@ -78,10 +90,10 @@ int nn_cofi_create (void *hint, struct nn_epbase **epbase)
     const char * domain;
     const char * service;
 
-    printf("OFI: Creating connected OFI socket\n");
+    _ofi_debug("OFI: Creating connected OFI socket\n");
 
     /*  Allocate the new endpoint object. */
-    self = nn_alloc (sizeof (struct nn_cofi), "ctcp");
+    self = nn_alloc (sizeof (struct nn_cofi), "cofi");
     alloc_assert (self);
 
     /*  Initalise the endpoint. */
@@ -98,7 +110,7 @@ int nn_cofi_create (void *hint, struct nn_epbase **epbase)
     service++;
 
     /* Debug */
-    printf("OFI: Creating client OFI socket to (domain=%s, service=%s)\n", domain, 
+    _ofi_debug("OFI: Creating client OFI socket to (domain=%s, service=%s)\n", domain, 
         service );
 
     /* Initialize ofi */
@@ -140,9 +152,13 @@ int nn_cofi_create (void *hint, struct nn_epbase **epbase)
  */
 static void nn_cofi_stop (struct nn_epbase *self)
 {
-    printf("OFI: Stopping OFI\n");
+    _ofi_debug("OFI: Stopping OFI\n");
 
-    /* TODO: Implement */
+    struct nn_cofi *cofi;
+    cofi = nn_cont(self, struct nn_cofi, epbase);
+
+    /* Stop FSM */
+    nn_fsm_stop (&cofi->fsm);
 }
 
 /**
@@ -150,15 +166,16 @@ static void nn_cofi_stop (struct nn_epbase *self)
  */
 static void nn_cofi_destroy (struct nn_epbase *self)
 {
-    printf("OFI: Destroying OFI\n");
+    _ofi_debug("OFI: Destroying OFI\n");
 
     /* Get reference to the cofi structure */
     struct nn_cofi *cofi;
     cofi = nn_cont(self, struct nn_cofi, epbase);
 
-    /* TODO: Implement */
-
-    /* Free structures */
+    /* Free resources */
+    nn_sofi_term(&cofi->sofi);
+    nn_fsm_term (&cofi->fsm);
+    nn_epbase_term (&cofi->epbase);
     nn_free (cofi);
 }
 
@@ -171,9 +188,36 @@ static void nn_cofi_destroy (struct nn_epbase *self)
 static void nn_cofi_shutdown (struct nn_fsm *self, int src, int type,
     void *srcptr)
 {
-    printf("OFI: Shutting down OFI\n");
+    _ofi_debug("OFI: Shutting down OFI\n");
 
-    /* TODO: Implement */
+    /* Get reference to the cofi structure */
+    struct nn_cofi *cofi;
+    cofi = nn_cont(self, struct nn_cofi, fsm);
+
+    /* Switch to shutdown if this was an fsm action */
+    if (nn_slow (src == NN_FSM_ACTION && type == NN_FSM_STOP)) {
+        if (!nn_sofi_isidle (&cofi->sofi)) {
+            nn_sofi_stop (&cofi->sofi);
+        }
+        cofi->state = NN_COFI_STATE_STOPPING;
+    }
+
+    /* If we are in shutting down state, stop everyhing else */
+    if (cofi->state == NN_COFI_STATE_STOPPING) {
+
+        /* Wait for STCP to be idle */
+        if (!nn_sofi_isidle (&cofi->sofi)) {
+            return;
+        }
+
+        /* We are stopped */
+        nn_fsm_stopped_noevent (&cofi->fsm);
+        nn_epbase_stopped (&cofi->epbase);
+        return;
+    }
+
+    /* Otherwise the fsm is in invalid state */
+    nn_fsm_bad_state (cofi->state, src, type);
 
 }
 
@@ -187,7 +231,7 @@ static void nn_cofi_handler (struct nn_fsm *self, int src, int type,
 
     /* Continue with the next OFI Event */
     cofi = nn_cont (self, struct nn_cofi, fsm);
-    printf("> nn_cofi_handler state=%i, src=%i, type=%i\n", 
+    _ofi_debug("> nn_cofi_handler state=%i, src=%i, type=%i\n", 
         cofi->state, src, type);
 
     /* Handle new state */
@@ -204,12 +248,38 @@ static void nn_cofi_handler (struct nn_fsm *self, int src, int type,
             case NN_FSM_START:
 
                 /* Create new connected OFI */
-                printf("OFI: COFI: Creating new SOFI\n");
+                _ofi_debug("OFI: COFI: Creating new SOFI\n");
                 cofi->state = NN_COFI_STATE_CONNECTED;
                 nn_sofi_init (&cofi->sofi, &cofi->ofi, &cofi->ep, &cofi->epbase, 
                     NN_COFI_SRC_SOFI, &cofi->fsm);
 
                 return;
+            default:
+                nn_fsm_bad_action (cofi->state, src, type);
+            }
+
+        default:
+            nn_fsm_bad_source (cofi->state, src, type);
+        }
+
+/******************************************************************************/
+/*  STOPPING state.                                                           */
+/*  This state is initiated by nn_cofi_shutdown                               */
+/******************************************************************************/
+    case NN_COFI_STATE_STOPPING:
+        switch (src) {
+
+        case NN_COFI_SRC_SOFI:
+            switch (type) {
+            case NN_SOFI_STOPPED:
+
+                /* We are stopped */
+                // nn_fsm_stopped_noevent (&cofi->fsm);
+                // nn_epbase_stopped (&cofi->epbase);
+                _ofi_debug("Stopping Again!\n");
+
+                return;
+
             default:
                 nn_fsm_bad_action (cofi->state, src, type);
             }

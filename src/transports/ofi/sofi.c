@@ -30,15 +30,23 @@
 #include "../../utils/alloc.h"
 #include "../../utils/wire.h"
 
+
+/* Helper macro to enable or disable verbose logs on console */
+#ifdef OFI_DEBUG_LOG
+    /* Enable debug */
+    #define _ofi_debug(...)   printf(__VA_ARGS__)
+#else
+    /* Disable debug */
+    #define _ofi_debug(...)
+#endif
+
+/* State machine states */
 #define NN_SOFI_STATE_IDLE      1
 #define NN_SOFI_STATE_CONNECTED 2
+#define NN_SOFI_STATE_STOPPING  3
 
-#define NN_SOFI_DATA            3000
-
-/*  Possible states of the inbound part of the object. */
-#define NN_SOFI_INSTATE_HDR     1
-#define NN_SOFI_INSTATE_BODY    2
-#define NN_SOFI_INSTATE_HASMSG  3
+/* State machine actions */
+#define NN_SOFI_DATA            2010
 
 /*  State machine functions. */
 static void nn_sofi_handler (struct nn_fsm *self, int src, int type, 
@@ -55,7 +63,6 @@ const struct nn_pipebase_vfptr nn_sofi_pipebase_vfptr = {
 };
 
 static void nn_sofi_poller_thread (void *arg);
-
 
 /**
  * Create a streaming (connected) OFI Socket
@@ -83,11 +90,10 @@ void nn_sofi_init (struct nn_sofi *self,
     nn_fsm_event_init (&self->datain);
 
     /* Initialize buffes */
-    self->instate = -1;
     nn_msg_init (&self->inmsg, 0);
 
     /* Initialize pipe base */
-    printf("OFI: SOFI: Replacing pipebase\n");
+    _ofi_debug("OFI: SOFI: Replacing pipebase\n");
     nn_pipebase_init (&self->pipebase, &nn_sofi_pipebase_vfptr, epbase);
 
     /* Get maximum size of receive buffer */
@@ -102,7 +108,7 @@ void nn_sofi_init (struct nn_sofi *self,
         &recv_size, &opt_sz);
 
     /* Initialize OFI memory region */
-    printf("OFI: SOFI: Initializing MR with tx_size=%i, rx_size=%i\n",
+    _ofi_debug("OFI: SOFI: Initializing MR with tx_size=%i, rx_size=%i\n",
         send_size, recv_size);
     ret = ofi_active_ep_init_mr( self->ofi, self->ep, (unsigned)recv_size, 
         (unsigned)send_size );
@@ -113,8 +119,43 @@ void nn_sofi_init (struct nn_sofi *self,
     }
 
     /* Start FSM */
+    _ofi_debug("OFI: SOFI: Start \n");
     nn_fsm_start (&self->fsm);
 
+}
+
+/**
+ * Cleanup all the SOFI resources
+ */
+void nn_sofi_term (struct nn_sofi *self)
+{
+
+    /* Cleanup instantiated resources */
+    nn_list_item_term (&self->item);
+    nn_fsm_event_term (&self->connected);
+    nn_fsm_event_term (&self->datain);
+    nn_msg_term (&self->inmsg);
+    nn_pipebase_term (&self->pipebase);
+    nn_fsm_term (&self->fsm);
+}
+
+/**
+ * Check if FSM is idle
+ */
+int nn_sofi_isidle (struct nn_sofi *self)
+{
+    return nn_fsm_isidle (&self->fsm);
+}
+
+/**
+ * Stop the state machine
+ */
+void nn_sofi_stop (struct nn_sofi *self)
+{
+    _ofi_debug("OFI: Stopping SOFI\n");
+
+    /* Stop FSM */
+    nn_fsm_stop (&self->fsm);
 }
 
 /**
@@ -126,9 +167,32 @@ void nn_sofi_init (struct nn_sofi *self,
 static void nn_sofi_shutdown (struct nn_fsm *self, int src, int type,
     void *srcptr)
 {
-    printf("OFI: SOFI: Shutdown\n");
+    _ofi_debug("OFI: SOFI: Shutdown\n");
 
-    /* TODO: Implement */
+    /* Get pointer to sofi structure */
+    struct nn_sofi *sofi;
+    sofi = nn_cont (self, struct nn_sofi, fsm);
+
+    /* Switch to shutdown if this was an fsm action */
+    if (nn_slow (src == NN_FSM_ACTION && type == NN_FSM_STOP)) {
+
+        /* Abort OFI Operations */
+        ofi_free_ep( sofi->ep );
+        ofi_free( sofi->ofi );
+
+        /*  Wait till worker thread terminates. */
+        sofi->state = NN_SOFI_STATE_STOPPING;
+        nn_thread_term (&sofi->thread);
+
+        /* Stop child objects */
+        nn_pipebase_stop (&sofi->pipebase);
+
+        /* We are stopped */
+        nn_fsm_stopped_noevent (&sofi->fsm);
+        return;
+    }
+
+    nn_fsm_bad_state (sofi->state, src, type);
 }
 
 static int nn_sofi_send (struct nn_pipebase *self, struct nn_msg *msg)
@@ -159,7 +223,7 @@ static int nn_sofi_send (struct nn_pipebase *self, struct nn_msg *msg)
         nn_chunkref_data (&msg->body), sz_body );
 
     /* Send buffer */
-    printf("OFI: SOFI: Send ing data (size=%lu)\n", sz_outhdr+sz_sphdr+sz_body );
+    _ofi_debug("OFI: SOFI: Sending data (size=%lu)\n", sz_outhdr+sz_sphdr+sz_body );
     ret = ofi_tx( sofi->ep, sz_outhdr+sz_sphdr+sz_body );
     if (ret) {
         /* TODO: Handle errors */
@@ -199,8 +263,13 @@ static void nn_sofi_poller_thread (void *arg)
 
         /* Receive data from OFI */
         ret = ofi_rx( self->ep, MAX_MSG_SIZE );
+        if (ret == 1) /* Cancelled, part of shutdown */
+            break;
+
+        /* Handle errors */
         if (ret) {
             printf("OFI: SOFI: Receive Error!\n");
+            /* TODO: Properly handle errors */
             break;
         }
 
@@ -217,6 +286,7 @@ static void nn_sofi_poller_thread (void *arg)
         if (size > self->ep->rx_size) {
             printf("OFI: SOFI: Discarding incoming packaget due to invalid size"
                     " (len=%lu, max=%lu)\n", size, self->ep->rx_size );
+            /* TODO: Properly handle errors */
             continue;
         }
 
@@ -229,13 +299,12 @@ static void nn_sofi_poller_thread (void *arg)
         /* * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
         /* Copy body */
-        printf("OFI: SOFI: Received data (len=%lu)\n", size);
+        _ofi_debug("OFI: SOFI: Received data (len=%lu)\n", size);
         memcpy( nn_chunkref_data (&self->inmsg.body), 
                 self->ep->rx_buf + 8, size );
 
         /* Notify FSM for the fact that we have received data  */
         nn_ctx_enter( self->fsm.ctx );
-        self->instate = NN_SOFI_INSTATE_HASMSG;
         nn_fsm_action ( &self->fsm, NN_SOFI_DATA );
         nn_ctx_leave( self->fsm.ctx );
 
@@ -252,7 +321,7 @@ static void nn_sofi_handler (struct nn_fsm *self, int src, int type,
 
     /* Continue with the next OFI Event */
     sofi = nn_cont (self, struct nn_sofi, fsm);
-    printf("> nn_sofi_handler state=%i, src=%i, type=%i\n", sofi->state, src, 
+    _ofi_debug("OFI: nn_sofi_handler state=%i, src=%i, type=%i\n", sofi->state, src, 
         type);
 
     /* Handle new state */
@@ -269,6 +338,7 @@ static void nn_sofi_handler (struct nn_fsm *self, int src, int type,
             case NN_FSM_START:
 
                 /* Start pipe */
+                _ofi_debug("OFI: SOFI: Started!\n");
                 nn_pipebase_start( &sofi->pipebase );
 
                 /* Start poller thread */

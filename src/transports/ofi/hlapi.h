@@ -148,5 +148,20 @@ int ofi_active_ep_init_mr( struct ofi_resources * R, struct ofi_active_endpoint 
 int ofi_init_client( struct ofi_resources * R, struct ofi_active_endpoint * EP, unsigned int addr_format, 
 					const char * node, const char * service );
 
+/**
+ * Free hints and core structures
+ */
+int ofi_free( struct ofi_resources * R );
+
+/**
+ * Free passive endpoint
+ */
+int ofi_free_pep( struct ofi_passive_endpoint * ep );
+
+/**
+ * Free active endpoint
+ */
+int ofi_free_ep( struct ofi_active_endpoint * ep );
+
 
 #endif /* NN_OFI_SHARED_INCLUDED */

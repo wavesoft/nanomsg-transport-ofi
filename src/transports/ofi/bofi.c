@@ -31,6 +31,15 @@
 #include "../../utils/efd.h"
 #include "../../aio/ctx.h"
 
+/* Helper macro to enable or disable verbose logs on console */
+#ifdef OFI_DEBUG_LOG
+    /* Enable debug */
+    #define _ofi_debug(...)   printf(__VA_ARGS__)
+#else
+    /* Disable debug */
+    #define _ofi_debug(...)
+#endif
+
 /* BOFI States */
 #define NN_BOFI_STATE_IDLE              1
 #define NN_BOFI_STATE_ACCEPTING         2
@@ -111,7 +120,7 @@ int nn_bofi_create (void *hint, struct nn_epbase **epbase)
     service++;
 
     /* Debug */
-    printf("OFI: Creating bound OFI socket (domain=%s, service=%s)\n", domain, 
+    _ofi_debug("OFI: Creating bound OFI socket (domain=%s, service=%s)\n", domain, 
         service );
 
     /* Initialize ofi */
@@ -172,33 +181,33 @@ static void nn_bofi_accept_thread (void *arg)
         alloc_assert (ep);
 
         /* Listen for incoming connections */
-        printf("OFI: bofi_accept_thread: Waiting for incoming connections\n");
+        _ofi_debug("OFI: bofi_accept_thread: Waiting for incoming connections\n");
         ret = ofi_server_accept( &self->ofi, &self->pep, ep );
         if (ret < 0) {
 
             /* Free resources */
             nn_free(ep);
 
-            printf("OFI: bofi_accept_thread: ERROR: Cannot accept!\n");
+            printf("OFI: ERROR: Cannot accept incoming connection!\n");
             /* TODO: What do I do? */
-            return;
+            break;
         }
 
         /* Create new connected OFI */
-        printf("OFI: bofi_accept_thread: Allocating new SOFI\n");
+        _ofi_debug("OFI: bofi_accept_thread: Allocating new SOFI\n");
         self->sofi = nn_alloc (sizeof (struct nn_sofi), "sofi");
         alloc_assert (self->sofi);
         nn_sofi_init (self->sofi, &self->ofi, ep, &self->epbase, 
             NN_BOFI_SRC_SOFI, &self->fsm);
 
         /* Notify FSM that a connection was accepted */
-        printf("OFI: bofi_accept_thread: Notifying FSM for the result\n");
+        _ofi_debug("OFI: bofi_accept_thread: Notifying FSM for the result\n");
         nn_ctx_enter( self->fsm.ctx );
         nn_fsm_action( &self->fsm, NN_BOFI_CONNECTION_ACCEPTED );
         nn_ctx_leave( self->fsm.ctx );
 
         /* Wait for event to be handled */
-        printf("OFI: bofi_accept_thread: Waiting for ack from FSM\n");
+        _ofi_debug("OFI: bofi_accept_thread: Waiting for ack from FSM\n");
         nn_efd_wait( &self->sync, 0 );
         nn_efd_unsignal( &self->sync );
 
@@ -211,7 +220,7 @@ static void nn_bofi_accept_thread (void *arg)
  */
 static void nn_bofi_stop (struct nn_epbase *self)
 {
-    printf("OFI: Stopping OFI\n");
+    _ofi_debug("OFI: Stopping OFI\n");
 
     /* Get reference to the bofi structure */
     struct nn_bofi *bofi;
@@ -228,7 +237,7 @@ static void nn_bofi_stop (struct nn_epbase *self)
  */
 static void nn_bofi_destroy (struct nn_epbase *self)
 {
-    printf("OFI: Destroying OFI\n");
+    _ofi_debug("OFI: Destroying OFI\n");
 
     /* Get reference to the bofi structure */
     struct nn_bofi *bofi;
@@ -250,7 +259,7 @@ static void nn_bofi_destroy (struct nn_epbase *self)
 static void nn_bofi_shutdown (struct nn_fsm *self, int src, int type,
     void *srcptr)
 {
-    printf("OFI: Shutting down OFI\n");
+    _ofi_debug("OFI: Shutting down OFI\n");
 
     /* TODO: Implement */
 
@@ -266,7 +275,7 @@ static void nn_bofi_handler (struct nn_fsm *self, int src, int type,
 
     /* Continue with the next OFI Event */
     bofi = nn_cont (self, struct nn_bofi, fsm);
-    printf("> nn_bofi_handler state=%i, src=%i, type=%i\n", 
+    _ofi_debug("OFI: nn_bofi_handler state=%i, src=%i, type=%i\n", 
         bofi->state, src, type);
 
     /* Handle new state */

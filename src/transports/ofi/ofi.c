@@ -26,15 +26,6 @@
 
 #include "../../ofi.h"
 
-// #include "../utils/port.h"
-// #include "../utils/iface.h"
-
-// #include "../../utils/err.h"
-// #include "../../utils/alloc.h"
-// #include "../../utils/fast.h"
-// #include "../../utils/list.h"
-// #include "../../utils/cont.h"
-
 #include <string.h>
 
 /*  nn_transport interface. */

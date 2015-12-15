@@ -6,8 +6,9 @@ __WARNING: This is an early alpha release! This project is currently unoptimised
 
 ## Known Problems
 
- 1. `usnic` provider does not seem to support the `FI_SHUTDOWN` event and therefore a `bound` socket will run out of file descriptors if many connections are attempted to be established. 
- 2. The current implementation breaks the zero-copy principle [here](src/transports/ofi/sofi.c#L245) and [here](src/transports/ofi/sofi.c#L342), and therefore has some performance penalties.
+ 1. The current version handles only IPV4 address families.
+ 2. `usnic` provider does not seem to support the `FI_SHUTDOWN` event and therefore a `bound` socket will run out of file descriptors if many connections are attempted to be established. 
+ 3. The current implementation breaks the zero-copy principle [here](src/transports/ofi/sofi.c#L245) and [here](src/transports/ofi/sofi.c#L342), and therefore has some performance penalties.
 
 ## How to compile
 

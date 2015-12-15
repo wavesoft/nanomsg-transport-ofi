@@ -38,6 +38,16 @@
 #endif
 
 #include "hlapi.h"
+#include "ofi.h"
+
+/* Helper macro to enable or disable verbose logs on console */
+#ifdef OFI_DEBUG_LOG
+    /* Enable debug */
+    #define _ofi_debug(...)   printf(__VA_ARGS__)
+#else
+    /* Disable debug */
+    #define _ofi_debug(...)
+#endif
 
 #define FT_PRINTERR(call, retv) \
 	do { fprintf(stderr, "OFI: Error on " call "(): %s:%d, ret=%d (%s)\n", __FILE__, __LINE__, (int) retv, fi_strerror((int) -retv)); } while (0)
@@ -153,30 +163,23 @@ int ft_wait_shutdown_aware(struct fid_cq *cq, struct fid_eq *eq)
 	struct fi_eq_cm_entry eq_entry;
 	struct fi_cq_entry entry;
 	uint32_t event;
+	uint8_t shutdown_interval;
 	int ret;
+
+	/* TODO: The timeout solution looks like a HACK! Find a better solution */
+	shutdown_interval = 0;
 
 	/* CQ entry based on configured format (i.e. FI_CQ_FORMAT_CONTEXT) */
 	while (1) {
 
-		/* Check for shutdown events */
-		ret = fi_eq_read(eq, &event, &eq_entry, sizeof eq_entry, 0);
-		if (ret != -FI_EAGAIN) {
-			// Check for remote event
-			if (event == FI_SHUTDOWN) {
-				/* We are remotely disconnected */
-				return -FI_REMOTE_DISCONNECT;
-			} else {
-				FT_ERR("Unexpected CM event %d\n", event);
-			}
-		}
-
+		/* First check for CQ event */
 		ret = fi_cq_read(cq, &entry, 1);
 
 		/* Operation failed */
 		if (ret > 0) {
 			/* Success */
+			_ofi_debug("OFI: ft_wait() succeed with shutdown_interval=%i\n", shutdown_interval);
 			return 0;
-
 		} else if (ret < 0 && ret != -FI_EAGAIN) {
 			if (ret == -FI_EAVAIL) {
 				struct fi_cq_err_entry err_entry;
@@ -186,6 +189,7 @@ int ft_wait_shutdown_aware(struct fid_cq *cq, struct fid_eq *eq)
 
 				/* Check if the operation was cancelled (ex. terminating connection) */
 				if (err_entry.err == FI_ECANCELED) {
+					_ofi_debug("OFI: ft_wait() exiting because of FI_ECANCELED\n");
 					return -FI_REMOTE_DISCONNECT;
 				}
 
@@ -198,8 +202,29 @@ int ft_wait_shutdown_aware(struct fid_cq *cq, struct fid_eq *eq)
 			} else {
 				FT_PRINTERR("fi_cq_read", ret);
 			}
-
+		} else {
+			if (shutdown_interval > 0) {
+				if (--shutdown_interval == 0) {
+					/* We are remotely disconnected */
+					_ofi_debug("OFI: ft_wait() exiting because of FI_SHUTDOWN event\n");
+					return -FI_REMOTE_DISCONNECT;
+				}
+			}
 		}
+
+		/* Then check for shutdown event */
+		if (shutdown_interval == 0) {
+			ret = fi_eq_read(eq, &event, &eq_entry, sizeof eq_entry, 0);
+			if (ret != -FI_EAGAIN) {
+				if (event == FI_SHUTDOWN) {
+					/* If no CQ is arrived within 100 cycles, consider it lost */
+					shutdown_interval = 100;
+				} else {
+					FT_ERR("Unexpected CM event %d\n", event);
+				}
+			}
+		}
+
 	}
 }
 

@@ -301,8 +301,10 @@ static void nn_sofi_poller_thread (void *arg)
         }
 
         /* If exited the connected state, stop thread */
-        if (self->state != NN_SOFI_STATE_CONNECTED)
+        if (self->state != NN_SOFI_STATE_CONNECTED) {
+            _ofi_debug("OFI: Exiting poller thread because changed state to %i\n", self->state);
             break;
+        }
 
         /*  Message header was received. Check that message size
             is acceptable by comparing with NN_RCVMAXSIZE;

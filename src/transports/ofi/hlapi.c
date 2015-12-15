@@ -581,7 +581,8 @@ int ofi_open_active_ep( struct ofi_resources * R, struct ofi_active_endpoint * E
 
 		/* Prepare structure */
 		struct fi_eq_attr eq_attr = {
-			.wait_obj = FI_WAIT_UNSPEC
+			.wait_obj = FI_WAIT_UNSPEC,
+			.flags = FI_WRITE
 		};
 
 		/* Open event queue */
@@ -722,7 +723,8 @@ int ofi_open_passive_ep( struct ofi_resources * R, struct ofi_passive_endpoint *
 
 	/* Open an event queue */
 	struct fi_eq_attr eq_attr = {
-		.wait_obj = FI_WAIT_UNSPEC
+		.wait_obj = FI_WAIT_UNSPEC,
+		.flags = FI_WRITE
 	};
 	ret = fi_eq_open(R->fabric, &eq_attr, &PEP->eq, NULL);
 	if (ret) {
@@ -747,6 +749,14 @@ int ofi_open_passive_ep( struct ofi_resources * R, struct ofi_passive_endpoint *
 int ofi_restart_passive_ep( struct ofi_resources * R, struct ofi_passive_endpoint * PEP )
 {
 	int ret;
+
+	/* Drain event queue */
+	struct fi_eq_cm_entry entry;
+	uint32_t event;
+	ssize_t rd;
+	do {
+		rd = fi_eq_read(PEP->eq, &event, &entry, sizeof entry, 0);
+	} while ((int)rd == 0);
 
 	/* Re-open passive endpoint */
 	_ofi_debug("OFI: Restarting passive endpoint\n");
@@ -848,7 +858,12 @@ int ofi_server_accept( struct ofi_resources * R, struct ofi_passive_endpoint * P
 		goto err;
 	}
 
-	if (event != FI_CONNECTED || entry.fid != &EP->ep->fid) {
+	/* Check for aborted operations */
+	if (event == FI_SHUTDOWN) {
+		fi_freeinfo(info);
+		return FI_SHUTDOWN;
+
+	} else if (event != FI_CONNECTED || entry.fid != &EP->ep->fid) {
 		FT_ERR("Unexpected CM event %d fid %p (ep %p)\n", event, entry.fid, EP->ep);
 		ret = -FI_EOTHER;
 		goto err;
@@ -937,6 +952,14 @@ int ofi_shutdown_ep( struct ofi_active_endpoint * EP )
 {
 	int ret;
 
+	/* Send a shutdown even to event queuet */
+	struct fi_eq_cm_entry entry = {0};
+	ssize_t rd;
+	rd = fi_eq_write( EP->eq, FI_SHUTDOWN, &entry, sizeof entry, 0 );
+	if (rd != sizeof entry) {
+		_ofi_debug("OFI: ERROR: Unable to signal the shutdown event to EP!");
+	}
+
 	/* Not implemented in some providers */
 	fi_shutdown(EP->ep, 0);
 
@@ -960,6 +983,15 @@ int ofi_shutdown_ep( struct ofi_active_endpoint * EP )
  */
 int ofi_shutdown_pep( struct ofi_passive_endpoint * PEP )
 {
+
+	/* Send a shutdown even to event queuet */
+	struct fi_eq_cm_entry entry = {0};
+	ssize_t rd;
+	rd = fi_eq_write( PEP->eq, FI_SHUTDOWN, &entry, sizeof entry, 0 );
+	if (rd != sizeof entry) {
+		_ofi_debug("OFI: ERROR: Unable to signal the shutdown event to PEP!");
+	}
+
 	/* No particular procedure, just wait for ofi_free_pep */
 	return 0;
 }
@@ -986,6 +1018,14 @@ int ofi_free( struct ofi_resources * R )
  */
 int ofi_free_pep( struct ofi_passive_endpoint * ep )
 {
+
+	/* Drain event queue */
+	struct fi_eq_cm_entry entry;
+	uint32_t event;
+	ssize_t rd;
+	do {
+		rd = fi_eq_read(ep->eq, &event, &entry, sizeof entry, 0);
+	} while ((int)rd == 0);
 
 	/* Close endpoint */
 	FT_CLOSE_FID( ep->pep );

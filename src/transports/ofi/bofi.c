@@ -272,13 +272,22 @@ static void nn_bofi_accept_thread (void *arg)
         /* Listen for incoming connections */
         _ofi_debug("OFI: bofi_accept_thread: Waiting for incoming connections\n");
         ret = ofi_server_accept( &self->ofi, &self->pep, ep );
-        if (ret < 0) {
+        if (ret == FI_SHUTDOWN) {
+            _ofi_debug("OFI: bofi_accept_thread: Stopping because of FI_SHUTDOWN\n");
+
+            /* Free resources */
+            ofi_free_ep(ep);
+            nn_free(ep);
+            break;
+
+        } else if (ret < 0) {
+            printf("OFI: ERROR: Cannot accept incoming connection!\n");
 
             /* Free resources */
             nn_free(ep);
 
-            printf("OFI: ERROR: Cannot accept incoming connection!\n");
-            /* TODO: What do I do? */
+            /* TODO: Forward event? */
+
             break;
         }
 

@@ -43,7 +43,7 @@
 /* BOFI States */
 #define NN_BOFI_STATE_IDLE              1
 #define NN_BOFI_STATE_ACCEPTING         2
-#define NN_BOFI_STATE_PENDING           3
+#define NN_BOFI_STATE_STOPPING          3
 
 /* BOFI Actions */
 #define NN_BOFI_CONNECTION_ACCEPTED     1
@@ -164,6 +164,95 @@ int nn_bofi_create (void *hint, struct nn_epbase **epbase)
 }
 
 /**
+ * Stop the Bound OFI FSM
+ */
+static void nn_bofi_stop (struct nn_epbase *self)
+{
+    _ofi_debug("OFI: Stopping OFI\n");
+
+    /* Get reference to the bofi structure */
+    struct nn_bofi *bofi;
+    bofi = nn_cont(self, struct nn_bofi, epbase);
+
+    /* Stop the FSM */
+    nn_fsm_stop (&bofi->fsm);
+}
+
+/**
+ * Destroy the OFI FSM
+ */
+static void nn_bofi_destroy (struct nn_epbase *self)
+{
+    _ofi_debug("OFI: Destroying OFI\n");
+
+    /* Get reference to the bofi structure */
+    struct nn_bofi *bofi;
+    bofi = nn_cont(self, struct nn_bofi, epbase);
+
+    /* Free open connection handlers */
+    struct nn_list_item *it;
+    struct nn_sofi *sofi;
+    for (it = nn_list_begin (&bofi->sofis);
+          it != nn_list_end (&bofi->sofis);
+          it = nn_list_next (&bofi->sofis, it)) {
+        sofi = nn_cont (it, struct nn_sofi, item);
+
+        /* Stop SOFI */
+        nn_sofi_stop(sofi);
+
+        /* Cleanup */
+        nn_sofi_term(sofi);
+        nn_free(sofi);
+    }
+
+    /* Free structures */
+    ofi_free( &bofi->ofi );
+    nn_efd_term( &bofi->sync );
+    nn_list_term ( &bofi->sofis );
+    nn_free( bofi );
+}
+
+/**
+ * Shutdown OFI FSM Handler
+ *
+ * Depending on the state the FSM is currently in, this 
+ * function should perform the appropriate clean-up operations.
+ */
+static void nn_bofi_shutdown (struct nn_fsm *self, int src, int type,
+    void *srcptr)
+{
+    _ofi_debug("OFI: BOFI: Shutdown\n");
+
+    /* Get pointer to bofi structure */
+    struct nn_bofi *bofi;
+    bofi = nn_cont (self, struct nn_bofi, fsm);
+
+    /* Switch to shutdown if this was an fsm action */
+    if (nn_slow (src == NN_FSM_ACTION && type == NN_FSM_STOP)) {
+
+        /* Switch to shutting down state */
+        bofi->state = NN_BOFI_STATE_STOPPING;
+
+        /* Stop OFI operations */
+        _ofi_debug("OFI: Freeing passive endpoint resources\n");
+        ofi_shutdown_pep( &bofi->pep );
+        ofi_free_pep( &bofi->pep );
+
+        /*  Wait till worker thread terminates. */
+        nn_thread_term (&bofi->thread);
+
+        /* We are stopped */
+        nn_fsm_stopped_noevent(&bofi->fsm);
+        return;
+
+    }
+
+    /* Invalid fsm action */
+    nn_fsm_bad_state (bofi->state, src, type);
+
+}
+
+/**
  * The internal thread that takes care of the blocking accept() operations
  */
 static void nn_bofi_accept_thread (void *arg)
@@ -193,6 +282,16 @@ static void nn_bofi_accept_thread (void *arg)
             break;
         }
 
+        /* Check if we are being stopped */
+        if (self->state != NN_BOFI_STATE_ACCEPTING) {
+            _ofi_debug("OFI: bofi_accept_thread: Stopping because switched to state %i\n", self->state);
+
+            /* Free resources */
+            ofi_free_ep(ep);
+            nn_free(ep);
+            break;
+        }
+
         /* Create new connected OFI */
         _ofi_debug("OFI: bofi_accept_thread: Allocating new SOFI\n");
         self->sofi = nn_alloc (sizeof (struct nn_sofi), "sofi");
@@ -214,55 +313,6 @@ static void nn_bofi_accept_thread (void *arg)
     }
 
 }
-
-/**
- * Stop the Bound OFI FSM
- */
-static void nn_bofi_stop (struct nn_epbase *self)
-{
-    _ofi_debug("OFI: Stopping OFI\n");
-
-    /* Get reference to the bofi structure */
-    struct nn_bofi *bofi;
-    bofi = nn_cont(self, struct nn_bofi, epbase);
-
-    /* Stop the FSM */
-    nn_fsm_stop (&bofi->fsm);
-}
-
-/**
- * Destroy the OFI FSM
- */
-static void nn_bofi_destroy (struct nn_epbase *self)
-{
-    _ofi_debug("OFI: Destroying OFI\n");
-
-    /* Get reference to the bofi structure */
-    struct nn_bofi *bofi;
-    bofi = nn_cont(self, struct nn_bofi, epbase);
-
-    /* TODO: Implement */
-
-    /* Free structures */
-    nn_list_term (&bofi->sofis);
-    nn_free (bofi);
-}
-
-/**
- * Shutdown OFI FSM Handler
- *
- * Depending on the state the FSM is currently in, this 
- * function should perform the appropriate clean-up operations.
- */
-static void nn_bofi_shutdown (struct nn_fsm *self, int src, int type,
-    void *srcptr)
-{
-    _ofi_debug("OFI: Shutting down OFI\n");
-
-    /* TODO: Implement */
-
-}
-
 /**
  * Bound OFI FSM Handler
  */
@@ -308,6 +358,71 @@ static void nn_bofi_handler (struct nn_fsm *self, int src, int type,
 /*  the accepting thread is listening for incoming connections                */
 /******************************************************************************/
     case NN_BOFI_STATE_ACCEPTING:
+        switch (src) {
+
+        /* Local thread actions */
+        case NN_FSM_ACTION:
+            switch (type) {
+            case NN_BOFI_CONNECTION_ACCEPTED:
+
+                /*  Move the newly created connection to the list of existing
+                    connections. */
+                nn_list_insert (&bofi->sofis, &bofi->sofi->item,
+                    nn_list_end (&bofi->sofis));
+                bofi->sofi = NULL;
+
+                /* Acknowledge event and resume operation */
+                nn_efd_signal( &bofi->sync );
+                self->state = NN_BOFI_STATE_ACCEPTING;
+
+                return;
+            default:
+                nn_fsm_bad_action (bofi->state, src, type);
+            }
+
+        /* SOFI FSM actions */
+        case NN_BOFI_SRC_SOFI:
+
+            /* Get reference to sofi */
+            sofi = (struct nn_sofi *) srcptr;
+
+            switch (type) {
+            case NN_SOFI_STOPPED:
+                /* The SOFI fsm was stopped */
+                _ofi_debug("OFI: Cleaning-up SOFI\n");
+
+                /* Remove item from list */
+                nn_list_erase (&bofi->sofis, &sofi->item);
+
+                /* Cleanup */
+                nn_sofi_term(sofi);
+                nn_free(sofi);
+
+                return;
+
+            case NN_SOFI_DISCONNECTED:
+                /* A remote enpodint was disconnected */
+                _ofi_debug("OFI: Connection closed, stopping SOFI\n");
+
+                /* Stop sofi */
+                if (!nn_sofi_isidle (sofi)) {
+                    nn_sofi_stop (sofi);
+                }
+
+                return;
+            default:
+                nn_fsm_bad_action (bofi->state, src, type);
+            }
+
+        default:
+            nn_fsm_bad_source (bofi->state, src, type);
+        }
+
+/******************************************************************************/
+/*  NN_BOFI_STATE_STOPPING state.                                             */
+/*  the fsm is being stopped, ignore new events and prepare for cleanup       */
+/******************************************************************************/
+    case NN_BOFI_STATE_STOPPING:
         switch (src) {
 
         /* Local thread actions */

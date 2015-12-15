@@ -956,6 +956,15 @@ int ofi_shutdown_ep( struct ofi_active_endpoint * EP )
 }
 
 /**
+ * Shutdown a passive endpoint
+ */
+int ofi_shutdown_pep( struct ofi_passive_endpoint * PEP )
+{
+	/* No particular procedure, just wait for ofi_free_pep */
+	return 0;
+}
+
+/**
  * Free hints and core structures
  */
 int ofi_free( struct ofi_resources * R )

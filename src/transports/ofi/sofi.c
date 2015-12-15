@@ -193,17 +193,17 @@ static void nn_sofi_shutdown (struct nn_fsm *self, int src, int type,
 
         /* Abort OFI Operations */
         sofi->state = NN_SOFI_STATE_STOPPING;
+
+        /*  Stop endpoint and wait for worker. */
+        _ofi_debug("OFI: Freeing endpoint resources\n");
         ofi_shutdown_ep( sofi->ep );
+        nn_thread_term (&sofi->thread);
 
         /* Free OFI Endpoint */
-        _ofi_debug("OFI: Freeing endpoint resources\n");
         ofi_free_ep( sofi->ep );
 
         /* Stop child objects */
         nn_pipebase_stop (&sofi->pipebase);
-
-        /*  Wait till worker thread terminates. */
-        nn_thread_term (&sofi->thread);
 
         /* We are stopped */
         nn_fsm_stopped(&sofi->fsm, NN_SOFI_STOPPED);
@@ -213,6 +213,10 @@ static void nn_sofi_shutdown (struct nn_fsm *self, int src, int type,
     nn_fsm_bad_state (sofi->state, src, type);
 }
 
+/**
+ * This function is called by the nanomsg core when some data needs to be sent.
+ * It's important to call the 'nn_pipebase_sent' function when ready!
+ */
 static int nn_sofi_send (struct nn_pipebase *self, struct nn_msg *msg)
 {
     int ret;
@@ -260,6 +264,10 @@ static int nn_sofi_send (struct nn_pipebase *self, struct nn_msg *msg)
     return 0;
 }
 
+/**
+ * This function is called by the nanomsg core when some data needs to be sent.
+ * This is triggered only when 'nn_pipebase_received' is called!
+ */
 static int nn_sofi_recv (struct nn_pipebase *self, struct nn_msg *msg)
 {
     int rc;

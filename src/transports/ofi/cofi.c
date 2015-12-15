@@ -116,6 +116,7 @@ int nn_cofi_create (void *hint, struct nn_epbase **epbase)
     /* Initialize ofi */
     ret = ofi_alloc( &self->ofi, FI_EP_MSG );
     if (ret) {
+        _ofi_debug("OFI: Failed to ofi_alloc!\n");
         nn_epbase_term (&self->epbase);
         nn_free(self);
         return ret;
@@ -125,6 +126,7 @@ int nn_cofi_create (void *hint, struct nn_epbase **epbase)
     ret = ofi_init_client( &self->ofi, &self->ep, 
         FI_SOCKADDR, domain, service );
     if (ret) {
+        _ofi_debug("OFI: Failed to ofi_init_client!\n");
         nn_epbase_term (&self->epbase);
         nn_free(self);
         return ret;
@@ -208,10 +210,10 @@ static void nn_cofi_shutdown (struct nn_fsm *self, int src, int type,
     /* If we are in shutting down state, stop everyhing else */
     if (cofi->state == NN_COFI_STATE_STOPPING) {
 
-        /* Wait for STCP to be idle */
-        if (!nn_sofi_isidle (&cofi->sofi)) {
-            return;
-        }
+        // /* Wait for STCP to be idle */
+        // if (!nn_sofi_isidle (&cofi->sofi)) {
+        //     return;
+        // }
 
         /* We are stopped */
         nn_fsm_stopped_noevent (&cofi->fsm);

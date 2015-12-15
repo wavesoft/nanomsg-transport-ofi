@@ -158,6 +158,11 @@ int ofi_init_client( struct ofi_resources * R, struct ofi_active_endpoint * EP, 
 int ofi_shutdown_ep( struct ofi_active_endpoint * EP );
 
 /**
+ * Shutdown an passive endpoint
+ */
+int ofi_shutdown_pep( struct ofi_passive_endpoint * PEP );
+
+/**
  * Free hints and core structures
  */
 int ofi_free( struct ofi_resources * R );

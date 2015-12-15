@@ -144,9 +144,6 @@ void nn_sofi_init (struct nn_sofi *self,
 void nn_sofi_term (struct nn_sofi *self)
 {
 
-    /* Free OFI Endpoint */
-    ofi_free_ep( self->ep );
-
     /* Cleanup instantiated resources */
     nn_list_item_term (&self->item);
     nn_timer_term (&self->disconnect_timer);
@@ -197,6 +194,10 @@ static void nn_sofi_shutdown (struct nn_fsm *self, int src, int type,
         /* Abort OFI Operations */
         sofi->state = NN_SOFI_STATE_STOPPING;
         ofi_shutdown_ep( sofi->ep );
+
+        /* Free OFI Endpoint */
+        _ofi_debug("OFI: Freeing endpoint resources\n");
+        ofi_free_ep( sofi->ep );
 
         /* Stop child objects */
         nn_pipebase_stop (&sofi->pipebase);
@@ -287,7 +288,8 @@ static void nn_sofi_poller_thread (void *arg)
     while (1) {
 
         /* Receive data from OFI */
-        ret = ofi_rx( self->ep, MAX_MSG_SIZE );
+        _ofi_debug("OFI: nn_sofi_poller_thread: Receiving data\n");
+        ret = ofi_rx( self->ep, self->ep->rx_size );
         if (ret == -FI_REMOTE_DISCONNECT) { /* Remotely disconnected */
             _ofi_debug("OFI: Remotely disconnected!\n");
             break;

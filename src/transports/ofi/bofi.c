@@ -346,6 +346,7 @@ static void nn_bofi_handler (struct nn_fsm *self, int src, int type,
 
                 /* Cleanup */
                 nn_sofi_term(sofi);
+                nn_free(sofi);
 
                 return;
 

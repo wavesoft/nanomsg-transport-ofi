@@ -82,7 +82,14 @@
 #define FT_CLOSE_FID(fd)			\
 	do {					\
 		if ((fd)) {			\
-			fi_close(&(fd)->fid);	\
+			int ret = fi_close(&(fd)->fid);	\
+			if (ret) { \
+				if (ret == -FI_EBUSY) { \
+					printf("OFI: *** Error closing FD " #fd " (FI_EBUSY)\n"); \
+				} else { \
+					printf("OFI: *** Error closing FD " #fd " caused error = %i\n", ret); \
+				} \
+			} \
 			fd = NULL;		\
 		}				\
 	} while (0)
@@ -217,8 +224,8 @@ int ft_wait_shutdown_aware(struct fid_cq *cq, struct fid_eq *eq)
 			ret = fi_eq_read(eq, &event, &eq_entry, sizeof eq_entry, 0);
 			if (ret != -FI_EAGAIN) {
 				if (event == FI_SHUTDOWN) {
-					/* If no CQ is arrived within 100 cycles, consider it lost */
-					shutdown_interval = 100;
+					/* If no CQ is arrived within 255 cycles, consider it lost */
+					shutdown_interval = 255;
 				} else {
 					FT_ERR("Unexpected CM event %d\n", event);
 				}
@@ -359,8 +366,10 @@ ssize_t ofi_tx( struct ofi_active_endpoint * EP, size_t size )
 	if (ret) {
 
 		/* If we are in a bad state, we were remotely disconnected */
-		if (ret == -FI_EOPBADSTATE) 
-			return -FI_REMOTE_DISCONNECT;
+		if (ret == -FI_EOPBADSTATE) {
+			_ofi_debug("OFI: HLAPI: ofi_tx() returned %zi, considering shutdown.\n", ret);
+			return -FI_REMOTE_DISCONNECT;			
+		}
 
 		/* Otherwise display error */
 		FT_PRINTERR("fi_send", ret);
@@ -397,8 +406,10 @@ ssize_t ofi_rx( struct ofi_active_endpoint * EP, size_t size )
 	if (ret) {
 
 		/* If we are in a bad state, we were remotely disconnected */
-		if (ret == -FI_EOPBADSTATE) 
+		if (ret == -FI_EOPBADSTATE) {
+			_ofi_debug("OFI: HLAPI: ofi_rx() returned %i, considering shutdown.\n", ret);
 			return -FI_REMOTE_DISCONNECT;
+		}
 
 		/* Otherwise display error */
 		FT_PRINTERR("fi_recv", ret);
@@ -496,6 +507,13 @@ int ofi_open_active_ep( struct ofi_resources * R, struct ofi_active_endpoint * E
 	EP->rx_prefix_size = ft_rx_prefix_size( fi );
 	EP->tx_prefix_size = ft_tx_prefix_size( fi );
 
+	/* Open Endpoint */
+	ret = fi_endpoint(EP->domain, fi, &EP->ep, NULL);
+	if (ret) {
+		FT_PRINTERR("fi_endpoint", ret);
+		return ret;
+	}
+
 	/* ==== Open Completion Queues =============== */
 
 	/* Prepare structures */
@@ -508,7 +526,7 @@ int ofi_open_active_ep( struct ofi_resources * R, struct ofi_active_endpoint * E
 	cq_attr.size = fi->tx_attr->size;
 	ret = fi_cq_open(EP->domain, &cq_attr, &EP->tx_cq, &EP->tx_ctx);
 	if (ret) {
-		FT_PRINTERR("fi_cq_open", ret);
+		FT_PRINTERR("fi_cq_open<tx_cq>", ret);
 		return ret;
 	}
 
@@ -516,43 +534,55 @@ int ofi_open_active_ep( struct ofi_resources * R, struct ofi_active_endpoint * E
 	cq_attr.size = fi->rx_attr->size;
 	ret = fi_cq_open(EP->domain, &cq_attr, &EP->rx_cq, &EP->rx_ctx);
 	if (ret) {
-		FT_PRINTERR("fi_cq_open", ret);
+		FT_PRINTERR("fi_cq_open<rx_cq>", ret);
 		return ret;
 	}
+
+	/* Bind to event queues and completion queues */
+	FT_EP_BIND(EP->ep, EP->tx_cq, FI_TRANSMIT);
+	FT_EP_BIND(EP->ep, EP->rx_cq, FI_RECV);
 
 	/* ==== Open Address Vector ================== */
 
-	/* Prepare structure */
-	struct fi_av_attr av_attr = {
-		.type = FI_AV_MAP,
-		.count = 1
-	};
-
-	/* If domain has a preferred address vector type, use it from there */
-	if (fi->domain_attr->av_type != FI_AV_UNSPEC)
-		av_attr.type = fi->domain_attr->av_type;
-
 	/* Open Address Vector */
-	ret = fi_av_open(EP->domain, &av_attr, &EP->av, NULL);
-	if (ret) {
-		FT_PRINTERR("fi_av_open", ret);
-		return ret;
+	if (fi->ep_attr->type == FI_EP_RDM || fi->ep_attr->type == FI_EP_DGRAM) {
+
+		/* Prepare structure */
+		struct fi_av_attr av_attr = {
+			.type = FI_AV_MAP,
+			.count = 1
+		};
+
+		/* If domain has a preferred address vector type, use it from there */
+		if (fi->domain_attr->av_type != FI_AV_UNSPEC)
+			av_attr.type = fi->domain_attr->av_type;
+
+		/* Open address vector */
+		ret = fi_av_open(EP->domain, &av_attr, &EP->av, NULL);
+		if (ret) {
+			FT_PRINTERR("fi_av_open", ret);
+			return ret;
+		}
+
+		/* Bind endoint to AV */
+		FT_EP_BIND(EP->ep, EP->av, 0);
+
+	} else {
+		
+		/* Set AV to null */
+		EP->av = NULL;
+
 	}
 
-	/* Open Endpoint */
-	ret = fi_endpoint(EP->domain, fi, &EP->ep, NULL);
-	if (ret) {
-		FT_PRINTERR("fi_endpoint", ret);
-		return ret;
-	}
-
-	/* ==== Bind Endpoint to CQ ================== */
+	/* ==== Prepare Event Queue ================== */
 
 	/* Open event queue for receiving socket events */
-	struct fi_eq_attr eq_attr = {
-		.wait_obj = FI_WAIT_UNSPEC
-	};
 	if (fi->ep_attr->type == FI_EP_MSG) {
+
+		/* Prepare structure */
+		struct fi_eq_attr eq_attr = {
+			.wait_obj = FI_WAIT_UNSPEC
+		};
 
 		/* Open event queue */
 		ret = fi_eq_open(R->fabric, &eq_attr, &EP->eq, NULL);
@@ -566,11 +596,6 @@ int ofi_open_active_ep( struct ofi_resources * R, struct ofi_active_endpoint * E
 	}
 
 	/* ==== Bind Endpoint to CQ ================== */
-
-	/* Bind to event queues and completion queues */
-	FT_EP_BIND(EP->ep, EP->av, 0);
-	FT_EP_BIND(EP->ep, EP->tx_cq, FI_TRANSMIT);
-	FT_EP_BIND(EP->ep, EP->rx_cq, FI_RECV);
 
 	/* Enable endpoint */
 	ret = fi_enable(EP->ep);
@@ -681,6 +706,60 @@ int ofi_add_remote( struct ofi_resources * R, struct ofi_active_endpoint * EP, c
 	return 0;
 }
 
+/**
+ * Open a passive endpoint
+ */
+int ofi_open_passive_ep( struct ofi_resources * R, struct ofi_passive_endpoint * PEP )
+{
+	int ret;
+
+	/* Open a passive endpoint */
+	ret = fi_passive_ep(R->fabric, R->fi, &PEP->pep, NULL);
+	if (ret) {
+		FT_PRINTERR("fi_passive_ep", ret);
+		return ret;
+	}
+
+	/* Open an event queue */
+	struct fi_eq_attr eq_attr = {
+		.wait_obj = FI_WAIT_UNSPEC
+	};
+	ret = fi_eq_open(R->fabric, &eq_attr, &PEP->eq, NULL);
+	if (ret) {
+		FT_PRINTERR("fi_eq_open", ret);
+		return ret;
+	}
+
+	/* Bind on event queue */
+	ret = fi_pep_bind(PEP->pep, &PEP->eq->fid, 0);
+	if (ret) {
+		FT_PRINTERR("fi_pep_bind", ret);
+		return ret;
+	}
+
+	/* Success */
+	return 0;
+}
+
+/**
+ * Open a passive endpoint
+ */
+int ofi_restart_passive_ep( struct ofi_resources * R, struct ofi_passive_endpoint * PEP )
+{
+	int ret;
+
+	/* Re-open passive endpoint */
+	_ofi_debug("OFI: Restarting passive endpoint\n");
+	FT_CLOSE_FID( PEP->eq );
+	FT_CLOSE_FID( PEP->pep );
+	ret = ofi_open_passive_ep( R, PEP );
+	if (ret)
+		return ret;
+
+	/* Success */
+	return 0;
+}
+
 //////////////////////////////////////////////////////////////////////////////////////////
 // OFI High-Level Function - Connected
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -707,36 +786,10 @@ int ofi_init_server( struct ofi_resources * R, struct ofi_passive_endpoint * PEP
 	if (ret)
 		return ret;
 
-	/* Open a passive endpoint */
-	ret = fi_passive_ep(R->fabric, R->fi, &PEP->pep, NULL);
-	if (ret) {
-		FT_PRINTERR("fi_passive_ep", ret);
+	/* Open passive endpoint */
+	ret = ofi_open_passive_ep( R, PEP );
+	if (ret)
 		return ret;
-	}
-
-	/* Open an event queue */
-	struct fi_eq_attr eq_attr = {
-		.wait_obj = FI_WAIT_UNSPEC
-	};
-	ret = fi_eq_open(R->fabric, &eq_attr, &PEP->eq, NULL);
-	if (ret) {
-		FT_PRINTERR("fi_eq_open", ret);
-		return ret;
-	}
-
-	/* Bind on event queue */
-	ret = fi_pep_bind(PEP->pep, &PEP->eq->fid, 0);
-	if (ret) {
-		FT_PRINTERR("fi_pep_bind", ret);
-		return ret;
-	}
-
-	/* Listen for incoming connection */
-	ret = fi_listen(PEP->pep);
-	if (ret) {
-		FT_PRINTERR("fi_listen", ret);
-		return ret;
-	}
 
 	/* Success */
 	return 0;
@@ -752,6 +805,13 @@ int ofi_server_accept( struct ofi_resources * R, struct ofi_passive_endpoint * P
 	struct fi_info *info = NULL;
 	ssize_t rd;
 	int ret;
+
+	/* Listen for incoming connection */
+	ret = fi_listen(PEP->pep);
+	if (ret) {
+		FT_PRINTERR("fi_listen", ret);
+		return ret;
+	}
 
 	/* Wait for connection request from client */
 	rd = fi_eq_sread(PEP->eq, &event, &entry, sizeof entry, -1, 0);
@@ -793,6 +853,11 @@ int ofi_server_accept( struct ofi_resources * R, struct ofi_passive_endpoint * P
 		ret = -FI_EOTHER;
 		goto err;
 	}
+
+	/* Re-open passive endpoint */
+	ret = ofi_restart_passive_ep( R, PEP );
+	if (ret)
+		return ret;
 
 	/* Success */
 	fi_freeinfo(info);
@@ -929,15 +994,30 @@ int ofi_free_pep( struct ofi_passive_endpoint * ep )
 int ofi_free_ep( struct ofi_active_endpoint * ep )
 {
 
+	/* Drain event queue */
+	struct fi_eq_cm_entry entry;
+	uint32_t event;
+	ssize_t rd;
+	do {
+		rd = fi_eq_read(ep->eq, &event, &entry, sizeof entry, 0);
+	} while ((int)rd == 0);
+
 	/* Close endpoint */
 	FT_CLOSE_FID( ep->ep );
 
-	/* Free structures */
-	FT_CLOSE_FID( ep->eq );
+	/* Free memory region */
 	FT_CLOSE_FID( ep->mr );
-	FT_CLOSE_FID( ep->av );
+	nn_free( ep->buf );
+
+	/* Free structures */
 	FT_CLOSE_FID( ep->tx_cq );
 	FT_CLOSE_FID( ep->rx_cq );
+	FT_CLOSE_FID( ep->eq );
+
+	/* Close Address Vector */
+	FT_CLOSE_FID( ep->av );
+
+	/* Close domain */
 	FT_CLOSE_FID( ep->domain );
 
 	/* Success */

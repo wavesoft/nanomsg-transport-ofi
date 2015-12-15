@@ -41,12 +41,16 @@
 #endif
 
 /* State machine states */
-#define NN_SOFI_STATE_IDLE      1
-#define NN_SOFI_STATE_CONNECTED 2
-#define NN_SOFI_STATE_STOPPING  3
+#define NN_SOFI_STATE_IDLE              1
+#define NN_SOFI_STATE_CONNECTED         2
+#define NN_SOFI_STATE_STOPPING          3
+#define NN_SOFI_STATE_DISCONNECTED      4
 
-/* State machine actions */
-#define NN_SOFI_DATA            2010
+/* Private SOFI events */
+#define NN_SOFI_ACTION_DATA             2010
+
+/* Private SOFI sources */
+#define NN_SOFI_SRC_DISCONNECT_TIMER    1100
 
 /*  State machine functions. */
 static void nn_sofi_handler (struct nn_fsm *self, int src, int type, 
@@ -73,28 +77,28 @@ void nn_sofi_init (struct nn_sofi *self,
 {    
     int ret;
 
-    /* Initialize FSM */
-    nn_fsm_init (&self->fsm, nn_sofi_handler, nn_sofi_shutdown,
-        src, self, owner);
-    self->state = NN_SOFI_STATE_IDLE;
-
     /* Keep OFI resources */
     self->ofi = ofi;
     self->ep = ep;
+
+    /* ==================== */
 
     /* Initialize list item */
     nn_list_item_init (&self->item);
 
     /* Initialize fsm events */ 
-    nn_fsm_event_init (&self->connected);
-    nn_fsm_event_init (&self->datain);
+    nn_fsm_event_init (&self->disconnected);
 
     /* Initialize buffes */
     nn_msg_init (&self->inmsg, 0);
 
+    /* ==================== */
+
     /* Initialize pipe base */
     _ofi_debug("OFI: SOFI: Replacing pipebase\n");
     nn_pipebase_init (&self->pipebase, &nn_sofi_pipebase_vfptr, epbase);
+
+    /* ==================== */
 
     /* Get maximum size of receive buffer */
     int recv_size;
@@ -118,6 +122,16 @@ void nn_sofi_init (struct nn_sofi *self,
         return;
     }
 
+    /* ==================== */
+
+    /* Initialize FSM */
+    nn_fsm_init (&self->fsm, nn_sofi_handler, nn_sofi_shutdown,
+        src, self, owner);
+    self->state = NN_SOFI_STATE_IDLE;
+
+    /* Initialize tiemr */
+    nn_timer_init(&self->disconnect_timer, NN_SOFI_SRC_DISCONNECT_TIMER, &self->fsm);
+
     /* Start FSM */
     _ofi_debug("OFI: SOFI: Start \n");
     nn_fsm_start (&self->fsm);
@@ -130,13 +144,17 @@ void nn_sofi_init (struct nn_sofi *self,
 void nn_sofi_term (struct nn_sofi *self)
 {
 
+    /* Free OFI Endpoint */
+    ofi_free_ep( self->ep );
+
     /* Cleanup instantiated resources */
     nn_list_item_term (&self->item);
-    nn_fsm_event_term (&self->connected);
-    nn_fsm_event_term (&self->datain);
+    nn_timer_term (&self->disconnect_timer);
+    nn_fsm_event_term (&self->disconnected);
     nn_msg_term (&self->inmsg);
     nn_pipebase_term (&self->pipebase);
     nn_fsm_term (&self->fsm);
+
 }
 
 /**
@@ -177,18 +195,17 @@ static void nn_sofi_shutdown (struct nn_fsm *self, int src, int type,
     if (nn_slow (src == NN_FSM_ACTION && type == NN_FSM_STOP)) {
 
         /* Abort OFI Operations */
-        ofi_free_ep( sofi->ep );
-        ofi_free( sofi->ofi );
-
-        /*  Wait till worker thread terminates. */
         sofi->state = NN_SOFI_STATE_STOPPING;
-        nn_thread_term (&sofi->thread);
+        ofi_shutdown_ep( sofi->ep );
 
         /* Stop child objects */
         nn_pipebase_stop (&sofi->pipebase);
 
+        /*  Wait till worker thread terminates. */
+        nn_thread_term (&sofi->thread);
+
         /* We are stopped */
-        nn_fsm_stopped_noevent (&sofi->fsm);
+        nn_fsm_stopped(&sofi->fsm, NN_SOFI_STOPPED);
         return;
     }
 
@@ -210,10 +227,14 @@ static int nn_sofi_send (struct nn_pipebase *self, struct nn_msg *msg)
     size_t sz_sphdr = nn_chunkref_size (&msg->sphdr);
     size_t sz_body = nn_chunkref_size (&msg->body);
 
+    /* Check overflow */
+    if (sz_sphdr + sz_body > sofi->ep->tx_size) {
+        _ofi_debug("OFI: SOFI: Trying to send len=%lu, when tx_size=%zu\n", sz_sphdr+sz_body, sofi->ep->tx_size);        
+        return -EOVERFLOW;
+    }
+
     /*  Serialise the message header. */
     nn_putll (sofi->outhdr, sz_sphdr + sz_body);
-
-    /* TODO: Check maximum length */
 
     /* Serialize data to the tx buffer */
     memcpy( sofi->ep->tx_buf, &sofi->outhdr, sizeof(sofi->outhdr) );
@@ -232,6 +253,9 @@ static int nn_sofi_send (struct nn_pipebase *self, struct nn_msg *msg)
     }
 
     /* Success */
+    nn_pipebase_sent (&sofi->pipebase);
+
+    /* Success */
     return 0;
 }
 
@@ -243,6 +267,7 @@ static int nn_sofi_recv (struct nn_pipebase *self, struct nn_msg *msg)
 
     /* Move received message to the user. */
     nn_msg_mv (msg, &sofi->inmsg);
+    nn_msg_init (&sofi->inmsg, 0);
 
     /* Success */
     return 0;
@@ -263,8 +288,10 @@ static void nn_sofi_poller_thread (void *arg)
 
         /* Receive data from OFI */
         ret = ofi_rx( self->ep, MAX_MSG_SIZE );
-        if (ret == -FI_ECANCELED) /* Cancelled, part of shutdown */
+        if (ret == -FI_REMOTE_DISCONNECT) { /* Remotely disconnected */
+            _ofi_debug("OFI: Remotely disconnected!\n");
             break;
+        }
 
         /* Handle errors */
         if (ret) {
@@ -305,10 +332,20 @@ static void nn_sofi_poller_thread (void *arg)
 
         /* Notify FSM for the fact that we have received data  */
         nn_ctx_enter( self->fsm.ctx );
-        nn_fsm_action ( &self->fsm, NN_SOFI_DATA );
+        nn_fsm_action ( &self->fsm, NN_SOFI_ACTION_DATA );
         nn_ctx_leave( self->fsm.ctx );
 
     }
+
+    /* Notify FSM for the fact that we are disconnected  */
+    if (self->state == NN_SOFI_STATE_CONNECTED) {
+        _ofi_debug("OFI: Triggering discconect because poller thread exited\n");
+
+        /* We are using the disconnect timer trick in order to change threads,
+           and therfore allow a clean stop() of the fsm. */
+        nn_timer_start( &self->disconnect_timer, 1 );
+    }
+
 }
 
 /**
@@ -361,14 +398,54 @@ static void nn_sofi_handler (struct nn_fsm *self, int src, int type,
     case NN_SOFI_STATE_CONNECTED:
         switch (src) {
 
+        /* Zombie timer */
+        case NN_SOFI_SRC_DISCONNECT_TIMER:
+            switch (type) {
+            case NN_TIMER_TIMEOUT:
+
+                /* We are now disconnected, stop timer */
+                sofi->state = NN_SOFI_STATE_DISCONNECTED;
+                nn_timer_stop(&sofi->disconnect_timer);
+                return;
+
+            default:
+                nn_fsm_bad_action (sofi->state, src, type);
+            }
+
+        /* Local Actions */
         case NN_FSM_ACTION:
             switch (type) {
-            case NN_SOFI_DATA:
+            case NN_SOFI_ACTION_DATA:
 
                 /* Notify pipebase that we have some data */
                 nn_pipebase_received (&sofi->pipebase);
 
                 return;
+            default:
+                nn_fsm_bad_action (sofi->state, src, type);
+            }
+
+        default:
+            nn_fsm_bad_source (sofi->state, src, type);
+        }
+
+/******************************************************************************/
+/*  DISCONNECTED state.                                                       */
+/******************************************************************************/
+
+    case NN_SOFI_STATE_DISCONNECTED:
+        switch (src) {
+
+        /* Zombie timer */
+        case NN_SOFI_SRC_DISCONNECT_TIMER:
+            switch (type) {
+            case NN_TIMER_STOPPED:
+
+                /* Notify parent fsm that we are disconnected */
+                nn_fsm_raise(&sofi->fsm, &sofi->disconnected, 
+                    NN_SOFI_DISCONNECTED);
+                return;
+
             default:
                 nn_fsm_bad_action (sofi->state, src, type);
             }

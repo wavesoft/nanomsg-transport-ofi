@@ -25,7 +25,7 @@
 
 #include "../../transport.h"
 
-//#define OFI_DEBUG_LOG
+#define OFI_DEBUG_LOG
 
 extern struct nn_transport *nn_ofi;
 

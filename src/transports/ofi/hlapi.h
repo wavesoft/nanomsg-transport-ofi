@@ -38,6 +38,9 @@
 /* LibFabric Protocol to use */
 #define FT_FIVERSION 		FI_VERSION(1,1)
 
+/* Error flag that denotes that remote socket disconnected */
+#define FI_REMOTE_DISCONNECT	513
+
 /**
  * OFI Active Endpoint
  */
@@ -55,6 +58,7 @@ struct ofi_active_endpoint
 	/* Active endpoint structures */
 	struct fid_av 		*av;
 	struct fid_ep 		*ep;
+	struct fid_eq 		*eq;
 	struct fid_cq 		*tx_cq, *rx_cq;
 	struct fi_context 	tx_ctx, rx_ctx;
 
@@ -74,6 +78,7 @@ struct ofi_passive_endpoint
 {
 	/* Passive endpoint when listening */
 	struct fid_pep  	*pep;
+	struct fid_eq 		*eq;
 };
 
 /**
@@ -88,7 +93,6 @@ struct ofi_resources
 	/* Fabric core structures */
 	struct fi_info 		*fi;
 	struct fid_fabric 	*fabric;
-	struct fid_eq 		*eq;
 
 };
 
@@ -147,6 +151,11 @@ int ofi_active_ep_init_mr( struct ofi_resources * R, struct ofi_active_endpoint 
  */
 int ofi_init_client( struct ofi_resources * R, struct ofi_active_endpoint * EP, unsigned int addr_format, 
 					const char * node, const char * service );
+
+/**
+ * Shutdown an active endpoint
+ */
+int ofi_shutdown_ep( struct ofi_active_endpoint * EP );
 
 /**
  * Free hints and core structures

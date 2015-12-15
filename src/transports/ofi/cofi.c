@@ -172,8 +172,11 @@ static void nn_cofi_destroy (struct nn_epbase *self)
     struct nn_cofi *cofi;
     cofi = nn_cont(self, struct nn_cofi, epbase);
 
-    /* Free resources */
+    /* Stop OFI (sofi also closes endpoint) */
     nn_sofi_term(&cofi->sofi);
+    ofi_free( &cofi->ofi );
+
+    /* Cleanup other resources */
     nn_fsm_term (&cofi->fsm);
     nn_epbase_term (&cofi->epbase);
     nn_free (cofi);
@@ -231,7 +234,7 @@ static void nn_cofi_handler (struct nn_fsm *self, int src, int type,
 
     /* Continue with the next OFI Event */
     cofi = nn_cont (self, struct nn_cofi, fsm);
-    _ofi_debug("> nn_cofi_handler state=%i, src=%i, type=%i\n", 
+    _ofi_debug("OFI: nn_cofi_handler state=%i, src=%i, type=%i\n", 
         cofi->state, src, type);
 
     /* Handle new state */
@@ -263,6 +266,32 @@ static void nn_cofi_handler (struct nn_fsm *self, int src, int type,
         }
 
 /******************************************************************************/
+/*  NN_COFI_STATE_CONNECTED state.                                            */
+/*  We are connected to the remote endpoint                                   */
+/******************************************************************************/
+    case NN_COFI_STATE_CONNECTED:
+        switch (src) {
+
+        case NN_COFI_SRC_SOFI:
+            switch (type) {
+            case NN_SOFI_DISCONNECTED:
+
+                /* Disconnected from remote endpoint */
+                printf("OFI: ERROR: Disconnected from remote endpoint (not implemented)\n");
+
+                /* TODO: Implement this */
+
+                return;
+
+            default:
+                nn_fsm_bad_action (cofi->state, src, type);
+            }
+
+        default:
+            nn_fsm_bad_source (cofi->state, src, type);
+        }
+
+/******************************************************************************/
 /*  STOPPING state.                                                           */
 /*  This state is initiated by nn_cofi_shutdown                               */
 /******************************************************************************/
@@ -271,13 +300,14 @@ static void nn_cofi_handler (struct nn_fsm *self, int src, int type,
 
         case NN_COFI_SRC_SOFI:
             switch (type) {
+
             case NN_SOFI_STOPPED:
+                /* Successfully stopped - We don't care */
+                return;
 
-                /* We are stopped */
-                // nn_fsm_stopped_noevent (&cofi->fsm);
-                // nn_epbase_stopped (&cofi->epbase);
+            case NN_SOFI_DISCONNECTED:
+                /* We are disconnected, but we are stopping - We don't care */
                 _ofi_debug("Stopping Again!\n");
-
                 return;
 
             default:

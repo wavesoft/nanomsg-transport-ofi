@@ -146,6 +146,64 @@ int ft_wait(struct fid_cq *cq)
 }
 
 /**
+ * Wait for completion queue, also listening for shutdown events on the event queue
+ */
+int ft_wait_shutdown_aware(struct fid_cq *cq, struct fid_eq *eq)
+{
+	struct fi_eq_cm_entry eq_entry;
+	struct fi_cq_entry entry;
+	uint32_t event;
+	int ret;
+
+	/* CQ entry based on configured format (i.e. FI_CQ_FORMAT_CONTEXT) */
+	while (1) {
+
+		/* Check for shutdown events */
+		ret = fi_eq_read(eq, &event, &eq_entry, sizeof eq_entry, 0);
+		if (ret != -FI_EAGAIN) {
+			// Check for remote event
+			if (event == FI_SHUTDOWN) {
+				/* We are remotely disconnected */
+				return -FI_REMOTE_DISCONNECT;
+			} else {
+				FT_ERR("Unexpected CM event %d\n", event);
+			}
+		}
+
+		ret = fi_cq_read(cq, &entry, 1);
+
+		/* Operation failed */
+		if (ret > 0) {
+			/* Success */
+			return 0;
+
+		} else if (ret < 0 && ret != -FI_EAGAIN) {
+			if (ret == -FI_EAVAIL) {
+				struct fi_cq_err_entry err_entry;
+
+				/* Handle error */
+				ret = fi_cq_readerr(cq, &err_entry, 0);
+
+				/* Check if the operation was cancelled (ex. terminating connection) */
+				if (err_entry.err == FI_ECANCELED) {
+					return -FI_REMOTE_DISCONNECT;
+				}
+
+				/* Display other erors */
+				printf("OFI: %s (%s)\n",
+					fi_strerror(err_entry.err),
+					fi_cq_strerror(cq, err_entry.prov_errno, err_entry.err_data, NULL, 0)
+				);
+				return ret;
+			} else {
+				FT_PRINTERR("fi_cq_read", ret);
+			}
+
+		}
+	}
+}
+
+/**
  * Helper to duplicate address
  */
 static int ft_dupaddr(void **dst_addr, size_t *dst_addrlen, void *src_addr, size_t src_addrlen)
@@ -266,24 +324,33 @@ int ofi_alloc( struct ofi_resources * R, enum fi_ep_type ep_type )
 /**
  * Receive data from OFI
  */
-ssize_t ofi_tx( struct ofi_active_endpoint * R, size_t size )
+ssize_t ofi_tx( struct ofi_active_endpoint * EP, size_t size )
 {
 	ssize_t ret;
 
 	/* Send data */
-	ret = fi_send(R->ep, R->tx_buf, size + R->tx_prefix_size,
-			fi_mr_desc(R->mr), R->remote_fi_addr, &R->tx_ctx);
+	ret = fi_send(EP->ep, EP->tx_buf, size + EP->tx_prefix_size,
+			fi_mr_desc(EP->mr), EP->remote_fi_addr, &EP->tx_ctx);
 	if (ret) {
+
+		/* If we are in a bad state, we were remotely disconnected */
+		if (ret == -FI_EOPBADSTATE) 
+			return -FI_REMOTE_DISCONNECT;
+
+		/* Otherwise display error */
 		FT_PRINTERR("fi_send", ret);
 		return ret;
 	}
 
 	/* Wait for Tx CQ */
-	ret = ft_wait(R->tx_cq);
-	if (ret == -FI_ECANCELED) /* Cancelled */
-		return ret;
-
+	ret = ft_wait_shutdown_aware(EP->tx_cq, EP->eq);
 	if (ret) {
+
+		/* If we are remotely disconnected, be silent */
+		if (ret == -FI_REMOTE_DISCONNECT)
+			return ret;
+
+		/* Otherwise display error */
 		FT_PRINTERR("ft_wait<tx_cq>", ret);
 		return ret;
 	}
@@ -295,24 +362,33 @@ ssize_t ofi_tx( struct ofi_active_endpoint * R, size_t size )
 /**
  * Receive data from OFI
  */
-ssize_t ofi_rx( struct ofi_active_endpoint * R, size_t size )
+ssize_t ofi_rx( struct ofi_active_endpoint * EP, size_t size )
 {
-	ssize_t ret;
+	int ret;
 
 	/* Receive data */
-	ret = fi_recv(R->ep, R->rx_buf, size + R->rx_prefix_size, 
-			fi_mr_desc(R->mr), 0, &R->rx_ctx);
+	ret = fi_recv(EP->ep, EP->rx_buf, size + EP->rx_prefix_size, 
+			fi_mr_desc(EP->mr), 0, &EP->rx_ctx);
 	if (ret) {
-		FT_PRINTERR("fi_send", ret);
+
+		/* If we are in a bad state, we were remotely disconnected */
+		if (ret == -FI_EOPBADSTATE) 
+			return -FI_REMOTE_DISCONNECT;
+
+		/* Otherwise display error */
+		FT_PRINTERR("fi_recv", ret);
 		return ret;
 	}
 
 	/* Wait for Rx CQ */
-	ret = ft_wait(R->rx_cq);
-	if (ret == -FI_ECANCELED) /* Cancelled */
-		return ret;
-
+	ret = ft_wait_shutdown_aware(EP->rx_cq, EP->eq);
 	if (ret) {
+
+		/* If we are remotely disconnected, be silent */
+		if (ret == -FI_REMOTE_DISCONNECT)
+			return ret;
+
+		/* Otherwise display error */
 		FT_PRINTERR("ft_wait<rx_cq>", ret);
 		return ret;
 	}
@@ -365,16 +441,6 @@ int ofi_open_fabric( struct ofi_resources * R )
 	ret = fi_fabric(R->fi->fabric_attr, &R->fabric, NULL);
 	if (ret) {
 		FT_PRINTERR("fi_fabric", ret);
-		return ret;
-	}
-
-	/* 2) Open an event queue */
-	struct fi_eq_attr eq_attr = {
-		.wait_obj = FI_WAIT_UNSPEC
-	};
-	ret = fi_eq_open(R->fabric, &eq_attr, &R->eq, NULL);
-	if (ret) {
-		FT_PRINTERR("fi_eq_open", ret);
 		return ret;
 	}
 
@@ -457,9 +523,26 @@ int ofi_open_active_ep( struct ofi_resources * R, struct ofi_active_endpoint * E
 
 	/* ==== Bind Endpoint to CQ ================== */
 
+	/* Open event queue for receiving socket events */
+	struct fi_eq_attr eq_attr = {
+		.wait_obj = FI_WAIT_UNSPEC
+	};
+	if (fi->ep_attr->type == FI_EP_MSG) {
+
+		/* Open event queue */
+		ret = fi_eq_open(R->fabric, &eq_attr, &EP->eq, NULL);
+		if (ret) {
+			FT_PRINTERR("fi_eq_open", ret);
+			return ret;
+		}
+
+		/* Bind on event queue */
+		FT_EP_BIND(EP->ep, EP->eq, 0);
+	}
+
+	/* ==== Bind Endpoint to CQ ================== */
+
 	/* Bind to event queues and completion queues */
-	if (fi->ep_attr->type == FI_EP_MSG)
-		FT_EP_BIND(EP->ep, R->eq, 0);
 	FT_EP_BIND(EP->ep, EP->av, 0);
 	FT_EP_BIND(EP->ep, EP->tx_cq, FI_TRANSMIT);
 	FT_EP_BIND(EP->ep, EP->rx_cq, FI_RECV);
@@ -606,8 +689,18 @@ int ofi_init_server( struct ofi_resources * R, struct ofi_passive_endpoint * PEP
 		return ret;
 	}
 
+	/* Open an event queue */
+	struct fi_eq_attr eq_attr = {
+		.wait_obj = FI_WAIT_UNSPEC
+	};
+	ret = fi_eq_open(R->fabric, &eq_attr, &PEP->eq, NULL);
+	if (ret) {
+		FT_PRINTERR("fi_eq_open", ret);
+		return ret;
+	}
+
 	/* Bind on event queue */
-	ret = fi_pep_bind(PEP->pep, &R->eq->fid, 0);
+	ret = fi_pep_bind(PEP->pep, &PEP->eq->fid, 0);
 	if (ret) {
 		FT_PRINTERR("fi_pep_bind", ret);
 		return ret;
@@ -636,9 +729,9 @@ int ofi_server_accept( struct ofi_resources * R, struct ofi_passive_endpoint * P
 	int ret;
 
 	/* Wait for connection request from client */
-	rd = fi_eq_sread(R->eq, &event, &entry, sizeof entry, -1, 0);
+	rd = fi_eq_sread(PEP->eq, &event, &entry, sizeof entry, -1, 0);
 	if (rd != sizeof entry) {
-		FT_PROCESS_EQ_ERR(rd, R->eq, "fi_eq_sread", "listen");
+		FT_PROCESS_EQ_ERR(rd, PEP->eq, "fi_eq_sread", "listen");
 		return (int) rd;
 	}
 
@@ -663,9 +756,9 @@ int ofi_server_accept( struct ofi_resources * R, struct ofi_passive_endpoint * P
 	}
 
 	/* Wait for the connection to be established */
-	rd = fi_eq_sread(R->eq, &event, &entry, sizeof entry, -1, 0);
+	rd = fi_eq_sread(EP->eq, &event, &entry, sizeof entry, -1, 0);
 	if (rd != sizeof entry) {
-		FT_PROCESS_EQ_ERR(rd, R->eq, "fi_eq_sread", "accept");
+		FT_PROCESS_EQ_ERR(rd, EP->eq, "fi_eq_sread", "accept");
 		ret = (int) rd;
 		goto err;
 	}
@@ -727,9 +820,9 @@ int ofi_init_client( struct ofi_resources * R, struct ofi_active_endpoint * EP, 
 	}
 
 	/* Wait for the connection to be established */
-	rd = fi_eq_sread(R->eq, &event, &entry, sizeof entry, -1, 0);
+	rd = fi_eq_sread(EP->eq, &event, &entry, sizeof entry, -1, 0);
 	if (rd != sizeof entry) {
-		FT_PROCESS_EQ_ERR(rd, R->eq, "fi_eq_sread", "connect");
+		FT_PROCESS_EQ_ERR(rd, EP->eq, "fi_eq_sread", "connect");
 		return (int) rd;
 	}
 
@@ -746,6 +839,32 @@ int ofi_init_client( struct ofi_resources * R, struct ofi_active_endpoint * EP, 
 // OFI Cleanup Functions
 //////////////////////////////////////////////////////////////////////////////////////////
 
+
+/**
+ * Shutdown an active endpoint
+ */
+int ofi_shutdown_ep( struct ofi_active_endpoint * EP )
+{
+	int ret;
+
+	/* Not implemented in some providers */
+	fi_shutdown(EP->ep, 0);
+
+	/* Cancel I/O operations */
+	fi_cancel( &(EP->ep)->fid, &EP->tx_ctx );
+	fi_cancel( &(EP->ep)->fid, &EP->rx_ctx );
+
+	// /* Shutdown endpoint */
+	// ret = fi_shutdown(EP->ep, 0);
+	// if (ret) {
+	// 	FT_PRINTERR("fi_shutdown", ret);
+	// 	return ret;
+	// }
+
+	/* Success */
+	return 0;
+}
+
 /**
  * Free hints and core structures
  */
@@ -753,7 +872,6 @@ int ofi_free( struct ofi_resources * R )
 {
 
 	/* Close FDs */
-	FT_CLOSE_FID( R->eq );
 	FT_CLOSE_FID( R->fabric );
 
 	/* Free resources */
@@ -773,6 +891,9 @@ int ofi_free_pep( struct ofi_passive_endpoint * ep )
 	/* Close endpoint */
 	FT_CLOSE_FID( ep->pep );
 
+	/* Free structures */
+	FT_CLOSE_FID( ep->eq );
+
 	/* Success */
 	return 0;
 }
@@ -784,11 +905,10 @@ int ofi_free_ep( struct ofi_active_endpoint * ep )
 {
 
 	/* Close endpoint */
-	fi_cancel( &(ep->ep)->fid, &ep->tx_ctx );
-	fi_cancel( &(ep->ep)->fid, &ep->rx_ctx );
 	FT_CLOSE_FID( ep->ep );
 
 	/* Free structures */
+	FT_CLOSE_FID( ep->eq );
 	FT_CLOSE_FID( ep->mr );
 	FT_CLOSE_FID( ep->av );
 	FT_CLOSE_FID( ep->tx_cq );

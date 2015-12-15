@@ -226,8 +226,6 @@ static void nn_bofi_stop (struct nn_epbase *self)
     struct nn_bofi *bofi;
     bofi = nn_cont(self, struct nn_bofi, epbase);
 
-    /* TODO: Implement */
-
     /* Stop the FSM */
     nn_fsm_stop (&bofi->fsm);
 }
@@ -272,6 +270,7 @@ static void nn_bofi_handler (struct nn_fsm *self, int src, int type,
     void *srcptr)
 {
     struct nn_bofi *bofi;
+    struct nn_sofi *sofi;
 
     /* Continue with the next OFI Event */
     bofi = nn_cont (self, struct nn_bofi, fsm);
@@ -311,6 +310,7 @@ static void nn_bofi_handler (struct nn_fsm *self, int src, int type,
     case NN_BOFI_STATE_ACCEPTING:
         switch (src) {
 
+        /* Local thread actions */
         case NN_FSM_ACTION:
             switch (type) {
             case NN_BOFI_CONNECTION_ACCEPTED:
@@ -324,6 +324,39 @@ static void nn_bofi_handler (struct nn_fsm *self, int src, int type,
                 /* Acknowledge event and resume operation */
                 nn_efd_signal( &bofi->sync );
                 self->state = NN_BOFI_STATE_ACCEPTING;
+
+                return;
+            default:
+                nn_fsm_bad_action (bofi->state, src, type);
+            }
+
+        /* SOFI FSM actions */
+        case NN_BOFI_SRC_SOFI:
+
+            /* Get reference to sofi */
+            sofi = (struct nn_sofi *) srcptr;
+
+            switch (type) {
+            case NN_SOFI_STOPPED:
+                /* The SOFI fsm was stopped */
+                _ofi_debug("OFI: Cleaning-up SOFI\n");
+
+                /* Remove item from list */
+                nn_list_erase (&bofi->sofis, &sofi->item);
+
+                /* Cleanup */
+                nn_sofi_term(sofi);
+
+                return;
+
+            case NN_SOFI_DISCONNECTED:
+                /* A remote enpodint was disconnected */
+                _ofi_debug("OFI: Connection closed, stopping SOFI\n");
+
+                /* Stop sofi */
+                if (!nn_sofi_isidle (sofi)) {
+                    nn_sofi_stop (sofi);
+                }
 
                 return;
             default:

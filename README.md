@@ -31,6 +31,7 @@ __WARNING: This is an early alpha release! This project is currently unoptimised
     ./patch-nanomsg.sh $NANOMSG_SROUCES
     ```
  5. You can now compile nanomsg:
+
     ```
     cd $NANOMSG_SROUCES
     ./configure && make

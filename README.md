@@ -2,12 +2,12 @@
 
 Nanomsg transport for interfacing with the OpenFabrics Interfaces (OFI) Library (libfabric).
 
-__WARNING: This project is currently unoptimised and should not be used in production!__
+__WARNING: This is an early alpha release! This project is currently unoptimised and should not be used in production!__
 
 ## Known Problems
 
- 1. `usnic` provider does not seem to support the `FI_SHUTDOWN` event and therefore the 
- 2. The current implementation breaks the zero-copy principle [here](blob/master/src/transports/ofi/sofi.c#L245) and [here](blob/master/src/transports/ofi/sofi.c#L342), and therefore has some performance penalties.
+ 1. `usnic` provider does not seem to support the `FI_SHUTDOWN` event and therefore a `bound` socket will run out of file descriptors if many connections are attempted to be established. 
+ 2. The current implementation breaks the zero-copy principle [here](src/transports/ofi/sofi.c#L245) and [here](src/transports/ofi/sofi.c#L342), and therefore has some performance penalties.
 
 ## How to compile
 

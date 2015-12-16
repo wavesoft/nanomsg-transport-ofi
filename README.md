@@ -9,6 +9,7 @@ __WARNING: This is an early alpha release! This project is currently unoptimised
  1. The current version handles only IPV4 address families.
  2. `usnic` provider does not seem to support the `FI_SHUTDOWN` event and therefore a `bound` socket will run out of file descriptors if many connections are attempted to be established. 
  3. The current implementation breaks the zero-copy principle [here](src/transports/ofi/sofi.c#L245) and [here](src/transports/ofi/sofi.c#L342), and therefore has some performance penalties.
+ 4. Currently, it seems that with `usnic` you can only have up to 16 concurrent connections.
 
 ## How to compile
 

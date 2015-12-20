@@ -760,8 +760,8 @@ int ofi_restart_passive_ep( struct ofi_resources * R, struct ofi_passive_endpoin
 
 	/* Re-open passive endpoint */
 	_ofi_debug("OFI: Restarting passive endpoint\n");
-	FT_CLOSE_FID( PEP->eq );
 	FT_CLOSE_FID( PEP->pep );
+	FT_CLOSE_FID( PEP->eq );
 	ret = ofi_open_passive_ep( R, PEP );
 	if (ret)
 		return ret;

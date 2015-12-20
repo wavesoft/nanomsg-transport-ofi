@@ -23,15 +23,12 @@
 #ifndef NN_OFI_INCLUDED
 #define NN_OFI_INCLUDED
 
+#include "../../transport.h"
+
 /* Uncomment the following to enable verose messages for debugging */
 // #define OFI_DEBUG_LOG
 
-#ifndef __STANDALONE_TESTS
-
-/* Expose nn_ofi transport definition */
-#include "../../transport.h"
 extern struct nn_transport *nn_ofi;
 
-#endif
 
 #endif

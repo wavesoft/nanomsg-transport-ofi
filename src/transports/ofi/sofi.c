@@ -92,6 +92,9 @@ void nn_sofi_init (struct nn_sofi *self,
     /* Initialize buffes */
     nn_msg_init (&self->inmsg, 0);
 
+    /* Prepare thread resources */
+    nn_efd_init( &self->sync );
+
     /* ==================== */
 
     /* Initialize pipe base */
@@ -278,6 +281,10 @@ static int nn_sofi_recv (struct nn_pipebase *self, struct nn_msg *msg)
     nn_msg_mv (msg, &sofi->inmsg);
     nn_msg_init (&sofi->inmsg, 0);
 
+    /* Unblock thread to receive next chunk */
+    _ofi_debug("OFI: SOFI: Sending Rx Signal\n");
+    nn_efd_signal( &sofi->sync );
+
     /* Success */
     return 0;
 }
@@ -346,6 +353,11 @@ static void nn_sofi_poller_thread (void *arg)
         nn_ctx_enter( self->fsm.ctx );
         nn_fsm_action ( &self->fsm, NN_SOFI_ACTION_DATA );
         nn_ctx_leave( self->fsm.ctx );
+
+        /* Wait for sent confirmation */
+        _ofi_debug("OFI: SOFI: Waiting for Rx signal\n");
+        nn_efd_wait( &self->sync, -1 );
+        nn_efd_unsignal( &self->sync );
 
     }
 

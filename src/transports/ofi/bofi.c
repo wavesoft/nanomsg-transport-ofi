@@ -316,7 +316,7 @@ static void nn_bofi_accept_thread (void *arg)
 
         /* Wait for event to be handled */
         _ofi_debug("OFI: bofi_accept_thread: Waiting for ack from FSM\n");
-        nn_efd_wait( &self->sync, 0 );
+        nn_efd_wait( &self->sync, -1 );
         nn_efd_unsignal( &self->sync );
 
     }

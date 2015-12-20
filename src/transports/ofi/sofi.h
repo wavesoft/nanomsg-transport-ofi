@@ -28,7 +28,7 @@
 #include "../../transport.h"
 #include "../../aio/fsm.h"
 #include "../../aio/timer.h"
-#include "../../utils/mutex.h"
+#include "../../utils/efd.h"
 #include "../../utils/thread.h"
 
 /* SOFI Source */
@@ -68,8 +68,9 @@ struct nn_sofi {
     /* Timer used to notify the termination of the socket thread */
     struct nn_timer disconnect_timer;
 
-    /* The OFI Poller thread */
+    /* The OFI Poller thread and sync efd */
     struct nn_thread thread;
+    struct nn_efd    sync;
     
 };
 

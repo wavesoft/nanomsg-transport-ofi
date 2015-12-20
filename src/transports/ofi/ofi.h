@@ -23,7 +23,10 @@
 #ifndef NN_OFI_INCLUDED
 #define NN_OFI_INCLUDED
 
+/* Support for stand-alone tests */
+#ifndef __STANDALONE_TESTS 
 #include "../../transport.h"
+#endif
 
 /* Uncomment the following to enable verose messages for debugging */
 // #define OFI_DEBUG_LOG

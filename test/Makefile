@@ -7,7 +7,7 @@ NANOMSG_LIB_DIR=/Users/icharala/Develop/predrag/nanomsg-0.8-beta/.libs
 
 .PHONY: all
 
-all: test_msg test_dgram test_nanmsg_timing
+all: test_nanmsg_timing test_msg test_dgram
 
 hlapi.o: $(OFI_DIR)/hlapi.c
 	gcc -D__STANDALONE_TESTS -c -I$(OFI_DIR) -I$(PWD) $(OFI_DIR)/hlapi.c -g -o hlapi.o
@@ -18,7 +18,7 @@ test_dgram: hlapi.o fabric_dgram.c
 test_msg: hlapi.o fabric_msg.c
 	gcc -D__STANDALONE_TESTS -I$(OFI_DIR) hlapi.o fabric_msg.c -lfabric -g -o test_msg
 
-test_nanmsg_timing: nanomsg_timing.c
+test_nanmsg_timing: nanomsg_timing.c $(NANOMSG_LIB_DIR)/libnanomsg.a
 	gcc nanomsg_timing.c $(NANOMSG_LIB_DIR)/libnanomsg.a -lfabric -o test_nanmsg_timing
 
 clean:

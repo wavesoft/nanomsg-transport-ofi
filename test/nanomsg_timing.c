@@ -52,15 +52,15 @@ typedef int clockid_t;
 
 /* OSX Dues not have clock_getttime */
 int clock_gettime(clockid_t clk_id, struct timespec *tp) {
-        int retval;
-        struct timeval tv;
+	int retval;
+	struct timeval tv;
 
-        retval = gettimeofday(&tv, NULL);
+	retval = gettimeofday(&tv, NULL);
 
-        tp->tv_sec = tv.tv_sec;
-        tp->tv_nsec = tv.tv_usec * 1000;
+	tp->tv_sec = tv.tv_sec;
+	tp->tv_nsec = tv.tv_usec * 1000;
 
-        return retval;
+	return retval;
 }
 #endif
 
@@ -70,11 +70,11 @@ int clock_gettime(clockid_t clk_id, struct timespec *tp) {
  */
 int64_t get_elapsed(const struct timespec *b, const struct timespec *a)
 {
-  int64_t elapsed;
+	int64_t elapsed;
 
-  elapsed = (a->tv_sec - b->tv_sec) * 1000 * 1000 * 1000;
-  elapsed += a->tv_nsec - b->tv_nsec;
-  return elapsed / 1000;  // microseconds
+	elapsed = (a->tv_sec - b->tv_sec) * 1000 * 1000 * 1000;
+	elapsed += a->tv_nsec - b->tv_nsec;
+	return elapsed / 1000;  // microseconds
 }
 
 /**
@@ -117,7 +117,7 @@ int run_tests( int sock, int direction )
 
 	// Calculate overall lattency
 	clock_gettime(CLOCK_MONOTONIC, &t1);
-    printf("time per message: %8.2f us\n", get_elapsed(&t0, &t1)/i/2.0);
+    printf("TIM: Time per message: %8.2f us\n", get_elapsed(&t0, &t1)/i/2.0);
     return 0;
 }
 
@@ -126,11 +126,12 @@ int run_tests( int sock, int direction )
  */
 int node0 (const char *url)
 {
-  int sock = nn_socket (AF_SP, NN_PAIR);
-  assert (sock >= 0);
-  assert (nn_bind (sock, url) >= 0);
-  run_tests(sock, DIRECTION_IN);
-  return nn_shutdown (sock, 0);
+	int sock = nn_socket (AF_SP, NN_PAIR);
+	assert (sock >= 0);
+	assert (nn_bind (sock, url) >= 0);
+	printf("TIM: I will be receiving\n");
+	run_tests(sock, DIRECTION_IN);
+	return nn_shutdown (sock, 0);
 }
 
 /**
@@ -138,11 +139,12 @@ int node0 (const char *url)
  */
 int node1 (const char *url)
 {
-  int sock = nn_socket (AF_SP, NN_PAIR);
-  assert (sock >= 0);
-  assert (nn_connect (sock, url) >= 0);
-  run_tests(sock, DIRECTION_OUT);
-  return nn_shutdown (sock, 0);
+	int sock = nn_socket (AF_SP, NN_PAIR);
+	assert (sock >= 0);
+	assert (nn_connect (sock, url) >= 0);
+	printf("TIM: I will be sending\n");
+	run_tests(sock, DIRECTION_OUT);
+	return nn_shutdown (sock, 0);
 }
 
 /**
@@ -150,15 +152,15 @@ int node1 (const char *url)
  */
 int main (const int argc, const char **argv)
 {
-  if (strncmp (NODE0, argv[1], strlen (NODE0)) == 0 && argc > 1)
-    return node0 (argv[2]);
-  else if (strncmp (NODE1, argv[1], strlen (NODE1)) == 0 && argc > 1)
-    return node1 (argv[2]);
-  else
-    {
-      fprintf (stderr, "Usage: pair %s|%s <URL> <ARG> ...\n",
-               NODE0, NODE1);
-      return 1;
-    }
-   return 0;
+	if (strncmp (NODE0, argv[1], strlen (NODE0)) == 0 && argc > 1)
+		return node0 (argv[2]);
+	else if (strncmp (NODE1, argv[1], strlen (NODE1)) == 0 && argc > 1)
+		return node1 (argv[2]);
+	else
+	{
+		fprintf (stderr, "Usage: pair %s|%s <URL> <ARG> ...\n",
+		       NODE0, NODE1);
+		return 1;
+	}
+	return 0;
 }

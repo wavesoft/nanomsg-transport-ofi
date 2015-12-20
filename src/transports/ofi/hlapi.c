@@ -102,6 +102,28 @@
 //////////////////////////////////////////////////////////////////////////////////////////
 
 /**
+ * Precision of the get_elapsed function
+ */
+enum precision {
+	NANO = 1,
+	MICRO = 1000,
+	MILLI = 1000000,
+};
+
+/**
+ * Return elapsed time in microseconds
+ */
+int64_t ft_get_elapsed(const struct timespec *b, const struct timespec *a,
+		    enum precision p)
+{
+    int64_t elapsed;
+
+    elapsed = (a->tv_sec - b->tv_sec) * 1000 * 1000 * 1000;
+    elapsed += a->tv_nsec - b->tv_nsec;
+    return elapsed / p;
+}
+
+/**
  * Get Tx Prefix size acccording to the tx_attr
  */
 size_t ft_tx_prefix_size( struct fi_info * fi )
@@ -180,7 +202,7 @@ int ft_wait_shutdown_aware(struct fid_cq *cq, struct fid_eq *eq)
 	while (1) {
 
 		/* First check for CQ event */
-		ret = fi_cq_read(cq, &entry, 1);
+		ret = fi_cq_sread(cq, &entry, 1, NULL, 500);
 
 		/* Operation failed */
 		if (ret > 0) {
@@ -518,7 +540,7 @@ int ofi_open_active_ep( struct ofi_resources * R, struct ofi_active_endpoint * E
 
 	/* Prepare structures */
 	struct fi_cq_attr cq_attr = {
-		.wait_obj = FI_WAIT_NONE,
+		.wait_obj = FI_WAIT_UNSPEC,
 		.format = FI_CQ_FORMAT_CONTEXT
 	};
 

@@ -24,10 +24,26 @@
 #ifndef NN_OFI_SHARED_INCLUDED
 #define NN_OFI_SHARED_INCLUDED
 
+#include <time.h>
+
 #include <rdma/fabric.h>
 #include <rdma/fi_errno.h>
 #include <rdma/fi_endpoint.h>
 #include <rdma/fi_cm.h>
+
+/* Missing types on Mac OSX */
+#ifdef __APPLE__
+#include <sys/time.h>
+
+/* Missing types */
+typedef int clockid_t;
+#define CLOCK_REALTIME 0
+#define CLOCK_REALTIME_COARSE 0
+#define CLOCK_MONOTONIC 0
+
+/* OSX Dues not have clock_getttime */
+int clock_gettime(clockid_t clk_id, struct timespec *tp);
+#endif
 
 /* Maximum buffer size to allocate */
 #define MAX_MSG_SIZE 		1024
@@ -94,6 +110,15 @@ struct ofi_resources
 	struct fi_info 		*fi;
 	struct fid_fabric 	*fabric;
 
+};
+
+/**
+ * Precision of the get_elapsed function
+ */
+enum ofi_time_precision {
+	NANO = 1,
+	MICRO = 1000,
+	MILLI = 1000000,
 };
 
 /**
@@ -176,6 +201,12 @@ int ofi_free_pep( struct ofi_passive_endpoint * ep );
  * Free active endpoint
  */
 int ofi_free_ep( struct ofi_active_endpoint * ep );
+
+/**
+ * Return elapsed time in microseconds
+ */
+int64_t ofi_get_elapsed(const struct timespec *b, const struct timespec *a,
+		    enum ofi_time_precision p);
 
 
 #endif /* NN_OFI_SHARED_INCLUDED */

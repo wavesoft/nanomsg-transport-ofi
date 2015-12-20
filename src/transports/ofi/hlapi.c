@@ -26,7 +26,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <getopt.h>
-#include <time.h>
 #include <netdb.h>
 #include <unistd.h>
 
@@ -101,20 +100,26 @@
 // OFI Helper Functions
 //////////////////////////////////////////////////////////////////////////////////////////
 
-/**
- * Precision of the get_elapsed function
- */
-enum precision {
-	NANO = 1,
-	MICRO = 1000,
-	MILLI = 1000000,
-};
+/* Missing definitions on OSX */
+#ifdef __APPLE__
+int clock_gettime(clockid_t clk_id, struct timespec *tp) {
+	int retval;
+	struct timeval tv;
+
+	retval = gettimeofday(&tv, NULL);
+
+	tp->tv_sec = tv.tv_sec;
+	tp->tv_nsec = tv.tv_usec * 1000;
+
+	return retval;
+}
+#endif
 
 /**
  * Return elapsed time in microseconds
  */
-int64_t ft_get_elapsed(const struct timespec *b, const struct timespec *a,
-		    enum precision p)
+int64_t ofi_get_elapsed(const struct timespec *b, const struct timespec *a,
+		    enum ofi_time_precision p)
 {
     int64_t elapsed;
 

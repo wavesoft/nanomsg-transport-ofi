@@ -25,25 +25,14 @@
 #define NN_OFI_SHARED_INCLUDED
 
 #include <time.h>
+#ifdef __APPLE__
+#include "platf/osx.h"
+#endif
 
 #include <rdma/fabric.h>
 #include <rdma/fi_errno.h>
 #include <rdma/fi_endpoint.h>
 #include <rdma/fi_cm.h>
-
-/* Missing types on Mac OSX */
-#ifdef __APPLE__
-#include <sys/time.h>
-
-/* Missing types */
-typedef int clockid_t;
-#define CLOCK_REALTIME 0
-#define CLOCK_REALTIME_COARSE 0
-#define CLOCK_MONOTONIC 0
-
-/* OSX Dues not have clock_getttime */
-int clock_gettime(clockid_t clk_id, struct timespec *tp);
-#endif
 
 /* Maximum buffer size to allocate */
 #define MAX_MSG_SIZE 		1024

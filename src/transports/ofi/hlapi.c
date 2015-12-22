@@ -39,6 +39,11 @@
 #include "hlapi.h"
 #include "ofi.h"
 
+/* Platform helpers */
+#ifdef __APPLE__
+#include "platf/osx.c"
+#endif
+
 /* Helper macro to enable or disable verbose logs on console */
 #ifdef OFI_DEBUG_LOG
     /* Enable debug */
@@ -99,21 +104,6 @@
 //////////////////////////////////////////////////////////////////////////////////////////
 // OFI Helper Functions
 //////////////////////////////////////////////////////////////////////////////////////////
-
-/* Missing definitions on OSX */
-#ifdef __APPLE__
-int clock_gettime(clockid_t clk_id, struct timespec *tp) {
-	int retval;
-	struct timeval tv;
-
-	retval = gettimeofday(&tv, NULL);
-
-	tp->tv_sec = tv.tv_sec;
-	tp->tv_nsec = tv.tv_usec * 1000;
-
-	return retval;
-}
-#endif
 
 /**
  * Return elapsed time in microseconds

@@ -32,7 +32,15 @@
 #include <nanomsg/nn.h>
 #include <nanomsg/pair.h>
 
-#define MSG_LEN 1024
+/* Platform-specific customisations */
+#ifdef __APPLE__
+#include "../src/transports/ofi/platf/osx.h"
+/* (Implementation in libfabric) */
+#endif
+
+#define MSG_LEN 	10240
+#define ITERATIONS 	10000
+
 #define DIRECTION_IN  0
 #define DIRECTION_OUT 1
 
@@ -40,29 +48,6 @@
 #define NODE1 "node1"
 
 const char msg_buffer[MSG_LEN];
-
-/* Missing definitions on OSX */
-#if defined(__APPLE__) && defined(__MACH__)
-
-/* Missing types */
-typedef int clockid_t;
-#define CLOCK_REALTIME 0
-#define CLOCK_REALTIME_COARSE 0
-#define CLOCK_MONOTONIC 0
-
-/* OSX Dues not have clock_getttime */
-int clock_gettime(clockid_t clk_id, struct timespec *tp) {
-	int retval;
-	struct timeval tv;
-
-	retval = gettimeofday(&tv, NULL);
-
-	tp->tv_sec = tv.tv_sec;
-	tp->tv_nsec = tv.tv_usec * 1000;
-
-	return retval;
-}
-#endif
 
 /**
  * shamelessly stolen from fabtests shared.c
@@ -83,7 +68,7 @@ int run_tests( int sock, int direction )
 {
 	char *buf = NULL;
 	struct timespec t0, t1;
-	int iterations = 10000;
+	int iterations = ITERATIONS;
 	int sz_n, i;
 
 	// When sending, start counting before transmittion
@@ -131,7 +116,8 @@ int node0 (const char *url)
 	assert (nn_bind (sock, url) >= 0);
 	printf("TIM: I will be receiving\n");
 	run_tests(sock, DIRECTION_IN);
-	return nn_shutdown (sock, 0);
+	nn_shutdown (sock, 0);
+	return 0;
 }
 
 /**
@@ -144,7 +130,8 @@ int node1 (const char *url)
 	assert (nn_connect (sock, url) >= 0);
 	printf("TIM: I will be sending\n");
 	run_tests(sock, DIRECTION_OUT);
-	return nn_shutdown (sock, 0);
+	nn_shutdown (sock, 0);
+	return 0;
 }
 
 /**

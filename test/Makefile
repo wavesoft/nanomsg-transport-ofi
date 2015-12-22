@@ -38,3 +38,23 @@ clean:
 		test_msg_timed.dSYM \
 		test_nanmsg_timing \
 		test_nanmsg_timing.dSYM
+
+# Tests
+test: test_msg_timed test_nanmsg_timing
+	@echo "--------------------------------------------------"
+	@echo "Core timing tests:"
+	@echo "--------------------------------------------------"
+	./test_msg_timed server 127.0.0.1&
+	./test_msg_timed client 127.0.0.1
+
+	@echo "--------------------------------------------------"
+	@echo "Nanomsg ofi:// timing tests:"
+	@echo "--------------------------------------------------"
+	./test_nanmsg_timing node0 ofi://127.0.0.1:5050&
+	./test_nanmsg_timing node1 ofi://127.0.0.1:5050
+
+	@echo "--------------------------------------------------"
+	@echo "Nanomsg tcp:// timing tests (for reference):"
+	@echo "--------------------------------------------------"
+	./test_nanmsg_timing node0 tcp://127.0.0.1:5050&
+	./test_nanmsg_timing node1 tcp://127.0.0.1:5050

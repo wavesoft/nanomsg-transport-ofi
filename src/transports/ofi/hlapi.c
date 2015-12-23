@@ -533,23 +533,25 @@ int ofi_open_active_ep( struct ofi_resources * R, struct ofi_active_endpoint * E
 
 	/* ==== Open Completion Queues =============== */
 
-	/* Prepare structures */
-	struct fi_cq_attr cq_attr = {
-		.wait_obj = FI_WAIT_UNSPEC,
-		.format = FI_CQ_FORMAT_CONTEXT
-	};
-
 	/* Create a Tx completion queue */
-	cq_attr.size = fi->tx_attr->size;
-	ret = fi_cq_open(EP->domain, &cq_attr, &EP->tx_cq, &EP->tx_ctx);
+	struct fi_cq_attr cq_tx_attr = {
+		.wait_obj = FI_WAIT_NONE,
+		.format = FI_CQ_FORMAT_CONTEXT,
+		.size = fi->tx_attr->size
+	};
+	ret = fi_cq_open(EP->domain, &cq_tx_attr, &EP->tx_cq, &EP->tx_ctx);
 	if (ret) {
 		FT_PRINTERR("fi_cq_open<tx_cq>", ret);
 		return ret;
 	}
 
 	/* Create a Rx completion queue */
-	cq_attr.size = fi->rx_attr->size;
-	ret = fi_cq_open(EP->domain, &cq_attr, &EP->rx_cq, &EP->rx_ctx);
+	struct fi_cq_attr cq_rx_attr = {
+		.wait_obj = FI_WAIT_UNSPEC,
+		.format = FI_CQ_FORMAT_CONTEXT,
+		.size = fi->rx_attr->size
+	};
+	ret = fi_cq_open(EP->domain, &cq_rx_attr, &EP->rx_cq, &EP->rx_ctx);
 	if (ret) {
 		FT_PRINTERR("fi_cq_open<rx_cq>", ret);
 		return ret;

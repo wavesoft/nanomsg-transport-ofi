@@ -188,6 +188,7 @@ int ft_wait_shutdown_aware(struct fid_cq *cq, struct fid_eq *eq)
 	struct fi_cq_entry entry;
 	uint32_t event;
 	uint8_t shutdown_interval;
+	uint8_t fast_poller;
 	int ret;
 
 	/* TODO: The timeout solution looks like a HACK! Find a better solution */
@@ -198,7 +199,10 @@ int ft_wait_shutdown_aware(struct fid_cq *cq, struct fid_eq *eq)
 
 		/* First check for CQ event */
 		// ret = fi_cq_sread(cq, &entry, 1, NULL, 500);
-		ret = fi_cq_read(cq, &entry, 1);
+		fast_poller=255; ret=0;
+		while ((ret != 0) || (--fast_poller > 0)) {
+			ret = fi_cq_read(cq, &entry, 1);
+		}
 
 		/* Operation failed */
 		if (ret > 0) {

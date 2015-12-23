@@ -200,7 +200,7 @@ int ft_wait_shutdown_aware(struct fid_cq *cq, struct fid_eq *eq)
 		/* First check for CQ event */
 		// ret = fi_cq_sread(cq, &entry, 1, NULL, 500);
 		fast_poller=255; ret=0;
-		while ((ret != 0) || (--fast_poller > 0)) {
+		while ((ret != FI_EAVAIL) && (--fast_poller > 0)) {
 			ret = fi_cq_read(cq, &entry, 1);
 		}
 

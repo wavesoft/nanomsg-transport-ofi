@@ -291,8 +291,8 @@ static int nn_sofi_send (struct nn_pipebase *self, struct nn_msg *msg)
         sofi->shutdown_reason = NN_SOFI_SHUTDOWN_DISCONNECT;
         nn_timer_start( &sofi->shutdown_timer, 1 );
 
-        /* This did not work out */
-        return -ECONNRESET;
+        /* This did not work out, but don't let nanomsg know */
+        return 0;
     }
 
     /* Success */

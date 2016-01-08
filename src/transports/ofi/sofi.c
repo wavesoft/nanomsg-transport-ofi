@@ -484,7 +484,8 @@ static void nn_sofi_handler (struct nn_fsm *self, int src, int type,
                     ret = ofi_tx( sofi->ep, sizeof(FT_PACKET_KEEPALIVE), NN_SOFI_KEEPALIVE_INTERVAL / 1000 );
                     if (ret) {
                         /* TODO: Handle errors */
-                        printf("OFI: SOFI: Error sending keepalive!\n");
+                        printf("OFI: SOFI: Error sending keepalive! Assuming disconnected remote endpoint.\n");
+                        nn_timer_start( &sofi->disconnect_timer, 1 );
                         return;
                     }
 

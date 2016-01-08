@@ -236,10 +236,12 @@ int ft_wait_shutdown_aware(struct fid_cq *cq, struct fid_eq *eq, int timeout)
 		} else {
 
 			/* Check for timeout */
-			clock_gettime(CLOCK_MONOTONIC, &b);
-			if ((b.tv_sec - a.tv_sec) > timeout) {
-				_ofi_debug("OFI: ft_wait() timeout expired\n");
-				return -FI_ENODATA; /* TODO: Perhaps not treat this as a remote disconnect? */
+			if (timeout >= 0) {
+				clock_gettime(CLOCK_MONOTONIC, &b);
+				if ((b.tv_sec - a.tv_sec) > timeout) {
+					_ofi_debug("OFI: ft_wait() timeout expired\n");
+					return -FI_ENODATA; /* TODO: Perhaps not treat this as a remote disconnect? */
+				}
 			}
 
 			/* Give some chance to intercept messages even if we received a shutdown event */

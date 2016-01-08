@@ -332,7 +332,7 @@ static void nn_sofi_poller_thread (void *arg)
 
         /* Receive data from OFI */
         _ofi_debug("OFI: nn_sofi_poller_thread: Receiving data\n");
-        ret = ofi_rx( self->ep, self->ep->rx_size, 0 );
+        ret = ofi_rx( self->ep, self->ep->rx_size, -1 );
         if (ret == -FI_REMOTE_DISCONNECT) { /* Remotely disconnected */
             _ofi_debug("OFI: Remotely disconnected!\n");
             break;

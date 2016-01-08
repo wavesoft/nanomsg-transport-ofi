@@ -107,6 +107,7 @@ void nn_sofi_init (struct nn_sofi *self,
     int recv_size;
     int send_size;
     size_t opt_sz = sizeof (recv_size);
+    size_t hdr_sz = sizeif (uint64_t); /* Usually an 64-bit size prefix */
 
     /* Get buffer sizes */
     nn_epbase_getopt (epbase, NN_SOL_SOCKET, NN_SNDBUF,
@@ -116,7 +117,7 @@ void nn_sofi_init (struct nn_sofi *self,
 
     /* Initialize OFI memory region */
     _ofi_debug("OFI: SOFI: Initializing MR with tx_size=%i, rx_size=%i\n",
-        send_size, recv_size);
+        send_size + hdr_sz, recv_size + hdr_sz);
     ret = ofi_active_ep_init_mr( self->ofi, self->ep, (unsigned)recv_size, 
         (unsigned)send_size );
     if (ret) {

@@ -118,12 +118,12 @@ int ofi_alloc( struct ofi_resources * R, enum fi_ep_type ep_type );
 /**
  * Receive data from OFI
  */
-ssize_t ofi_tx( struct ofi_active_endpoint * R, size_t size );
+ssize_t ofi_tx( struct ofi_active_endpoint * R, size_t size, int timeout );
 
 /**
  * Receive data from OFI
  */
-ssize_t ofi_rx( struct ofi_active_endpoint * R, size_t size );
+ssize_t ofi_rx( struct ofi_active_endpoint * R, size_t size, int timeout );
 
 /**
  * Resolve an address

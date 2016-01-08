@@ -182,14 +182,19 @@ int ft_wait(struct fid_cq *cq)
 /**
  * Wait for completion queue, also listening for shutdown events on the event queue
  */
-int ft_wait_shutdown_aware(struct fid_cq *cq, struct fid_eq *eq)
+int ft_wait_shutdown_aware(struct fid_cq *cq, struct fid_eq *eq, int timeout)
 {
 	struct fi_eq_cm_entry eq_entry;
 	struct fi_cq_entry entry;
+	struct timespec a, b;
 	uint32_t event;
 	uint8_t shutdown_interval;
 	uint8_t fast_poller;
 	int ret;
+
+	/* Get the starting time to timeout after */
+	if (timeout >= 0)
+		clock_gettime(CLOCK_MONOTONIC, &a);
 
 	/* TODO: The timeout solution looks like a HACK! Find a better solution */
 	shutdown_interval = 0;
@@ -229,6 +234,15 @@ int ft_wait_shutdown_aware(struct fid_cq *cq, struct fid_eq *eq)
 				FT_PRINTERR("fi_cq_read", ret);
 			}
 		} else {
+
+			/* Check for timeout */
+			clock_gettime(CLOCK_MONOTONIC, &b);
+			if ((b.tv_sec - a.tv_sec) > timeout) {
+				_ofi_debug("OFI: ft_wait() timeout expired\n");
+				return -FI_REMOTE_DISCONNECT; /* TODO: Perhaps not treat this as a remote disconnect? */
+			}
+
+			/* Give some chance to intercept messages even if we received a shutdown event */
 			if (shutdown_interval > 0) {
 				if (--shutdown_interval == 0) {
 					/* We are remotely disconnected */
@@ -375,7 +389,7 @@ int ofi_alloc( struct ofi_resources * R, enum fi_ep_type ep_type )
 /**
  * Receive data from OFI
  */
-ssize_t ofi_tx( struct ofi_active_endpoint * EP, size_t size )
+ssize_t ofi_tx( struct ofi_active_endpoint * EP, size_t size, int timeout )
 {
 	ssize_t ret;
 
@@ -396,7 +410,7 @@ ssize_t ofi_tx( struct ofi_active_endpoint * EP, size_t size )
 	}
 
 	/* Wait for Tx CQ */
-	ret = ft_wait_shutdown_aware(EP->tx_cq, EP->eq);
+	ret = ft_wait_shutdown_aware(EP->tx_cq, EP->eq, timeout);
 	if (ret) {
 
 		/* If we are remotely disconnected, be silent */
@@ -415,7 +429,7 @@ ssize_t ofi_tx( struct ofi_active_endpoint * EP, size_t size )
 /**
  * Receive data from OFI
  */
-ssize_t ofi_rx( struct ofi_active_endpoint * EP, size_t size )
+ssize_t ofi_rx( struct ofi_active_endpoint * EP, size_t size, int timeout )
 {
 	int ret;
 
@@ -436,7 +450,7 @@ ssize_t ofi_rx( struct ofi_active_endpoint * EP, size_t size )
 	}
 
 	/* Wait for Rx CQ */
-	ret = ft_wait_shutdown_aware(EP->rx_cq, EP->eq);
+	ret = ft_wait_shutdown_aware(EP->rx_cq, EP->eq, timeout);
 	if (ret) {
 
 		/* If we are remotely disconnected, be silent */

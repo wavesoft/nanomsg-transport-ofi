@@ -207,12 +207,12 @@ int ft_wait_shutdown_aware(struct fid_cq *cq, struct fid_eq *eq, int timeout)
 		ret = fi_cq_read(cq, &entry, 1);
 
 		/* Operation failed */
-		if (ret > 0) {
+		if (nn_slow(ret > 0)) {
 			/* Success */
 			_ofi_debug("OFI: ft_wait() succeed with shutdown_interval=%i\n", shutdown_interval);
 			return 0;
-		} else if (ret < 0 && ret != -FI_EAGAIN) {
-			if (ret == -FI_EAVAIL) {
+		} else if (nn_fast(ret < 0 && ret != -FI_EAGAIN)) {
+			if (nn_fast(ret == -FI_EAVAIL)) {
 				struct fi_cq_err_entry err_entry;
 
 				/* Handle error */
@@ -236,7 +236,7 @@ int ft_wait_shutdown_aware(struct fid_cq *cq, struct fid_eq *eq, int timeout)
 		} else {
 
 			/* Check for timeout */
-			if (timeout >= 0) {
+			if (nn_slow(timeout >= 0)) {
 				clock_gettime(CLOCK_MONOTONIC, &b);
 				if ((b.tv_sec - a.tv_sec) > timeout) {
 					_ofi_debug("OFI: ft_wait() timeout expired\n");
@@ -245,7 +245,7 @@ int ft_wait_shutdown_aware(struct fid_cq *cq, struct fid_eq *eq, int timeout)
 			}
 
 			/* Give some chance to intercept messages even if we received a shutdown event */
-			if (shutdown_interval > 0) {
+			if (nn_slow(shutdown_interval > 0)) {
 				if (--shutdown_interval == 0) {
 					/* We are remotely disconnected */
 					_ofi_debug("OFI: ft_wait() exiting because of FI_SHUTDOWN event\n");
@@ -255,9 +255,9 @@ int ft_wait_shutdown_aware(struct fid_cq *cq, struct fid_eq *eq, int timeout)
 		}
 
 		/* Then check for shutdown event */
-		if (shutdown_interval == 0) {
+		if (nn_fast(shutdown_interval == 0)) {
 			ret = fi_eq_read(eq, &event, &eq_entry, sizeof eq_entry, 0);
-			if (ret != -FI_EAGAIN) {
+			if (nn_fast(ret != -FI_EAGAIN)) {
 				if (event == FI_SHUTDOWN) {
 					/* If no CQ is arrived within 255 cycles, consider it lost */
 					shutdown_interval = 255;

@@ -54,7 +54,7 @@ const uint8_t FT_PACKET_KEEPALIVE[8] = {0x00, 0x00, 0x00, 0x00,
 #define NN_SOFI_ACTION_DATA             2010
 
 /* Private SOFI sources */
-#define NN_SOFI_SRC_DISCONNECT_TIMER    1100
+#define NN_SOFI_SRC_SHUTDOWN_TIMER      1100
 #define NN_SOFI_SRC_KEEPALIVE_TIMER     1101
 
 /* Configurable times for keepalive */
@@ -62,6 +62,10 @@ const uint8_t FT_PACKET_KEEPALIVE[8] = {0x00, 0x00, 0x00, 0x00,
 #define NN_SOFI_KEEPALIVE_INTERVAL          1000
 #define NN_SOFI_KEEPALIVE_COUNTER           1
 #define NN_SOFI_KEEPALIVE_TIMEOUT_COUNTER   5
+
+/* Shutdown reasons */
+#define NN_SOFI_SHUTDOWN_DISCONNECT         1
+#define NN_SOFI_SHUTDOWN_ERROR              2
 
 /*  State machine functions. */
 static void nn_sofi_handler (struct nn_fsm *self, int src, int type, 
@@ -145,7 +149,8 @@ void nn_sofi_init (struct nn_sofi *self,
     self->state = NN_SOFI_STATE_IDLE;
 
     /* Initialize timer */
-    nn_timer_init(&self->disconnect_timer, NN_SOFI_SRC_DISCONNECT_TIMER, &self->fsm);
+    nn_timer_init(&self->shutdown_timer, NN_SOFI_SRC_SHUTDOWN_TIMER, &self->fsm);
+    self->shutdown_reason = 0;
     nn_timer_init(&self->keepalive_timer,  NN_SOFI_SRC_KEEPALIVE_TIMER, &self->fsm);
     self->keepalive_tx_ctr = 0;
     self->keepalive_rx_ctr = 0;
@@ -164,7 +169,7 @@ void nn_sofi_term (struct nn_sofi *self)
 
     /* Cleanup instantiated resources */
     nn_list_item_term (&self->item);
-    nn_timer_term (&self->disconnect_timer);
+    nn_timer_term (&self->shutdown_timer);
     nn_timer_term (&self->keepalive_timer);
     nn_fsm_event_term (&self->disconnected);
     nn_msg_term (&self->inmsg);
@@ -280,8 +285,13 @@ static int nn_sofi_send (struct nn_pipebase *self, struct nn_msg *msg)
     _ofi_debug("OFI: SOFI: Sending data (size=%lu)\n", sz_outhdr+sz_sphdr+sz_body );
     ret = ofi_tx( sofi->ep, sz_outhdr+sz_sphdr+sz_body, NN_SOFI_IO_TIMEOUT_SEC );
     if (ret) {
-        /* TODO: Handle errors */
-        printf("OFI: SOFI: Error sending data!\n");
+        printf("OFI: Error sending data!\n");
+
+        /* Shutdown because of error */        
+        self->shutdown_reason = NN_SOFI_SHUTDOWN_DISCONNECT;
+        nn_timer_start( &self->shutdown_timer, 1 );
+
+        /* This did not work out */
         return -ECONNRESET;
     }
 
@@ -340,7 +350,7 @@ static void nn_sofi_poller_thread (void *arg)
 
         /* Handle errors */
         if (ret) {
-            printf("OFI: SOFI: Receive Error!\n");
+            printf("OFI: Receive Error!\n");
             /* TODO: Properly handle errors */
             break;
         }
@@ -404,7 +414,8 @@ static void nn_sofi_poller_thread (void *arg)
 
         /* We are using the disconnect timer trick in order to change threads,
            and therfore allow a clean stop() of the fsm. */
-        nn_timer_start( &self->disconnect_timer, 1 );
+        self->shutdown_reason = NN_SOFI_SHUTDOWN_DISCONNECT;
+        nn_timer_start( &self->shutdown_timer, 1 );
     }
 
 }
@@ -471,7 +482,8 @@ static void nn_sofi_handler (struct nn_fsm *self, int src, int type,
                 /* Check if we RECEIVED a keepalive in time */
                 if (++sofi->keepalive_rx_ctr > NN_SOFI_KEEPALIVE_TIMEOUT_COUNTER) {
                     printf("OFI: SOFI: Connection timed out!\n");
-                    nn_timer_start( &sofi->disconnect_timer, 1 );
+                    self->shutdown_reason = NN_SOFI_SHUTDOWN_DISCONNECT;
+                    nn_timer_start( &sofi->shutdown_timer, 1 );
                 }
 
                 /* Check if we have to SEND keepalive */
@@ -485,7 +497,8 @@ static void nn_sofi_handler (struct nn_fsm *self, int src, int type,
                     if (ret) {
                         /* TODO: Handle errors */
                         printf("OFI: SOFI: Error sending keepalive! Assuming disconnected remote endpoint.\n");
-                        nn_timer_start( &sofi->disconnect_timer, 1 );
+                        self->shutdown_reason = NN_SOFI_SHUTDOWN_ERROR;
+                        nn_timer_start( &sofi->shutdown_timer, 1 );
                         return;
                     }
 
@@ -506,14 +519,14 @@ static void nn_sofi_handler (struct nn_fsm *self, int src, int type,
             }
 
         /* Zombie timer */
-        case NN_SOFI_SRC_DISCONNECT_TIMER:
+        case NN_SOFI_SRC_SHUTDOWN_TIMER:
             switch (type) {
             case NN_TIMER_TIMEOUT:
 
                 /* We are now disconnected, stop timer */
                 sofi->state = NN_SOFI_STATE_DISCONNECTED;
                 nn_timer_stop( &sofi->keepalive_timer);
-                nn_timer_stop(&sofi->disconnect_timer);
+                nn_timer_stop(&sofi->shutdown_timer);
                 return;
 
             default:
@@ -546,13 +559,13 @@ static void nn_sofi_handler (struct nn_fsm *self, int src, int type,
 
         /* Zombie timer */
         case NN_SOFI_SRC_KEEPALIVE_TIMER:
-        case NN_SOFI_SRC_DISCONNECT_TIMER:
+        case NN_SOFI_SRC_SHUTDOWN_TIMER:
             switch (type) {
             case NN_TIMER_STOPPED:
 
                 /* Wait until both timers are idle */
                 if (!nn_timer_isidle(&sofi->keepalive_timer)) return;
-                if (!nn_timer_isidle(&sofi->disconnect_timer)) return;
+                if (!nn_timer_isidle(&sofi->shutdown_timer)) return;
                 _ofi_debug("OFI: SOFI: All timers are idle, we are safe to shutdown.\n");
 
                 /* Notify parent fsm that we are disconnected */

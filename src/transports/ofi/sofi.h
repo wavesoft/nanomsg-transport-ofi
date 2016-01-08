@@ -66,7 +66,8 @@ struct nn_sofi {
     struct nn_list_item item;
 
     /* Timer used to notify the termination of the socket thread */
-    struct nn_timer disconnect_timer;
+    struct nn_timer shutdown_timer;
+    uint8_t shutdown_reason;
 
     /* Keepalive configuration */
     struct nn_timer keepalive_timer;

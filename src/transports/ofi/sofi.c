@@ -58,7 +58,7 @@ const uint8_t FT_PACKET_KEEPALIVE[8] = {0x00, 0x00, 0x00, 0x00,
 #define NN_SOFI_SRC_KEEPALIVE_TIMER     1101
 
 /* Configurable times for keepalive */
-#define NN_SOFI_IO_TIMEOUT_SEC              5
+#define NN_SOFI_IO_TIMEOUT_SEC              2
 #define NN_SOFI_KEEPALIVE_INTERVAL          1000
 #define NN_SOFI_KEEPALIVE_COUNTER           1
 #define NN_SOFI_KEEPALIVE_TIMEOUT_COUNTER   5

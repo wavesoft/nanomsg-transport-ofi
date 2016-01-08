@@ -110,13 +110,13 @@ int nn_cofi_create (void *hint, struct nn_epbase **epbase)
     service++;
 
     /* Debug */
-    _ofi_debug("OFI: Creating client OFI socket to (domain=%s, service=%s)\n", domain, 
+    _ofi_debug("OFI: COFI: Createing socket for (domain=%s, service=%s)\n", domain, 
         service );
 
     /* Initialize ofi */
     ret = ofi_alloc( &self->ofi, FI_EP_MSG );
     if (ret) {
-        _ofi_debug("OFI: Failed to ofi_alloc!\n");
+        _ofi_debug("OFI: COFI: Failed to ofi_alloc!\n");
         nn_epbase_term (&self->epbase);
         nn_free(self);
         return ret;
@@ -126,7 +126,7 @@ int nn_cofi_create (void *hint, struct nn_epbase **epbase)
     ret = ofi_init_client( &self->ofi, &self->ep, 
         FI_SOCKADDR, domain, service );
     if (ret) {
-        _ofi_debug("OFI: Failed to ofi_init_client!\n");
+        _ofi_debug("OFI: COFI: Failed to ofi_init_client!\n");
         nn_epbase_term (&self->epbase);
         nn_free(self);
         return ret;
@@ -154,7 +154,7 @@ int nn_cofi_create (void *hint, struct nn_epbase **epbase)
  */
 static void nn_cofi_stop (struct nn_epbase *self)
 {
-    _ofi_debug("OFI: Stopping OFI\n");
+    _ofi_debug("OFI: Stopping COFI\n");
 
     struct nn_cofi *cofi;
     cofi = nn_cont(self, struct nn_cofi, epbase);
@@ -168,7 +168,7 @@ static void nn_cofi_stop (struct nn_epbase *self)
  */
 static void nn_cofi_destroy (struct nn_epbase *self)
 {
-    _ofi_debug("OFI: Destroying OFI\n");
+    _ofi_debug("OFI: Destroying COFI\n");
 
     /* Get reference to the cofi structure */
     struct nn_cofi *cofi;
@@ -193,7 +193,7 @@ static void nn_cofi_destroy (struct nn_epbase *self)
 static void nn_cofi_shutdown (struct nn_fsm *self, int src, int type,
     void *srcptr)
 {
-    _ofi_debug("OFI: Shutting down OFI\n");
+    _ofi_debug("OFI: Shutting down COFI\n");
 
     /* Get reference to the cofi structure */
     struct nn_cofi *cofi;
@@ -210,10 +210,9 @@ static void nn_cofi_shutdown (struct nn_fsm *self, int src, int type,
     /* If we are in shutting down state, stop everyhing else */
     if (cofi->state == NN_COFI_STATE_STOPPING) {
 
-        // /* Wait for STCP to be idle */
-        // if (!nn_sofi_isidle (&cofi->sofi)) {
-        //     return;
-        // }
+        /* Wait for STCP to be idle */
+        if (!nn_sofi_isidle (&cofi->sofi))
+            return;
 
         /* We are stopped */
         nn_fsm_stopped_noevent (&cofi->fsm);

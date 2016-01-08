@@ -68,6 +68,11 @@ struct nn_sofi {
     /* Timer used to notify the termination of the socket thread */
     struct nn_timer disconnect_timer;
 
+    /* Keepalive configuration */
+    struct nn_timer keepalive_timer;
+    uint8_t keepalive_tx_ctr;
+    uint8_t keepalive_rx_ctr;
+
     /* The OFI Poller thread and sync efd */
     struct nn_thread thread;
     struct nn_efd    sync;

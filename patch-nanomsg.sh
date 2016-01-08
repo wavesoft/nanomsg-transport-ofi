@@ -10,24 +10,26 @@ popd > /dev/null
 # Do some quick-check to make sure that's a nanomsg directory
 [ ! -f "${NANOMSG_DIR}/libnanomsg.pc.in" ] && echo -e "** FAILED **\nThis does not look like a nanomsg directory!" && exit 1
 
-# Get current git version
+# Prepare some variables
 GIT_VERSION=$(git rev-parse HEAD)
+NANOMSG_SRC_DIR="${NANOMSG_DIR}/src"
+NANOMSG_TRANSPORTS_OFI_DIR="${NANOMSG_SRC_DIR}/transports/ofi"
 
 # Check if we already have patched that source
 if [ -f "${NANOMSG_DIR}/.nanomsg-ofi-patch.version" ]; then
 
 	# Check if version matches
 	DIR_VERSION=$(cat "${NANOMSG_DIR}/.nanomsg-ofi-patch.version")
-	if [ "$DIR_VERSION" == "$GIT_VERSION" ]; then
+	if [[ "$DIR_VERSION" == "$GIT_VERSION" && "$2" != "-f" ]]; then
 		echo "** UP TO DATE **"
 		exit 0
 	fi
 
 	# Just update sources
 	echo "Updating..."
-	cp -v -r ${CURR_PATH}/src/transports/ofi ${NANOMSG_TRANSPORTS_OFI_DIR}
+	cp -v -R ${CURR_PATH}/src/transports/ofi/ ${NANOMSG_TRANSPORTS_OFI_DIR}
 	[ $? -ne 0 ] && echo -e "** FAILED **\nUnable to copy sources!" && exit 1
-	cp -v -r ${CURR_PATH}/src/ofi.h ${NANOMSG_SRC_DIR}/ofi.h
+	cp -v -R ${CURR_PATH}/src/ofi.h ${NANOMSG_SRC_DIR}/ofi.h
 	[ $? -ne 0 ] && echo -e "** FAILED **\nUnable to copy sources!" && exit 1
 
 	# Update patch version
@@ -38,8 +40,6 @@ if [ -f "${NANOMSG_DIR}/.nanomsg-ofi-patch.version" ]; then
 fi
 
 # Check if we already have the ofi directory
-NANOMSG_SRC_DIR="${NANOMSG_DIR}/src"
-NANOMSG_TRANSPORTS_OFI_DIR="${NANOMSG_SRC_DIR}/transports/ofi"
 [ -L "${NANOMSG_TRANSPORTS_OFI_DIR}" ] && echo -e "** FAILED **\nOFI Transport seems to be installed already!" && exit 1
 [ -d "${NANOMSG_TRANSPORTS_OFI_DIR}" ] && echo -e "** FAILED **\nOFI Transport seems to be installed by another source!" && exit 1
 
@@ -55,9 +55,9 @@ patch -d ${NANOMSG_DIR} < ${CURR_PATH}/patch/nanomsg-patch-makefile.patch
 
 # Link sources directory
 echo "Copying..."
-cp -v -r ${CURR_PATH}/src/transports/ofi ${NANOMSG_TRANSPORTS_OFI_DIR}
+cp -v -R ${CURR_PATH}/src/transports/ofi ${NANOMSG_TRANSPORTS_OFI_DIR}
 [ $? -ne 0 ] && echo -e "** FAILED **\nUnable to copy sources!" && exit 1
-cp -v -r ${CURR_PATH}/src/ofi.h ${NANOMSG_SRC_DIR}/ofi.h
+cp -v -R ${CURR_PATH}/src/ofi.h ${NANOMSG_SRC_DIR}/ofi.h
 [ $? -ne 0 ] && echo -e "** FAILED **\nUnable to copy sources!" && exit 1
 
 # Running autoreconf

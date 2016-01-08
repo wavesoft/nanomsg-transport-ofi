@@ -497,6 +497,7 @@ static void nn_sofi_handler (struct nn_fsm *self, int src, int type,
 
                 /* Restart timer when stopped */
                 nn_timer_start( &sofi->keepalive_timer, NN_SOFI_KEEPALIVE_INTERVAL );
+                return;
 
             default:
                 nn_fsm_bad_action (sofi->state, src, type);

@@ -58,7 +58,8 @@ const uint8_t FT_PACKET_KEEPALIVE[8] = {0x00, 0x00, 0x00, 0x00,
 #define NN_SOFI_SRC_KEEPALIVE_TIMER     1101
 
 /* Configurable times for keepalive */
-#define NN_SOFI_KEEPALIVE_INTERVAL          1000
+#define NN_SOFI_KEEPALIVE_INTERVAL_SEC      1
+#define NN_SOFI_KEEPALIVE_INTERVAL          NN_SOFI_KEEPALIVE_INTERVAL_SEC * 1000
 #define NN_SOFI_KEEPALIVE_COUNTER           1
 #define NN_SOFI_KEEPALIVE_TIMEOUT_COUNTER   5
 
@@ -277,7 +278,7 @@ static int nn_sofi_send (struct nn_pipebase *self, struct nn_msg *msg)
 
     /* Send buffer */
     _ofi_debug("OFI: SOFI: Sending data (size=%lu)\n", sz_outhdr+sz_sphdr+sz_body );
-    ret = ofi_tx( sofi->ep, sz_outhdr+sz_sphdr+sz_body, NN_SOFI_KEEPALIVE_INTERVAL );
+    ret = ofi_tx( sofi->ep, sz_outhdr+sz_sphdr+sz_body, NN_SOFI_KEEPALIVE_INTERVAL_SEC );
     if (ret) {
         /* TODO: Handle errors */
         printf("OFI: SOFI: Error sending data!\n");
@@ -331,7 +332,7 @@ static void nn_sofi_poller_thread (void *arg)
 
         /* Receive data from OFI */
         _ofi_debug("OFI: nn_sofi_poller_thread: Receiving data\n");
-        ret = ofi_rx( self->ep, self->ep->rx_size, NN_SOFI_KEEPALIVE_INTERVAL );
+        ret = ofi_rx( self->ep, self->ep->rx_size, NN_SOFI_KEEPALIVE_INTERVAL_SEC );
         if (ret == -FI_REMOTE_DISCONNECT) { /* Remotely disconnected */
             _ofi_debug("OFI: Remotely disconnected!\n");
             break;
@@ -480,7 +481,7 @@ static void nn_sofi_handler (struct nn_fsm *self, int src, int type,
                     /* Send keepalive message */
                     _ofi_debug("OFI: SOFI: Sending keepalive!\n");
                     memcpy( sofi->ep->tx_buf, FT_PACKET_KEEPALIVE, sizeof(FT_PACKET_KEEPALIVE) );
-                    ret = ofi_tx( sofi->ep, sizeof(FT_PACKET_KEEPALIVE), NN_SOFI_KEEPALIVE_INTERVAL );
+                    ret = ofi_tx( sofi->ep, sizeof(FT_PACKET_KEEPALIVE), NN_SOFI_KEEPALIVE_INTERVAL_SEC );
                     if (ret) {
                         /* TODO: Handle errors */
                         printf("OFI: SOFI: Error sending keepalive!\n");

@@ -239,7 +239,7 @@ int ft_wait_shutdown_aware(struct fid_cq *cq, struct fid_eq *eq, int timeout)
 			clock_gettime(CLOCK_MONOTONIC, &b);
 			if ((b.tv_sec - a.tv_sec) > timeout) {
 				_ofi_debug("OFI: ft_wait() timeout expired\n");
-				return -FI_REMOTE_DISCONNECT; /* TODO: Perhaps not treat this as a remote disconnect? */
+				return -FI_ENODATA; /* TODO: Perhaps not treat this as a remote disconnect? */
 			}
 
 			/* Give some chance to intercept messages even if we received a shutdown event */
@@ -413,8 +413,8 @@ ssize_t ofi_tx( struct ofi_active_endpoint * EP, size_t size, int timeout )
 	ret = ft_wait_shutdown_aware(EP->tx_cq, EP->eq, timeout);
 	if (ret) {
 
-		/* If we are remotely disconnected, be silent */
-		if (ret == -FI_REMOTE_DISCONNECT)
+		/* Be silent on known errors */
+		if ((ret == -FI_REMOTE_DISCONNECT) || (ret == -FI_ENODATA))
 			return ret;
 
 		/* Otherwise display error */
@@ -453,8 +453,8 @@ ssize_t ofi_rx( struct ofi_active_endpoint * EP, size_t size, int timeout )
 	ret = ft_wait_shutdown_aware(EP->rx_cq, EP->eq, timeout);
 	if (ret) {
 
-		/* If we are remotely disconnected, be silent */
-		if (ret == -FI_REMOTE_DISCONNECT)
+		/* Be silent on known errors */
+		if ((ret == -FI_REMOTE_DISCONNECT) || (ret == -FI_ENODATA))
 			return ret;
 
 		/* Otherwise display error */

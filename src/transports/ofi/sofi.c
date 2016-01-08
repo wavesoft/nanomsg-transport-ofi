@@ -288,8 +288,8 @@ static int nn_sofi_send (struct nn_pipebase *self, struct nn_msg *msg)
         printf("OFI: Error sending data!\n");
 
         /* Shutdown because of error */        
-        self->shutdown_reason = NN_SOFI_SHUTDOWN_DISCONNECT;
-        nn_timer_start( &self->shutdown_timer, 1 );
+        sofi->shutdown_reason = NN_SOFI_SHUTDOWN_DISCONNECT;
+        nn_timer_start( &sofi->shutdown_timer, 1 );
 
         /* This did not work out */
         return -ECONNRESET;
@@ -482,7 +482,7 @@ static void nn_sofi_handler (struct nn_fsm *self, int src, int type,
                 /* Check if we RECEIVED a keepalive in time */
                 if (++sofi->keepalive_rx_ctr > NN_SOFI_KEEPALIVE_TIMEOUT_COUNTER) {
                     printf("OFI: SOFI: Connection timed out!\n");
-                    self->shutdown_reason = NN_SOFI_SHUTDOWN_DISCONNECT;
+                    sofi->shutdown_reason = NN_SOFI_SHUTDOWN_DISCONNECT;
                     nn_timer_start( &sofi->shutdown_timer, 1 );
                 }
 
@@ -497,7 +497,7 @@ static void nn_sofi_handler (struct nn_fsm *self, int src, int type,
                     if (ret) {
                         /* TODO: Handle errors */
                         printf("OFI: SOFI: Error sending keepalive! Assuming disconnected remote endpoint.\n");
-                        self->shutdown_reason = NN_SOFI_SHUTDOWN_ERROR;
+                        sofi->shutdown_reason = NN_SOFI_SHUTDOWN_ERROR;
                         nn_timer_start( &sofi->shutdown_timer, 1 );
                         return;
                     }

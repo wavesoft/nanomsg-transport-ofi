@@ -58,7 +58,7 @@ const uint8_t FT_PACKET_KEEPALIVE[8] = {0x00, 0x00, 0x00, 0x00,
 #define NN_SOFI_SRC_KEEPALIVE_TIMER     1101
 
 /* Configurable times for keepalive */
-#define NN_SOFI_KEEPALIVE_INTERVAL          5000
+#define NN_SOFI_KEEPALIVE_INTERVAL          1000
 #define NN_SOFI_KEEPALIVE_COUNTER           1
 #define NN_SOFI_KEEPALIVE_TIMEOUT_COUNTER   5
 
@@ -467,9 +467,6 @@ static void nn_sofi_handler (struct nn_fsm *self, int src, int type,
             switch (type) {
             case NN_TIMER_TIMEOUT:
 
-                /* Stop timer */
-                nn_timer_stop( &sofi->keepalive_timer);
-
                 /* Check if we RECEIVED a keepalive in time */
                 if (++sofi->keepalive_rx_ctr > NN_SOFI_KEEPALIVE_TIMEOUT_COUNTER) {
                     printf("OFI: SOFI: Connection timed out!\n");
@@ -492,9 +489,14 @@ static void nn_sofi_handler (struct nn_fsm *self, int src, int type,
 
                 }
 
-                /* Restart timer */
-                nn_timer_start( &sofi->keepalive_timer, NN_SOFI_KEEPALIVE_INTERVAL );
+                /* Stop timer */
+                nn_timer_stop( &sofi->keepalive_timer);
                 return;
+
+            case NN_TIMER_STOPPED:
+
+                /* Restart timer when stopped */
+                nn_timer_start( &sofi->keepalive_timer, NN_SOFI_KEEPALIVE_INTERVAL );
 
             default:
                 nn_fsm_bad_action (sofi->state, src, type);

@@ -11,6 +11,20 @@ __WARNING: This is an early alpha release! This project is currently unoptimised
  3. The current implementation breaks the zero-copy principle [here](src/transports/ofi/sofi.c#L245) and [here](src/transports/ofi/sofi.c#L342), and therefore has some performance penalties.
  4. ~~Currently, it seems that with `usnic` you can only have up to 16 concurrent connections.~~ This is configurable through the usnic BIOS.
 
+## How to use
+
+After patching your nanomsg sources, it will make the `ofi` transport available for use. This endpoint format is `ofi://[IP Address]:[Port]`.
+
+For example, you can test the `ofi` transport with the `nanocat` utility that comes with `nanomsg`.
+
+```
+~$ nanocat --pull --bind ofi://127.0.0.1:5050 -A&
+OFI: Using fabric=IP, provider=sockets
+~$ nanocat --push --connect ofi://127.0.0.1:5050 -D Hello
+OFI: Using fabric=IP, provider=sockets
+Hello
+```
+
 ## How to compile
 
  1. Make sure you have [libfabric](http://ofiwg.github.io/libfabric/) installed in your system.

@@ -83,7 +83,7 @@ int main(int argc, char ** argv)
 
 		/* Receive data */
 		printf("Receiving data...");
-		ret = ofi_rx( &ep, MAX_MSG_SIZE );
+		ret = ofi_rx( &ep, MAX_MSG_SIZE, -1 );
 		if (ret) {
 			printf("Error sending message!\n");
 			return 1;
@@ -93,7 +93,7 @@ int main(int argc, char ** argv)
 		/* Send data */
 		printf("Sending data...");
 		sprintf( ep.tx_buf, "Hello World" );
-		ret = ofi_tx( &ep, 12 );
+		ret = ofi_tx( &ep, 12, 1 );
 		if (ret) {
 			printf("Error sending message!\n");
 			return 1;
@@ -121,7 +121,7 @@ int main(int argc, char ** argv)
 		/* Send data */
 		printf("Sending data...");
 		sprintf( ep.tx_buf, "Hello World" );
-		ret = ofi_tx( &ep, 12 );
+		ret = ofi_tx( &ep, 12, 1 );
 		if (ret) {
 			printf("Error sending message!\n");
 			return 1;
@@ -130,7 +130,7 @@ int main(int argc, char ** argv)
 
 		/* Receive data */
 		printf("Receiving data...");
-		ret = ofi_rx( &ep, MAX_MSG_SIZE );
+		ret = ofi_rx( &ep, MAX_MSG_SIZE, 10 );
 		if (ret) {
 			printf("Error sending message!\n");
 			return 1;

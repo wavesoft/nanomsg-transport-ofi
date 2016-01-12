@@ -44,6 +44,11 @@
 #include "platf/osx.c"
 #endif
 
+/* Unix-only support */
+#ifndef NN_HAVE_WINDOWS
+#include <pthread.h>
+#endif
+
 /* Helper macro to enable or disable verbose logs on console */
 #ifdef OFI_DEBUG_LOG
     /* Enable debug */
@@ -266,6 +271,12 @@ int ft_wait_shutdown_aware(struct fid_cq *cq, struct fid_eq *eq, int timeout)
 				}
 			}
 		}
+
+		/* Yield thread priority */
+#ifndef NN_HAVE_WINDOWS
+       	pthread_yield();
+#endif
+
 
 	}
 }

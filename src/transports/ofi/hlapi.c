@@ -207,9 +207,12 @@ int ft_wait_shutdown_aware(struct fid_cq *cq, struct fid_eq *eq, int timeout)
 	/* CQ entry based on configured format (i.e. FI_CQ_FORMAT_CONTEXT) */
 	while (1) {
 
-		/* First check for CQ event */
+		/* Burst-check for CQ event (reduced lattency on high speeds) */
 		// ret = fi_cq_sread(cq, &entry, 1, NULL, 500);
-		ret = fi_cq_read(cq, &entry, 1);
+		fast_poller=255; 
+		do {
+			ret = fi_cq_read(cq, &entry, 1);
+		} while (nn_fast( (ret == -FI_EAGAIN) && (--fast_poller > 0) ));
 
 		/* Operation failed */
 		if (nn_slow(ret > 0)) {
@@ -272,10 +275,11 @@ int ft_wait_shutdown_aware(struct fid_cq *cq, struct fid_eq *eq, int timeout)
 			}
 		}
 
-		/* Yield thread priority */
+		/* Let some other CPU work to be done */
 #ifndef NN_HAVE_WINDOWS
        	pthread_yield();
 #endif
+       	usleep(10); /* (We have seen lattency of about 17uS, so a value of 10 should be ok) */
 
 
 	}

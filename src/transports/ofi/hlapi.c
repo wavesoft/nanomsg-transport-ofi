@@ -44,11 +44,6 @@
 #include "platf/osx.c"
 #endif
 
-/* Unix-only support */
-#ifndef NN_HAVE_WINDOWS
-#include <pthread.h>
-#endif
-
 /* Helper macro to enable or disable verbose logs on console */
 #ifdef OFI_DEBUG_LOG
     /* Enable debug */
@@ -276,10 +271,7 @@ int ft_wait_shutdown_aware(struct fid_cq *cq, struct fid_eq *eq, int timeout)
 		}
 
 		/* Let some other CPU work to be done */
-#ifndef NN_HAVE_WINDOWS
-       	pthread_yield();
-#endif
-       	usleep(10); /* (We have seen lattency of about 17uS, so a value of 10 should be ok) */
+       	usleep(1000); 
 
 
 	}

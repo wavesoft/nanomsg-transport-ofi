@@ -25,6 +25,10 @@
 #include "cofi.h"
 
 #include "../../ofi.h"
+#include "../../utils/err.h"
+#include "../../utils/alloc.h"
+#include "../../utils/fast.h"
+#include "../../utils/cont.h"
 
 #include <string.h>
 
@@ -95,7 +99,7 @@ static struct nn_optset *nn_ofi_optset (void)
     optset->base.vfptr = &nn_ofi_optset_vfptr;
 
     /*  Default values for OFI socket options. */
-    optset->slab_mr_size = NN_OFI_DEFAULT_SLAB_MR_SIZE;
+    optset->slab_mr_size = NN_OFI_DEFAULT_SLABMR_SIZE;
 
     return &optset->base;
 }

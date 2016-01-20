@@ -77,7 +77,10 @@ struct nn_sofi {
     /* The OFI Poller thread and sync efd */
     struct nn_thread thread;
     struct nn_efd    sync;
-    
+
+    /* First draft of smart MM */
+    struct ofi_mr   *mr_slab;
+
 };
 
 /*  Initialize the state machine */

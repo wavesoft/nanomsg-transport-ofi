@@ -142,14 +142,16 @@ int ofi_alloc( struct ofi_resources * R, enum fi_ep_type ep_type );
 /**
  * Receive data from OFI
  */
-ssize_t ofi_tx( struct ofi_active_endpoint * R, size_t size, int timeout );
-ssize_t ofi_tx_msg( struct ofi_active_endpoint * EP, const struct iovec *msg_iov, size_t iov_count, int timeout );
+// ssize_t ofi_tx( struct ofi_active_endpoint * R, size_t size, int timeout );
+ssize_t ofi_tx_msg( struct ofi_active_endpoint * EP, const struct iovec *msg_iov, void ** msg_iov_desc, 
+	size_t iov_count, uint64_t flags, int timeout );
 
 /**
  * Receive data from OFI
  */
-ssize_t ofi_rx( struct ofi_active_endpoint * R, size_t size, int timeout );
-ssize_t ofi_rx_msg( struct ofi_active_endpoint * EP, const struct iovec *msg_iov, size_t iov_count, int timeout );
+// ssize_t ofi_rx( struct ofi_active_endpoint * R, size_t size, int timeout );
+ssize_t ofi_rx_msg( struct ofi_active_endpoint * EP, const struct iovec *msg_iov, void ** msg_iov_desc, 
+	size_t iov_count, uint64_t flags, int timeout );
 
 /**
  * Resolve an address
@@ -226,7 +228,7 @@ int64_t ofi_get_elapsed(const struct timespec *b, const struct timespec *a,
 /**
  * Tag/Untag shared regions
  */
-int ofi_mr_manage( struct ofi_active_endpoint * ep, void * mr, size_t len, struct ofi_mr ** mr, enum ofi_mr_flags flags );
+int ofi_mr_manage( struct ofi_active_endpoint * ep, void * buf, size_t len, struct ofi_mr ** mr, enum ofi_mr_flags flags );
 int ofi_mr_unmanage( struct ofi_active_endpoint * ep, struct ofi_mr ** mr );
 
 

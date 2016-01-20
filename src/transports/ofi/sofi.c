@@ -118,28 +118,28 @@ void nn_sofi_init (struct nn_sofi *self,
 
     /* ==================== */
 
-    /* Get maximum size of receive buffer */
-    int recv_size;
-    int send_size;
-    int hdr_sz = (int) sizeof (uint64_t); /* Usually an 64-bit size prefix */
-    size_t opt_sz = sizeof (recv_size);
-
-    /* Get buffer sizes */
-    nn_epbase_getopt (epbase, NN_SOL_SOCKET, NN_SNDBUF,
-        &send_size, &opt_sz);
-    nn_epbase_getopt (epbase, NN_SOL_SOCKET, NN_RCVBUF,
-        &recv_size, &opt_sz);
-
-    /* Initialize OFI memory region */
-    _ofi_debug("OFI: SOFI: Initializing MR with tx_size=%i, rx_size=%i\n",
-        send_size + hdr_sz, recv_size + hdr_sz);
-    ret = ofi_active_ep_init_mr( self->ofi, self->ep, (unsigned)recv_size, 
-        (unsigned)send_size );
-    if (ret) {
-        /* TODO: Handle error */
-        printf("OFI: SOFI: ERROR: Unable to allocate memory region for EP!\n");
-        return;
-    }
+    ///* Get maximum size of receive buffer */
+    //int recv_size;
+    //int send_size;
+    //int hdr_sz = (int) sizeof (uint64_t); /* Usually an 64-bit size prefix */
+    //size_t opt_sz = sizeof (recv_size);
+    //
+    ///* Get buffer sizes */
+    //nn_epbase_getopt (epbase, NN_SOL_SOCKET, NN_SNDBUF,
+    //    &send_size, &opt_sz);
+    //nn_epbase_getopt (epbase, NN_SOL_SOCKET, NN_RCVBUF,
+    //    &recv_size, &opt_sz);
+    //
+    ///* Initialize OFI memory region */
+    //_ofi_debug("OFI: SOFI: Initializing MR with tx_size=%i, rx_size=%i\n",
+    //    send_size + hdr_sz, recv_size + hdr_sz);
+    //ret = ofi_active_ep_init_mr( self->ofi, self->ep, (unsigned)recv_size, 
+    //    (unsigned)send_size );
+    //if (ret) {
+    //    /* TODO: Handle error */
+    //    printf("OFI: SOFI: ERROR: Unable to allocate memory region for EP!\n");
+    //    return;
+    //}
 
     /* ==================== */
 
@@ -254,36 +254,56 @@ static int nn_sofi_send (struct nn_pipebase *self, struct nn_msg *msg)
 {
     int ret;
     struct nn_sofi *sofi;
+    struct iovec iov [3];
+    void * iov_desc  [3];
     sofi = nn_cont (self, struct nn_sofi, pipebase);
-
-    /* * * * * * * * * * * * * * * * * * * * * * * * * * * */
-    /* WARNING : WE ARE BREAKING THE ZERO-COPY PRINCIPLE!  */
-    /* * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
     /*  Start async sending. */
     size_t sz_outhdr = sizeof(sofi->outhdr);
     size_t sz_sphdr = nn_chunkref_size (&msg->sphdr);
     size_t sz_body = nn_chunkref_size (&msg->body);
 
-    /* Check overflow */
-    if (sz_sphdr + sz_body > sofi->ep->tx_size) {
-        _ofi_debug("OFI: SOFI: Trying to send len=%lu, when tx_size=%zu\n", sz_sphdr+sz_body, sofi->ep->tx_size);        
-        return -EOVERFLOW;
-    }
-
     /*  Serialise the message header. */
     nn_putll (sofi->outhdr, sz_sphdr + sz_body);
 
+    /*  Move the message to the local storage. */
+    nn_msg_term (&sofi->outmsg);
+    nn_msg_mv (&sofi->outmsg, msg);
+
+    /*  Start async sending. */
+    iov [0].iov_base = sofi->outhdr;
+    iov [0].iov_len = sz_outhdr;
+    iov_desc[0] = NULL;
+
+    iov [1].iov_base = nn_chunkref_data (&sofi->outmsg.sphdr);
+    iov [1].iov_len = sz_sphdr;
+    iov_desc[1] = NULL;
+
+    iov [2].iov_base = nn_chunkref_data (&sofi->outmsg.body);
+    iov [2].iov_len = sz_body;
+    iov_desc[2] = NULL;
+
+    // /* Check overflow */
+    // if (sz_outhdr+sz_sphdr+sz_body > sofi->ep->tx_size) {
+    //     _ofi_debug("OFI: SOFI: Trying to send len=%lu, when tx_size=%zu\n", sz_sphdr+sz_body, sofi->ep->tx_size);        
+    //     return -EOVERFLOW;
+    // }
+
+    /* * * * * * * * * * * * * * * * * * * * * * * * * * * */
+    /* WARNING : WE ARE BREAKING THE ZERO-COPY PRINCIPLE!  */
+    /* * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
     /* Serialize data to the tx buffer */
-    memcpy( sofi->ep->tx_buf, &sofi->outhdr, sizeof(sofi->outhdr) );
-    memcpy( sofi->ep->tx_buf + sz_outhdr, 
-        nn_chunkref_data (&msg->sphdr), sz_sphdr );
-    memcpy( sofi->ep->tx_buf + sz_outhdr + sz_sphdr, 
-        nn_chunkref_data (&msg->body), sz_body );
+    // memcpy( sofi->ep->tx_buf, &sofi->outhdr, sizeof(sofi->outhdr) );
+    // memcpy( sofi->ep->tx_buf + sz_outhdr, 
+    //     nn_chunkref_data (&msg->sphdr), sz_sphdr );
+    // memcpy( sofi->ep->tx_buf + sz_outhdr + sz_sphdr, 
+    //     nn_chunkref_data (&msg->body), sz_body );
+
 
     /* Send buffer */
     _ofi_debug("OFI: SOFI: Sending data (size=%lu)\n", sz_outhdr+sz_sphdr+sz_body );
-    ret = ofi_tx( sofi->ep, sz_outhdr+sz_sphdr+sz_body, NN_SOFI_IO_TIMEOUT_SEC );
+    ret = ofi_tx_msg( sofi->ep, iov, iov_desc, 3, 0, NN_SOFI_IO_TIMEOUT_SEC );
     if (ret) {
         printf("OFI: Error sending data!\n");
 
@@ -335,14 +355,20 @@ static void nn_sofi_poller_thread (void *arg)
 {
     ssize_t ret;
     size_t size;
+    uint8_t inhdr [8];
+    struct iovec iov [1];
+    void * iov_desc  [1];
     struct nn_sofi * self = (struct nn_sofi *) arg;
 
     /* Infinite loop */
     while (1) {
 
         /* Receive data from OFI */
+        iov [0].iov_base = inhdr;
+        iov [0].iov_len = sizeof(inhdr);
+        iov_desc[0] = NULL;
         _ofi_debug("OFI: nn_sofi_poller_thread: Receiving data\n");
-        ret = ofi_rx( self->ep, self->ep->rx_size, -1 );
+        ret = ofi_rx_msg( self->ep, iov, iov_desc, 1, FI_MORE, -1 );
         if (ret == -FI_REMOTE_DISCONNECT) { /* Remotely disconnected */
             _ofi_debug("OFI: Remotely disconnected!\n");
             break;
@@ -351,8 +377,7 @@ static void nn_sofi_poller_thread (void *arg)
         /* Handle errors */
         if (ret) {
             printf("OFI: Receive Error!\n");
-            /* TODO: Properly handle errors */
-            break;
+            goto error;
         }
 
         /* If exited the connected state, stop thread */
@@ -365,7 +390,7 @@ static void nn_sofi_poller_thread (void *arg)
         self->keepalive_rx_ctr = 0;
 
         /* Check if this is a polling message */
-        if (memcmp(self->ep->rx_buf, FT_PACKET_KEEPALIVE, sizeof(FT_PACKET_KEEPALIVE)) == 0) {
+        if (memcmp(inhdr, FT_PACKET_KEEPALIVE, sizeof(FT_PACKET_KEEPALIVE)) == 0) {
             _ofi_debug("OFI: SOFI: Received keepalive packet\n");
             continue;
         }
@@ -373,28 +398,37 @@ static void nn_sofi_poller_thread (void *arg)
         /*  Message header was received. Check that message size
             is acceptable by comparing with NN_RCVMAXSIZE;
             if it's too large, drop the connection. */
-        size = nn_getll ( self->ep->rx_buf );
-
-        /* Check for invalid sizes */
-        if (size > self->ep->rx_size) {
-            printf("OFI: SOFI: Discarding incoming packaget due to invalid size"
-                    " (len=%lu, max=%lu)\n", size, self->ep->rx_size );
-            /* TODO: Properly handle errors */
-            continue;
-        }
+        size = nn_getll ( inhdr );
 
         /* Initialize msg with rx chunk */
         nn_msg_term (&self->inmsg);
         nn_msg_init( &self->inmsg, size );
 
+        /* Receive data from OFI */
+        iov [0].iov_base = nn_chunkref_data(&self->inmsg.body);
+        iov [0].iov_len = size;
+        iov_desc[0] = NULL;
+        _ofi_debug("OFI: nn_sofi_poller_thread: Receiving data\n");
+        ret = ofi_rx_msg( self->ep, iov, iov_desc, 1, 0, -1 );
+        if (ret == -FI_REMOTE_DISCONNECT) { /* Remotely disconnected */
+            _ofi_debug("OFI: Remotely disconnected!\n");
+            break;
+        }
+
+        /* Handle errors */
+        if (ret) {
+            printf("OFI: Receive Error!\n");
+            goto error;
+        }
+
         /* * * * * * * * * * * * * * * * * * * * * * * * * * * */
         /* WARNING : WE ARE BREAKING THE ZERO-COPY PRINCIPLE!  */
         /* * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-        /* Copy body */
-        _ofi_debug("OFI: SOFI: Received data (len=%lu)\n", size);
-        memcpy( nn_chunkref_data (&self->inmsg.body), 
-                self->ep->rx_buf + 8, size );
+        // /* Copy body */
+        // _ofi_debug("OFI: SOFI: Received data (len=%lu)\n", size);
+        // memcpy( nn_chunkref_data (&self->inmsg.body), 
+        //         self->ep->rx_buf + 8, size );
 
         /* Notify FSM for the fact that we have received data  */
         nn_ctx_enter( self->fsm.ctx );
@@ -407,6 +441,18 @@ static void nn_sofi_poller_thread (void *arg)
         nn_efd_unsignal( &self->sync );
 
     }
+
+    /* Skip error routine */
+    goto final;
+
+error:
+
+    /* Just a placeholder for error handling */
+    /* TODO: Properly handle errors */
+    _ofi_debug("OFI: Error handling routine is missing!\n");
+
+final:
+
 
     /* Notify FSM for the fact that we are disconnected  */
     if (self->state == NN_SOFI_STATE_CONNECTED) {
@@ -426,6 +472,8 @@ static void nn_sofi_poller_thread (void *arg)
 static void nn_sofi_handler (struct nn_fsm *self, int src, int type,
     void *srcptr)
 {
+    struct iovec iov [1];
+    void * iov_desc  [1];
     struct nn_sofi *sofi;
     int ret;
 
@@ -492,8 +540,10 @@ static void nn_sofi_handler (struct nn_fsm *self, int src, int type,
 
                     /* Send keepalive message */
                     _ofi_debug("OFI: SOFI: Sending keepalive!\n");
-                    memcpy( sofi->ep->tx_buf, FT_PACKET_KEEPALIVE, sizeof(FT_PACKET_KEEPALIVE) );
-                    ret = ofi_tx( sofi->ep, sizeof(FT_PACKET_KEEPALIVE), NN_SOFI_KEEPALIVE_INTERVAL / 1000 );
+                    iov [0].iov_base = (void*) FT_PACKET_KEEPALIVE;
+                    iov [0].iov_len = sizeof(FT_PACKET_KEEPALIVE);
+                    iov_desc[0] = NULL;
+                    ret = ofi_tx_msg( sofi->ep, iov, iov_desc, 1, 0, NN_SOFI_KEEPALIVE_INTERVAL / 1000 );
                     if (ret) {
                         /* TODO: Handle errors */
                         printf("OFI: SOFI: Error sending keepalive! Assuming disconnected remote endpoint.\n");

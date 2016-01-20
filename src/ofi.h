@@ -29,6 +29,8 @@ extern "C" {
 
 #define NN_OFI -6
 
+#define NN_OFI_SLABMR_SIZE 1
+
 #ifdef __cplusplus
 }
 #endif

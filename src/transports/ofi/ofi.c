@@ -28,6 +28,25 @@
 
 #include <string.h>
 
+/* OFI-Specific socket options */
+struct nn_ofi_optset {
+    struct nn_optset base;
+    size_t slab_mr_size;
+};
+
+/* Optset interface */
+static struct nn_optset *nn_ofi_optset (void);
+static void nn_ofi_optset_destroy (struct nn_optset *self);
+static int nn_ofi_optset_setopt (struct nn_optset *self, int option,
+    const void *optval, size_t optvallen);
+static int nn_ofi_optset_getopt (struct nn_optset *self, int option,
+    void *optval, size_t *optvallen);
+static const struct nn_optset_vfptr nn_ofi_optset_vfptr = {
+    nn_ofi_optset_destroy,
+    nn_ofi_optset_setopt,
+    nn_ofi_optset_getopt
+};
+
 /*  nn_transport interface. */
 static int  nn_ofi_bind (void *hint, struct nn_epbase **epbase);
 static int  nn_ofi_connect (void *hint, struct nn_epbase **epbase);
@@ -42,7 +61,7 @@ static struct nn_transport nn_ofi_vfptr = {
     NULL,
     nn_ofi_bind,
     nn_ofi_connect,
-    NULL,
+    nn_ofi_optset,
     NN_LIST_ITEM_INITIALIZER
 };
 
@@ -63,3 +82,74 @@ static int nn_ofi_connect (void *hint, struct nn_epbase **epbase)
 {
     return nn_cofi_create(hint, epbase);
 }
+
+/**
+ * Create and return a new nn_ofi_optset
+ */
+static struct nn_optset *nn_ofi_optset (void)
+{
+    struct nn_ofi_optset *optset;
+
+    optset = nn_alloc (sizeof (struct nn_ofi_optset), "optset (ofi)");
+    alloc_assert (optset);
+    optset->base.vfptr = &nn_ofi_optset_vfptr;
+
+    /*  Default values for OFI socket options. */
+    optset->slab_mr_size = NN_OFI_DEFAULT_SLAB_MR_SIZE;
+
+    return &optset->base;
+}
+
+static void nn_ofi_optset_destroy (struct nn_optset *self)
+{
+    struct nn_ofi_optset *optset;
+
+    optset = nn_cont (self, struct nn_ofi_optset, base);
+    nn_free (optset);
+}
+
+static int nn_ofi_optset_setopt (struct nn_optset *self, int option,
+    const void *optval, size_t optvallen)
+{
+    struct nn_ofi_optset *optset;
+    int val;
+
+    optset = nn_cont (self, struct nn_ofi_optset, base);
+
+    /*  At this point we assume that all options are of type int. */
+    if (optvallen != sizeof (int))
+        return -EINVAL;
+    val = *(int*) optval;
+
+    switch (option) {
+    case NN_OFI_SLABMR_SIZE:
+        if (nn_slow (val != 0 && val != 1))
+            return -EINVAL;
+        optset->slab_mr_size = val;
+        return 0;
+    default:
+        return -ENOPROTOOPT;
+    }
+}
+
+static int nn_ofi_optset_getopt (struct nn_optset *self, int option,
+    void *optval, size_t *optvallen)
+{
+    struct nn_ofi_optset *optset;
+    int intval;
+
+    optset = nn_cont (self, struct nn_ofi_optset, base);
+
+    switch (option) {
+    case NN_OFI_SLABMR_SIZE:
+        intval = optset->slab_mr_size;
+        break;
+    default:
+        return -ENOPROTOOPT;
+    }
+    memcpy (optval, &intval,
+        *optvallen < sizeof (int) ? *optvallen : sizeof (int));
+    *optvallen = sizeof (int);
+    return 0;
+}
+

@@ -28,6 +28,11 @@
 #include "../../transport.h"
 #endif
 
+/* Default slab memory size (I/O operations with this size
+ * or less will be memcpy'ied to the share memory slab). Above this,
+ * they will be tagged as shared and sent as-is. */
+#define NN_OFI_DEFAULT_SLABMR_SIZE 65536
+
 /* Uncomment the following to enable verose messages for debugging */
 // #define OFI_DEBUG_LOG
 

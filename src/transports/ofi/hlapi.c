@@ -396,6 +396,54 @@ int ofi_alloc( struct ofi_resources * R, enum fi_ep_type ep_type )
 }
 
 /**
+ * Send a scatter-gather array message over OFI
+ */
+ssize_t ofi_tx_msg( struct ofi_active_endpoint * EP, const struct iovec *msg_iov, size_t iov_count, int timeout )
+{
+	ssize_t ret;
+
+	/* Prepare fi_msg */
+	struct fi_msg msg = {
+		.msg_iov = msg_iov,
+		.iov_count = iov_count,
+		.addr = EP->remote_fi_addr,
+		.context = &EP->tx_ctx,
+		.data = 0
+	};
+
+	/* Send data */
+	ret = fi_sendmsg(EP->ep, &msg, 0);
+	if (ret) {
+
+		/* If we are in a bad state, we were remotely disconnected */
+		if (ret == -FI_EOPBADSTATE) {
+			_ofi_debug("OFI: HLAPI: ofi_tx_msg() returned -FI_EOPBADSTATE, considering shutdown.\n");
+			return -FI_REMOTE_DISCONNECT;			
+		}
+
+		/* Otherwise display error */
+		FT_PRINTERR("fi_send", ret);
+		return ret;
+	}
+
+	/* Wait for Tx CQ */
+	ret = ft_wait_shutdown_aware(EP->tx_cq, EP->eq, timeout);
+	if (ret) {
+
+		/* Be silent on known errors */
+		if ((ret == -FI_REMOTE_DISCONNECT) || (ret == -FI_ENODATA))
+			return ret;
+
+		/* Otherwise display error */
+		FT_PRINTERR("ft_wait<tx_cq>", ret);
+		return ret;
+	}
+
+	/* Success */
+	return 0;
+}
+
+/**
  * Receive data from OFI
  */
 ssize_t ofi_tx( struct ofi_active_endpoint * EP, size_t size, int timeout )
@@ -409,7 +457,7 @@ ssize_t ofi_tx( struct ofi_active_endpoint * EP, size_t size, int timeout )
 
 		/* If we are in a bad state, we were remotely disconnected */
 		if (ret == -FI_EOPBADSTATE) {
-			_ofi_debug("OFI: HLAPI: ofi_tx() returned %zi, considering shutdown.\n", ret);
+			_ofi_debug("OFI: HLAPI: ofi_tx() returned -FI_EOPBADSTATE, considering shutdown.\n", ret);
 			return -FI_REMOTE_DISCONNECT;			
 		}
 
@@ -475,6 +523,53 @@ ssize_t ofi_rx( struct ofi_active_endpoint * EP, size_t size, int timeout )
 	return 0;
 }
 
+/**
+ * Receive a scatter-gather array message over OFI
+ */
+ssize_t ofi_rx_msg( struct ofi_active_endpoint * EP, const struct iovec *msg_iov, size_t iov_count, int timeout )
+{
+	int ret;
+
+	/* Prepare fi_msg */
+	struct fi_msg msg = {
+		.msg_iov = msg_iov,
+		.iov_count = iov_count,
+		.addr = EP->remote_fi_addr,
+		.context = &EP->rx_ctx,
+		.data = 0
+	};
+
+	/* Receive data */
+	ret = fi_recvmsg(EP->ep, &msg, 0);
+	if (ret) {
+
+		/* If we are in a bad state, we were remotely disconnected */
+		if (ret == -FI_EOPBADSTATE) {
+			_ofi_debug("OFI: HLAPI: ofi_rx() returned %i, considering shutdown.\n", ret);
+			return -FI_REMOTE_DISCONNECT;
+		}
+
+		/* Otherwise display error */
+		FT_PRINTERR("fi_recv", ret);
+		return ret;
+	}
+
+	/* Wait for Rx CQ */
+	ret = ft_wait_shutdown_aware(EP->rx_cq, EP->eq, timeout);
+	if (ret) {
+
+		/* Be silent on known errors */
+		if ((ret == -FI_REMOTE_DISCONNECT) || (ret == -FI_ENODATA))
+			return ret;
+
+		/* Otherwise display error */
+		FT_PRINTERR("ft_wait<rx_cq>", ret);
+		return ret;
+	}
+
+	/* Success */
+	return 0;
+}
 
 /**
  * Resolve an address
@@ -651,40 +746,40 @@ int ofi_open_active_ep( struct ofi_resources * R, struct ofi_active_endpoint * E
 /**
  * Initialize memory regions of active endpoint
  */
-int ofi_active_ep_init_mr( struct ofi_resources * R, struct ofi_active_endpoint * EP, size_t rx_size, size_t tx_size )
-{
-	int ret;
+// int ofi_active_ep_init_mr( struct ofi_resources * R, struct ofi_active_endpoint * EP, size_t rx_size, size_t tx_size )
+// {
+// 	int ret;
 
-	/* ==== Allocate Memory Region =============== */
+// 	/* ==== Allocate Memory Region =============== */
 
-	/* Calculate tx,rx and buffer size */
-	EP->rx_size = rx_size + EP->rx_prefix_size;
-	EP->tx_size = tx_size + EP->tx_prefix_size;
-	EP->buf_size = MAX(EP->tx_size, FT_MAX_CTRL_MSG) + MAX(EP->rx_size, FT_MAX_CTRL_MSG);
+// 	/* Calculate tx,rx and buffer size */
+// 	EP->rx_size = rx_size + EP->rx_prefix_size;
+// 	EP->tx_size = tx_size + EP->tx_prefix_size;
+// 	EP->buf_size = MAX(EP->tx_size, FT_MAX_CTRL_MSG) + MAX(EP->rx_size, FT_MAX_CTRL_MSG);
 
-	/* Allocate buffer */
-	EP->buf = nn_alloc (EP->buf_size, "hofi");
-    alloc_assert (EP->buf);
-	if (!EP->buf) {
-		perror("malloc");
-		return -FI_ENOMEM;
-	}
+// 	/* Allocate buffer */
+// 	EP->buf = nn_alloc (EP->buf_size, "hofi");
+//     alloc_assert (EP->buf);
+// 	if (!EP->buf) {
+// 		perror("malloc");
+// 		return -FI_ENOMEM;
+// 	}
 
-	/* Setup rx/tx buf */
-	EP->rx_buf = EP->buf;
-	EP->tx_buf = (char *) EP->buf + MAX(EP->rx_size, FT_MAX_CTRL_MSG);
+// 	/* Setup rx/tx buf */
+// 	EP->rx_buf = EP->buf;
+// 	EP->tx_buf = (char *) EP->buf + MAX(EP->rx_size, FT_MAX_CTRL_MSG);
 
-	/* Register buffer */
-	ret = fi_mr_reg(EP->domain, EP->buf, EP->buf_size, FI_RECV | FI_SEND,
-			0, 0, 0, &EP->mr, NULL);
-	if (ret) {
-		FT_PRINTERR("fi_mr_reg", ret);
-		return ret;
-	}
+// 	/* Register buffer */
+// 	ret = fi_mr_reg(EP->domain, EP->buf, EP->buf_size, FI_RECV | FI_SEND,
+// 			0, 0, 0, &EP->mr, NULL);
+// 	if (ret) {
+// 		FT_PRINTERR("fi_mr_reg", ret);
+// 		return ret;
+// 	}
 
-	/* Success */
-	return 0;
-}
+// 	/* Success */
+// 	return 0;
+// }
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // OFI High-Level Function - Connectionless
@@ -978,6 +1073,55 @@ int ofi_init_client( struct ofi_resources * R, struct ofi_active_endpoint * EP, 
 	/* Success */
 	return 0;
 }
+
+/**
+ * Tag a particular memory region as shared
+ */
+int ofi_mr_manage( struct ofi_active_endpoint * EP, void * buf, size_t len, struct ofi_mr ** mr, enum ofi_mr_flags flags )
+{
+
+	/* Apply read/write flags */
+	uint64_t flags = 0;
+	if (flags == MR_SEND) {
+		flag |= FI_SEND | FI_WRITE | FI_REMOTE_READ;
+	}
+	if (flags == MR_WRITE) {
+		flag |= FI_RECV | FI_RECV | FI_REMOTE_WRITE;
+	}
+
+	/* Allocate desccriptor structure */
+	*mmr = nn_alloc( sizeof(struct ofi_mr), "ofi_mr" );
+	if (!*mmr) {
+		FT_ERR("OFI: Memory region tag allocation failed\n");
+		return EAI_MEMORY;
+	}
+
+	/* Register buffer */
+	ret = fi_mr_reg(EP->domain, buf, len, flag, 0, 0, 0, &(*mmr)->mr, NULL);
+	if (ret) {
+		FT_PRINTERR("fi_mr_reg", ret);
+		nn_free(mr);
+		return ret;
+	}
+
+	/* Success */
+	return 0;
+}
+
+/**
+ * Untag a particular memory region as shared
+ */
+int ofi_mr_unmanage( struct ofi_active_endpoint * EP, struct ofi_mr ** mr )
+{
+
+	/* Close memory region and free descriptor */
+	FT_CLOSE_FID( mmr->mr );
+	nn_free( *mr );
+
+	/* Success */
+	return 0;
+}
+
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // OFI Cleanup Functions

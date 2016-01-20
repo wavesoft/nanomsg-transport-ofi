@@ -58,10 +58,6 @@ struct ofi_active_endpoint
 	/* Domain */
 	struct fid_domain 	*domain;
 
-	/* Memory Region for I/O */
-	// size_t 				buf_size, tx_size, rx_size;
-	// void 				*buf, *tx_buf, *rx_buf;
-
 	/* Active endpoint structures */
 	struct fid_av 		*av;
 	struct fid_ep 		*ep;
@@ -142,14 +138,12 @@ int ofi_alloc( struct ofi_resources * R, enum fi_ep_type ep_type );
 /**
  * Receive data from OFI
  */
-// ssize_t ofi_tx( struct ofi_active_endpoint * R, size_t size, int timeout );
 ssize_t ofi_tx_msg( struct ofi_active_endpoint * EP, const struct iovec *msg_iov, void ** msg_iov_desc, 
 	size_t iov_count, uint64_t flags, int timeout );
 
 /**
  * Receive data from OFI
  */
-// ssize_t ofi_rx( struct ofi_active_endpoint * R, size_t size, int timeout );
 ssize_t ofi_rx_msg( struct ofi_active_endpoint * EP, const struct iovec *msg_iov, void ** msg_iov_desc, 
 	size_t iov_count, uint64_t flags, int timeout );
 

@@ -80,6 +80,7 @@ struct nn_sofi {
 
     /* First draft of smart MM */
     struct ofi_mr   *mr_slab;
+    void            *mr_slab_ptr;
 
 };
 

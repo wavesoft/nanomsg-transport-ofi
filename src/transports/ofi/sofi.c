@@ -22,6 +22,7 @@
 
 #include "ofi.h"
 #include "sofi.h"
+#include "../../ofi.h"
 
 #include "../../aio/ctx.h"
 
@@ -141,6 +142,27 @@ void nn_sofi_init (struct nn_sofi *self,
     //    return;
     //}
 
+    /* Get configured slab size */
+    int slab_size;
+    size_t opt_sz = sizeof(slab_size);
+    nn_epbase_getopt (epbase, NN_SOL_SOCKET, NN_OFI_SLABMR_SIZE,
+       &slab_size, &opt_sz);
+
+    /* Allocate slab buffer */
+    self->mr_slab_ptr = nn_alloc( slab_size, "ofi (slab memory)" );
+    if (!self->mr_slab_ptr) {
+        printf("OFI: SOFI: ERROR: Unable to allocate slab memory region!\n");
+        return;
+    }
+
+    /* Mark the memory region */
+    ret = ofi_mr_manage( self->ep, self->mr_slab_ptr, slab_size, &self->mr_slab , MR_SEND | MR_RECV );
+    if (ret) {
+       /* TODO: Handle error */
+       printf("OFI: SOFI: ERROR: Unable to mark the slab memory MR region!\n");
+       return;
+    }
+
     /* ==================== */
 
     /* Initialize FSM */
@@ -166,6 +188,10 @@ void nn_sofi_init (struct nn_sofi *self,
  */
 void nn_sofi_term (struct nn_sofi *self)
 {
+
+    /* Unmanage slab pointer */
+    nn_free( self->mr_slab_ptr );
+    ofi_mr_unmanage( self->ep, &self->mr_slab );
 
     /* Cleanup instantiated resources */
     nn_list_item_term (&self->item);

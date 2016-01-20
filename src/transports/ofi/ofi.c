@@ -35,7 +35,7 @@
 /* OFI-Specific socket options */
 struct nn_ofi_optset {
     struct nn_optset base;
-    size_t slab_mr_size;
+    int slab_mr_size;
 };
 
 /* Optset interface */

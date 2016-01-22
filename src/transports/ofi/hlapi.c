@@ -419,7 +419,7 @@ ssize_t ofi_tx_msg( struct ofi_active_endpoint * EP, const struct iovec *msg_iov
 	};
 
 	/* Send data */
-	ret = fi_sendmsg(EP->ep, &msg, flags | FI_INJECT_COMPLETE );
+	ret = fi_sendmsg(EP->ep, &msg, flags );
 	if (ret) {
 
 		/* If we are in a bad state, we were remotely disconnected */

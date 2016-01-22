@@ -68,6 +68,10 @@ const uint8_t FT_PACKET_KEEPALIVE[8] = {0xFF, 0xFF, 0xFF, 0xFF,
 #define NN_SOFI_SHUTDOWN_DISCONNECT         1
 #define NN_SOFI_SHUTDOWN_ERROR              2
 
+/* MR Keys */
+#define NN_SOFI_MR_KEY_USER                 1
+#define NN_SOFI_MR_KEY_SLAB                 2
+
 /*  State machine functions. */
 static void nn_sofi_handler (struct nn_fsm *self, int src, int type, 
     void *srcptr);
@@ -147,7 +151,7 @@ void nn_sofi_init (struct nn_sofi *self,
     }
 
     /* Mark the memory region */
-    ret = ofi_mr_manage( self->ep, self->mr_slab, self->mr_slab_ptr, self->slab_size + NN_OFI_SLABMR_SIZE, MR_SEND | MR_RECV );
+    ret = ofi_mr_manage( self->ep, self->mr_slab, self->mr_slab_ptr, self->slab_size + NN_OFI_SLABMR_SIZE, NN_SOFI_MR_KEY_SLAB, MR_SEND | MR_RECV );
     if (ret) {
        /* TODO: Handle error */
        printf("OFI: SOFI: ERROR: Unable to mark the slab memory MR region!\n");
@@ -289,7 +293,7 @@ void nn_sofi_mr_outgoing ( struct nn_sofi *self, void * ptr, size_t len, void **
     else
     {
         /* Manage this memory region */
-        ofi_mr_manage( self->ep, self->mr_user, ptr, len, MR_SEND );
+        ofi_mr_manage( self->ep, self->mr_user, ptr, len, NN_SOFI_MR_KEY_USER, MR_SEND );
         /* Update pointer */
         *sendptr = ptr;
         *descptr = fi_mr_desc( self->mr_user->mr );
@@ -328,7 +332,7 @@ static int nn_sofi_send (struct nn_pipebase *self, struct nn_msg *msg)
 
     /* Send header */
     _ofi_debug("OFI: SOFI: Sending header [type=data,size=%lu] (len=%lu)\n", sz_sphdr+sz_body, sz_outhdr );
-    ret = ofi_tx_msg( sofi->ep, iov, iov_desc, 1, FI_DELIVERY_COMPLETE, NN_SOFI_IO_TIMEOUT_SEC );
+    ret = ofi_tx_msg( sofi->ep, iov, iov_desc, 1, FI_TRANSMIT_COMPLETE, NN_SOFI_IO_TIMEOUT_SEC );
     if (ret) {
         printf("OFI: Error sending data!\n");
 
@@ -462,7 +466,7 @@ static void nn_sofi_poller_thread (void *arg)
 
         /* Decide how to receive the message */
         if (size < self->slab_size) {
-            _ofi_debug("OFI: SOFI: Using memcpy because size < %lu\n", self->slab_size);
+            _ofi_debug("OFI: SOFI: Using memcpy because size < %i\n", self->slab_size);
 
             /* Use the memory slab as the receving endpoint */
             iov [0].iov_base = self->mr_slab_data_in;
@@ -470,11 +474,11 @@ static void nn_sofi_poller_thread (void *arg)
             iov_desc[0] = fi_mr_desc( self->mr_slab->mr );
         
         } else {
-            _ofi_debug("OFI: SOFI: Using mr because size >= %lu\n", self->slab_size);
+            _ofi_debug("OFI: SOFI: Using mr because size >= %i\n", self->slab_size);
 
             /* Manage this memory region */
-            ofi_mr_manage( self->ep, self->mr_user, 
-                nn_chunkref_data(&self->inmsg.body), size, MR_RECV );
+            ofi_mr_manage( self->ep, self->mr_user, nn_chunkref_data(&self->inmsg.body), 
+                size, NN_SOFI_MR_KEY_USER, MR_RECV );
 
             /* Use the message buffer as our new shared memory region */
             iov [0].iov_base = nn_chunkref_data(&self->inmsg.body);

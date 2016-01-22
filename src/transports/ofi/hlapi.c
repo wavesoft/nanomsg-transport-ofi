@@ -990,7 +990,7 @@ int ofi_mr_alloc( struct ofi_active_endpoint * ep, struct ofi_mr ** mmr )
 /**
  * Tag a particular memory region as shared
  */
-int ofi_mr_manage( struct ofi_active_endpoint * EP, struct ofi_mr * mr, void * buf, size_t len, enum ofi_mr_flags flags )
+int ofi_mr_manage( struct ofi_active_endpoint * EP, struct ofi_mr * mr, void * buf, size_t len, uint64_t requested_key, enum ofi_mr_flags flags )
 {
 	int ret;
 	uint64_t access_flags = 0;
@@ -1014,7 +1014,7 @@ int ofi_mr_manage( struct ofi_active_endpoint * EP, struct ofi_mr * mr, void * b
 	}
 
 	/* Register buffer */
-	ret = fi_mr_reg(EP->domain, buf, len, access_flags, 0, 0, 0, &mr->mr, NULL);
+	ret = fi_mr_reg(EP->domain, buf, len, access_flags, 0, requested_key, 0, &mr->mr, NULL);
 	if (ret) {
 		FT_PRINTERR("fi_mr_reg", ret);
 		return ret;

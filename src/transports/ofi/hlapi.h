@@ -231,7 +231,7 @@ int64_t ofi_get_elapsed(const struct timespec *b, const struct timespec *a,
  * Shared region managements
  */
 int ofi_mr_alloc( struct ofi_active_endpoint * ep, struct ofi_mr ** mr );
-int ofi_mr_manage( struct ofi_active_endpoint * ep, struct ofi_mr * mr, void * buf, size_t len, enum ofi_mr_flags flags );
+int ofi_mr_manage( struct ofi_active_endpoint * EP, struct ofi_mr * mr, void * buf, size_t len, uint64_t requested_key, enum ofi_mr_flags flags );
 int ofi_mr_unmanage( struct ofi_active_endpoint * ep, struct ofi_mr * mr );
 int ofi_mr_free( struct ofi_active_endpoint * ep, struct ofi_mr ** mr );
 

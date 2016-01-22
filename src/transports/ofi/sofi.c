@@ -125,10 +125,11 @@ void nn_sofi_init (struct nn_sofi *self,
 
     /* Get configured slab size */
     size_t opt_sz = sizeof(self->slab_size);
-    nn_epbase_getopt (epbase, NN_SOL_SOCKET, NN_OFI_SLABMR_SIZE,
+    nn_epbase_getopt (epbase, NN_OFI, NN_OFI_SLABMR_SIZE,
         &self->slab_size, &opt_sz);
     nn_epbase_getopt (epbase, NN_SOL_SOCKET, NN_RCVBUF,
         &self->recv_buffer_size, &opt_sz);
+    _ofi_debug("OFI: SOFI: Socket options NN_OFI_SLABMR_SIZE=%i, NN_RCVBUF=%i\n", self->slab_size, self->recv_buffer_size);
 
     /* Allocate slab buffer */
     self->mr_slab_ptr = nn_alloc( self->slab_size * 2 + sizeof( struct nn_ofi_sys_ptrs ), "ofi (slab memory)" );

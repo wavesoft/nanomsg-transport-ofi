@@ -1,0 +1,11 @@
+--- src/core/sock.h	2016-01-22 13:22:54.000000000 +0100
++++ src/core/sock.h	2016-01-22 13:23:00.000000000 +0100
+@@ -37,7 +37,7 @@
+ struct nn_pipe;
+ 
+ /*  The maximum implemented transport ID. */
+-#define NN_MAX_TRANSPORT 4
++#define NN_MAX_TRANSPORT 6
+ 
+ /*  The socket-internal statistics  */
+ #define NN_STAT_MESSAGES_SENT          301

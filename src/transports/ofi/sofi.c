@@ -462,6 +462,7 @@ static void nn_sofi_poller_thread (void *arg)
 
         /* Decide how to receive the message */
         if (size < self->slab_size) {
+            _ofi_debug("OFI: SOFI: Using memcpy because size < %lu\n", self->slab_size);
 
             /* Use the memory slab as the receving endpoint */
             iov [0].iov_base = self->mr_slab_data_in;
@@ -469,6 +470,7 @@ static void nn_sofi_poller_thread (void *arg)
             iov_desc[0] = fi_mr_desc( self->mr_slab->mr );
         
         } else {
+            _ofi_debug("OFI: SOFI: Using mr because size >= %lu\n", self->slab_size);
 
             /* Manage this memory region */
             ofi_mr_manage( self->ep, self->mr_user, 
@@ -497,6 +499,7 @@ static void nn_sofi_poller_thread (void *arg)
 
         /* Final part of small slab messages */
         if (size < self->slab_size) {
+            _ofi_debug("OFI: SOFI: Final memcpy to body");
             memcpy( nn_chunkref_data(&self->inmsg.body), self->mr_slab_data_in, size );
         }
 

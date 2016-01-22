@@ -1014,6 +1014,7 @@ int ofi_mr_manage( struct ofi_active_endpoint * EP, struct ofi_mr * mr, void * b
 	}
 
 	/* Register buffer */
+	_ofi_debug("OFI: Managing memory region (key=%i)\n", requested_key);
 	ret = fi_mr_reg(EP->domain, buf, len, access_flags, 0, requested_key, 0, &mr->mr, NULL);
 	if (ret) {
 		FT_PRINTERR("fi_mr_reg", ret);
@@ -1029,6 +1030,10 @@ int ofi_mr_manage( struct ofi_active_endpoint * EP, struct ofi_mr * mr, void * b
  */
 int ofi_mr_unmanage( struct ofi_active_endpoint * EP, struct ofi_mr * mr )
 {
+
+	/* Don't do anything if MR is null */
+	if (!mr->mr) return;
+	_ofi_debug("OFI: Unmanaging memory region\n");
 
 	/* Close memory region and free descriptor */
 	FT_CLOSE_FID( mr->mr );

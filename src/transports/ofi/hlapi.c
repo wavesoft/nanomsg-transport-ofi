@@ -409,17 +409,17 @@ ssize_t ofi_tx_msg( struct ofi_active_endpoint * EP, const struct iovec *msg_iov
 		ret += msg_iov[i].iov_len;
 
 	/* Prepare fi_msg */
-	struct fi_msg msg = {
-		.msg_iov = msg_iov,
-		.iov_count = iov_count,
-		.desc = msg_iov_desc,
-		.addr = EP->remote_fi_addr,
-		.context = &EP->tx_ctx,
-		.data = ret
-	};
+	// struct fi_msg msg = {
+	// 	.msg_iov = msg_iov,
+	// 	.iov_count = iov_count,
+	// 	.desc = msg_iov_desc,
+	// 	.addr = EP->remote_fi_addr,
+	// 	.context = &EP->tx_ctx,
+	// 	.data = ret
+	// };
 
 	/* Send data */
-	ret = fi_sendmsg(EP->ep, &msg, flags );
+	ret = fi_sendv(EP->ep, msg_iov, msg_iov_desc, iov_count, EP->remote_fi_addr, &EP->tx_ctx );
 	if (ret) {
 
 		/* If we are in a bad state, we were remotely disconnected */
@@ -459,17 +459,17 @@ ssize_t ofi_rx_msg( struct ofi_active_endpoint * EP, const struct iovec *msg_iov
 	int ret;
 
 	/* Prepare fi_msg */
-	struct fi_msg msg = {
-		.msg_iov = msg_iov,
-		.iov_count = iov_count,
-		.desc = msg_iov_desc,
-		.addr = EP->remote_fi_addr,
-		.context = &EP->rx_ctx,
-		.data = 0
-	};
+	// struct fi_msg msg = {
+	// 	.msg_iov = msg_iov,
+	// 	.iov_count = iov_count,
+	// 	.desc = msg_iov_desc,
+	// 	.addr = EP->remote_fi_addr,
+	// 	.context = &EP->rx_ctx,
+	// 	.data = 0
+	// };
 
 	/* Receive data */
-	ret = fi_recvmsg(EP->ep, &msg, flags);
+	ret = fi_recvv(EP->ep, msg_iov, msg_iov_desc, iov_count, EP->remote_fi_addr, &EP->rx_ctx);
 	if (ret) {
 
 		/* If we are in a bad state, we were remotely disconnected */

@@ -328,7 +328,7 @@ static int nn_sofi_send (struct nn_pipebase *self, struct nn_msg *msg)
 
     /* Send header */
     _ofi_debug("OFI: SOFI: Sending header [type=data,size=%lu] (len=%lu)\n", sz_sphdr+sz_body, sz_outhdr );
-    ret = ofi_tx_msg( sofi->ep, iov, iov_desc, 1, 0, NN_SOFI_IO_TIMEOUT_SEC );
+    ret = ofi_tx_msg( sofi->ep, iov, iov_desc, 1, FI_DELIVERY_COMPLETE, NN_SOFI_IO_TIMEOUT_SEC );
     if (ret) {
         printf("OFI: Error sending data!\n");
 

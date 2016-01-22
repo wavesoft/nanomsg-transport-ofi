@@ -144,7 +144,7 @@ int ft_wait(struct fid_cq *cq)
 	struct fi_cq_entry entry;
 	int ret;
 
-	/* CQ entry based on configured format (i.e. FI_CQ_FORMAT_CONTEXT) */
+	/* CQ entry based on configured format (i.e. FI_CQ_FORMAT_DATA) */
 	while (1) {
 		ret = fi_cq_read(cq, &entry, 1);
 
@@ -160,10 +160,10 @@ int ft_wait(struct fid_cq *cq)
 				/* Handle error */
 				ret = fi_cq_readerr(cq, &err_entry, 0);
 
-				/* Check if the operation was cancelled (ex. terminating connection) */
 				if (err_entry.err == FI_ECANCELED) {
 					return -err_entry.err;
-				}
+				}				/* Check if the operation was cancelled (ex. terminating connection) */
+
 
 				/* Display other erors */
 				printf("OFI: %s (%s)\n",
@@ -185,7 +185,7 @@ int ft_wait(struct fid_cq *cq)
 int ft_wait_shutdown_aware(struct fid_cq *cq, struct fid_eq *eq, int timeout)
 {
 	struct fi_eq_cm_entry eq_entry;
-	struct fi_cq_entry entry;
+	struct fi_cq_data_entry entry;
 	struct timespec a, b;
 	uint32_t event;
 	uint8_t shutdown_interval;
@@ -199,7 +199,7 @@ int ft_wait_shutdown_aware(struct fid_cq *cq, struct fid_eq *eq, int timeout)
 	/* TODO: The timeout solution looks like a HACK! Find a better solution */
 	shutdown_interval = 0;
 
-	/* CQ entry based on configured format (i.e. FI_CQ_FORMAT_CONTEXT) */
+	/* CQ entry based on configured format (i.e. FI_CQ_FORMAT_DATA) */
 	while (1) {
 
 		/* Burst-check for CQ event (reduced lattency on high speeds) */
@@ -386,7 +386,7 @@ int ofi_alloc( struct ofi_resources * R, enum fi_ep_type ep_type )
 	/* Setup hints capabilities and more */
 	R->hints->ep_attr->type	= ep_type;
 	R->hints->caps			= FI_MSG;
-	R->hints->mode			= FI_CONTEXT | FI_LOCAL_MR;
+	R->hints->mode			= FI_CONTEXT | FI_LOCAL_MR | FI_RX_CQ_DATA;
 
 	/* Prepare flags */
 	R->flags = 0;
@@ -403,6 +403,11 @@ ssize_t ofi_tx_msg( struct ofi_active_endpoint * EP, const struct iovec *msg_iov
 {
 	ssize_t ret;
 
+	/* Count the size of the message */
+	ret = 0;
+	for (int i=0; i<iov_count; i++)
+		ret += msg_iov[i].iov_len;
+
 	/* Prepare fi_msg */
 	struct fi_msg msg = {
 		.msg_iov = msg_iov,
@@ -410,11 +415,11 @@ ssize_t ofi_tx_msg( struct ofi_active_endpoint * EP, const struct iovec *msg_iov
 		.desc = msg_iov_desc,
 		.addr = EP->remote_fi_addr,
 		.context = &EP->tx_ctx,
-		.data = 0
+		.data = ret
 	};
 
 	/* Send data */
-	ret = fi_sendmsg(EP->ep, &msg, flags);
+	ret = fi_sendmsg(EP->ep, &msg, flags | FI_INJECT_COMPLETE | FI_REMOTE_CQ_DATA);
 	if (ret) {
 
 		/* If we are in a bad state, we were remotely disconnected */
@@ -424,11 +429,11 @@ ssize_t ofi_tx_msg( struct ofi_active_endpoint * EP, const struct iovec *msg_iov
 		}
 
 		/* Otherwise display error */
-		FT_PRINTERR("fi_send", ret);
+		FT_PRINTERR("ofi_tx_msg", ret);
 		return ret;
 	}
 
-	/* Wait for Tx CQ */
+	/* Wait for Tx CQ event (when 'the buffer can be reused' - INJECT_COMPLETE) */
 	ret = ft_wait_shutdown_aware(EP->tx_cq, EP->eq, timeout);
 	if (ret) {
 
@@ -474,7 +479,7 @@ ssize_t ofi_rx_msg( struct ofi_active_endpoint * EP, const struct iovec *msg_iov
 		}
 
 		/* Otherwise display error */
-		FT_PRINTERR("fi_recv", ret);
+		FT_PRINTERR("ofi_rx_msg", ret);
 		return ret;
 	}
 
@@ -580,7 +585,7 @@ int ofi_open_active_ep( struct ofi_resources * R, struct ofi_active_endpoint * E
 	/* Create a Tx completion queue */
 	struct fi_cq_attr cq_attr = {
 		.wait_obj = FI_WAIT_NONE,
-		.format = FI_CQ_FORMAT_CONTEXT,
+		.format = FI_CQ_FORMAT_DATA,
 		.size = fi->tx_attr->size
 	};
 	ret = fi_cq_open(EP->domain, &cq_attr, &EP->tx_cq, &EP->tx_ctx);
@@ -961,20 +966,11 @@ int ofi_init_client( struct ofi_resources * R, struct ofi_active_endpoint * EP, 
 }
 
 /**
- * Tag a particular memory region as shared
+ * Allocate a new memory region object
  */
-int ofi_mr_manage( struct ofi_active_endpoint * EP, void * buf, size_t len, struct ofi_mr ** mmr, enum ofi_mr_flags flags )
+int ofi_mr_alloc( struct ofi_active_endpoint * ep, struct ofi_mr ** mmr )
 {
 	int ret;
-	uint64_t reg_flags = 0;
-
-	/* Apply read/write flags */
-	if (flags == MR_SEND) {
-		reg_flags |= FI_SEND | FI_WRITE | FI_REMOTE_READ;
-	}
-	if (flags == MR_RECV) {
-		reg_flags |= FI_RECV | FI_RECV | FI_REMOTE_WRITE;
-	}
 
 	/* Allocate desccriptor structure */
 	*mmr = nn_alloc( sizeof(struct ofi_mr), "ofi_mr" );
@@ -983,11 +979,44 @@ int ofi_mr_manage( struct ofi_active_endpoint * EP, void * buf, size_t len, stru
 		return EAI_MEMORY;
 	}
 
+	/* Init properties */
+	(*mmr)->ptr = NULL;
+	(*mmr)->mr = NULL;
+
+	/* Success */
+	return 0;
+}
+
+/**
+ * Tag a particular memory region as shared
+ */
+int ofi_mr_manage( struct ofi_active_endpoint * EP, struct ofi_mr * mr, void * buf, size_t len, enum ofi_mr_flags flags )
+{
+	int ret;
+	uint64_t access_flags = 0;
+	assert( EP != NULL );
+	assert( buf != NULL );
+	assert( mr != NULL );
+
+	/* Unmanage previous instances */
+	if (mr->ptr) {
+		/* Unmanage only if pointer differs */
+		if (mr->ptr != buf)
+			ofi_mr_unmanage( EP, mr );
+	}
+
+	/* Apply read/write flags */
+	if (flags == MR_SEND) {
+		access_flags |= FI_SEND | FI_WRITE | FI_REMOTE_READ;
+	}
+	if (flags == MR_RECV) {
+		access_flags |= FI_RECV | FI_RECV | FI_REMOTE_WRITE;
+	}
+
 	/* Register buffer */
-	ret = fi_mr_reg(EP->domain, buf, len, reg_flags, 0, 0, 0, &(*mmr)->mr, NULL);
+	ret = fi_mr_reg(EP->domain, buf, len, access_flags, 0, 0, 0, &mr->mr, NULL);
 	if (ret) {
 		FT_PRINTERR("fi_mr_reg", ret);
-		nn_free(*mmr);
 		return ret;
 	}
 
@@ -998,17 +1027,39 @@ int ofi_mr_manage( struct ofi_active_endpoint * EP, void * buf, size_t len, stru
 /**
  * Untag a particular memory region as shared
  */
-int ofi_mr_unmanage( struct ofi_active_endpoint * EP, struct ofi_mr ** mmr )
+int ofi_mr_unmanage( struct ofi_active_endpoint * EP, struct ofi_mr * mr )
 {
 
 	/* Close memory region and free descriptor */
-	FT_CLOSE_FID( (*mmr)->mr );
-	nn_free( *mmr );
+	FT_CLOSE_FID( mr->mr );
+
+	/* Reset properties */
+	mr->mr = NULL;
+	mr->ptr = NULL;
 
 	/* Success */
 	return 0;
 }
 
+
+/**
+ * Unmanage and free memory regions
+ */
+int ofi_mr_free( struct ofi_active_endpoint * ep, struct ofi_mr ** mmr )
+{
+	int ret;
+
+	/* Unmanage previous reservations */
+	if ((*mmr)->mr) {
+		ofi_mr_unmanage( ep, *mmr );
+	}
+
+	/* Free structure */
+	nn_free( *mmr );
+
+	/* Success */
+	return 0;
+}
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // OFI Cleanup Functions

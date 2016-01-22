@@ -122,13 +122,17 @@ enum ofi_mr_flags {
 struct ofi_mr {
 
 	/* Hinting information */
-	uint8_t 			flags;
-	uint64_t 			bitmap;
+	void * 				ptr;
 
 	/* Pointer objects */
 	struct fid_mr 		*mr;
 
 };
+
+// /**
+//  * Helper function to allocate the receiving IO Vectors
+//  */
+// int (*ofi_alloc_iov)( size_t msgLen, struct iovec **msg_iov, void **msg_iov_desc, size_t *iov_count );
 
 /**
  * Allocate hints and prepare core structures
@@ -136,16 +140,20 @@ struct ofi_mr {
 int ofi_alloc( struct ofi_resources * R, enum fi_ep_type ep_type );
 
 /**
- * Receive data from OFI
+ * OFI messages Rx/Tx
  */
 ssize_t ofi_tx_msg( struct ofi_active_endpoint * EP, const struct iovec *msg_iov, void ** msg_iov_desc, 
 	size_t iov_count, uint64_t flags, int timeout );
-
-/**
- * Receive data from OFI
- */
 ssize_t ofi_rx_msg( struct ofi_active_endpoint * EP, const struct iovec *msg_iov, void ** msg_iov_desc, 
 	size_t iov_count, uint64_t flags, int timeout );
+
+// /**
+//  * Tagged ofi Rx/Tx with additional control information
+//  */
+// ssize_t ofi_ttx_msg( struct ofi_active_endpoint * EP, const struct iovec *msg_iov, void ** msg_iov_desc,
+// 	size_t iov_count, uint64_t flags, int timeout );
+// ssize_t ofi_trx_msg( struct ofi_active_endpoint * EP, const struct iovec *msg_iov, void ** msg_iov_desc,
+// 	size_t iov_count, uint64_t flags, int timeout );
 
 /**
  * Resolve an address
@@ -220,10 +228,12 @@ int64_t ofi_get_elapsed(const struct timespec *b, const struct timespec *a,
 		    enum ofi_time_precision p);
 
 /**
- * Tag/Untag shared regions
+ * Shared region managements
  */
-int ofi_mr_manage( struct ofi_active_endpoint * ep, void * buf, size_t len, struct ofi_mr ** mr, enum ofi_mr_flags flags );
-int ofi_mr_unmanage( struct ofi_active_endpoint * ep, struct ofi_mr ** mr );
+int ofi_mr_alloc( struct ofi_active_endpoint * ep, struct ofi_mr ** mr );
+int ofi_mr_manage( struct ofi_active_endpoint * ep, struct ofi_mr * mr, void * buf, size_t len, enum ofi_mr_flags flags );
+int ofi_mr_unmanage( struct ofi_active_endpoint * ep, struct ofi_mr * mr );
+int ofi_mr_free( struct ofi_active_endpoint * ep, struct ofi_mr ** mr );
 
 
 #endif /* NN_OFI_SHARED_INCLUDED */

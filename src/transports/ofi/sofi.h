@@ -38,6 +38,15 @@
 #define NN_SOFI_DISCONNECTED 2001
 #define NN_SOFI_STOPPED      2002
 
+/**
+ * Various system structures stored in a shared memory region
+ */
+struct nn_ofi_sys_ptrs {
+    uint8_t inhdr  [8];  /* Input header */
+    uint8_t outhdr [8];  /* Out header */
+    uint8_t sphdr  [64]; /* Protocol header for various uses */
+};
+
 /* Shared, Connected OFI FSM */
 struct nn_sofi {
 
@@ -60,7 +69,6 @@ struct nn_sofi {
 
     /* Output buffers */
     struct nn_msg outmsg;
-    uint8_t outhdr [8];
 
     /* This member can be used by owner to keep individual atcps in a list. */
     struct nn_list_item item;
@@ -79,8 +87,10 @@ struct nn_sofi {
     struct nn_efd    sync;
 
     /* First draft of smart MM */
-    struct ofi_mr   *mr_slab;
-    void            *mr_slab_ptr;
+    int                     slab_size, recv_buffer_size;
+    struct ofi_mr           *mr_slab, *mr_user;
+    void                    *mr_slab_ptr, *mr_slab_data_in, *mr_slab_data_out, *mr_slab_inmsg;
+    struct nn_ofi_sys_ptrs  *mr_sys_ptr;
 
 };
 

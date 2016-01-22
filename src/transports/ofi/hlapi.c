@@ -386,7 +386,7 @@ int ofi_alloc( struct ofi_resources * R, enum fi_ep_type ep_type )
 	/* Setup hints capabilities and more */
 	R->hints->ep_attr->type	= ep_type;
 	R->hints->caps			= FI_MSG;
-	R->hints->mode			= FI_CONTEXT | FI_LOCAL_MR | FI_RX_CQ_DATA;
+	R->hints->mode			= FI_CONTEXT | FI_LOCAL_MR;
 
 	/* Prepare flags */
 	R->flags = 0;
@@ -419,7 +419,7 @@ ssize_t ofi_tx_msg( struct ofi_active_endpoint * EP, const struct iovec *msg_iov
 	};
 
 	/* Send data */
-	ret = fi_sendmsg(EP->ep, &msg, flags | FI_INJECT_COMPLETE | FI_REMOTE_CQ_DATA);
+	ret = fi_sendmsg(EP->ep, &msg, flags | FI_INJECT_COMPLETE );
 	if (ret) {
 
 		/* If we are in a bad state, we were remotely disconnected */

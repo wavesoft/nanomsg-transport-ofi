@@ -59,7 +59,7 @@ const uint8_t FT_PACKET_KEEPALIVE[8] = {0xFF, 0xFF, 0xFF, 0xFF,
 #define NN_SOFI_SRC_KEEPALIVE_TIMER     1101
 
 /* Configurable times for keepalive */
-#define NN_SOFI_IO_TIMEOUT_SEC              2
+#define NN_SOFI_IO_TIMEOUT_SEC              5
 #define NN_SOFI_KEEPALIVE_INTERVAL          1000
 #define NN_SOFI_KEEPALIVE_COUNTER           1
 #define NN_SOFI_KEEPALIVE_TIMEOUT_COUNTER   5
@@ -420,7 +420,7 @@ static void nn_sofi_poller_thread (void *arg)
         iov [0].iov_len = sizeof(self->mr_sys_ptr->inhdr);
         iov_desc[0] = fi_mr_desc( self->mr_slab->mr );
 
-        _ofi_debug("OFI: nn_sofi_poller_thread: Waiting for incoming header\n");
+        _ofi_debug("OFI: SOFI: Waiting for incoming header\n");
         ret = ofi_rx_msg( self->ep, iov, iov_desc, 1, 0, -1 );
         if (ret == -FI_REMOTE_DISCONNECT) { /* Remotely disconnected */
             _ofi_debug("OFI: Remotely disconnected!\n");
@@ -429,7 +429,7 @@ static void nn_sofi_poller_thread (void *arg)
 
         /* Handle errors */
         if (ret) {
-            printf("OFI: Receive Error! (Ignoring)\n");
+            printf("OFI: Unable to receive header!\n");
             goto error;
         }
 
@@ -482,7 +482,7 @@ static void nn_sofi_poller_thread (void *arg)
         }
 
         /* Receive the actual message */
-        _ofi_debug("OFI: nn_sofi_poller_thread: Receiving data\n");
+        _ofi_debug("OFI: SOFI: Receiving data\n");
         ret = ofi_rx_msg( self->ep, iov, iov_desc, 1, 0, -1 );
         if (ret == -FI_REMOTE_DISCONNECT) { /* Remotely disconnected */
             _ofi_debug("OFI: Remotely disconnected!\n");
@@ -491,7 +491,7 @@ static void nn_sofi_poller_thread (void *arg)
 
         /* Handle errors */
         if (ret) {
-            printf("OFI: Receive Error!\n");
+            printf("OFI: Unable to receive payload!\n");
             goto error;
         }
 

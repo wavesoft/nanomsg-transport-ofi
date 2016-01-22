@@ -151,7 +151,8 @@ void nn_sofi_init (struct nn_sofi *self,
     }
 
     /* Mark the memory region */
-    ret = ofi_mr_manage( self->ep, self->mr_slab, self->mr_slab_ptr, self->slab_size + NN_OFI_SLABMR_SIZE, NN_SOFI_MR_KEY_SLAB, MR_SEND | MR_RECV );
+    ret = ofi_mr_manage( self->ep, self->mr_slab, self->mr_slab_ptr, 
+        self->slab_size * 2 + sizeof( struct nn_ofi_sys_ptrs ), NN_SOFI_MR_KEY_SLAB, MR_SEND | MR_RECV );
     if (ret) {
        /* TODO: Handle error */
        printf("OFI: SOFI: ERROR: Unable to mark the slab memory MR region!\n");
@@ -368,7 +369,6 @@ static int nn_sofi_send (struct nn_pipebase *self, struct nn_msg *msg)
         /* This did not work out, but don't let nanomsg know */
         return 0;
     }
-
 
     /* Success */
     nn_pipebase_sent (&sofi->pipebase);

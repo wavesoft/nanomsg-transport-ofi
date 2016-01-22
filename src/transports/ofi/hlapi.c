@@ -1032,7 +1032,7 @@ int ofi_mr_unmanage( struct ofi_active_endpoint * EP, struct ofi_mr * mr )
 {
 
 	/* Don't do anything if MR is null */
-	if (!mr->mr) return;
+	if (!mr->mr) return 0;
 	_ofi_debug("OFI: Unmanaging memory region\n");
 
 	/* Close memory region and free descriptor */

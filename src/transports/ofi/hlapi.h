@@ -239,5 +239,4 @@ int ofi_mr_manage( struct ofi_active_endpoint * EP, struct ofi_mr * mr, void * b
 int ofi_mr_unmanage( struct ofi_active_endpoint * ep, struct ofi_mr * mr );
 int ofi_mr_free( struct ofi_active_endpoint * ep, struct ofi_mr ** mr );
 
-
 #endif /* NN_OFI_SHARED_INCLUDED */

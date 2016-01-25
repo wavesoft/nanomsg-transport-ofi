@@ -209,10 +209,10 @@ int ft_wait_shutdown_aware(struct fid_cq *cq, struct fid_eq *eq, int timeout, st
 
 		/* Burst-check for CQ event (reduced lattency on high speeds) */
 		// ret = fi_cq_sread(cq, &entry, 1, NULL, 500);
-		fast_poller=255; 
-		do {
-			ret = fi_cq_read(cq, entry_ptr, 1);
-		} while (nn_fast( (ret == -FI_EAGAIN) && (--fast_poller > 0) ));
+		// fast_poller=255; 
+		// do {
+		ret = fi_cq_read(cq, entry_ptr, 1);
+		// } while (nn_fast( (ret == -FI_EAGAIN) && (--fast_poller > 0) ));
 
 		/* Operation failed */
 		if (nn_slow(ret > 0)) {

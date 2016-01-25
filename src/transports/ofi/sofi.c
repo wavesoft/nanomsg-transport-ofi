@@ -431,20 +431,36 @@ static int nn_sofi_send (struct nn_pipebase *self, struct nn_msg *msg)
     iov [0].iov_len = sz_outhdr;
     iov_desc[0] = fi_mr_desc( sofi->mr_slab->mr );
 
-    /* IOV[1] : Copy outmsg SPHDR to shared MR[sphdr] */
-    memcpy( sofi->ptr_slab_sysptr->sphdr, nn_chunkref_data (&sofi->outmsg.sphdr), sz_sphdr );
-    iov [1].iov_base = sofi->ptr_slab_sysptr->sphdr;
-    iov [1].iov_len = sz_sphdr;
-    iov_desc[1] = fi_mr_desc( sofi->mr_slab->mr );
+    /* Include SPHDR only if exists! */
+    if (sz_sphdr > 0) {
 
-    /* IOV[2] : Smart management (copy or tag) of the body pointer */
-    iov [2].iov_len = sz_body;
-    nn_sofi_mr_outgoing( sofi, nn_chunkref_data (&sofi->outmsg.body), sz_body,
-                     &iov[2].iov_base, &iov_desc[2]);
+        /* IOV[1] : Copy outmsg SPHDR to shared MR[sphdr] */
+        memcpy( sofi->ptr_slab_sysptr->sphdr, nn_chunkref_data (&sofi->outmsg.sphdr), sz_sphdr );
+        iov [1].iov_base = sofi->ptr_slab_sysptr->sphdr;
+        iov [1].iov_len = sz_sphdr;
+        iov_desc[1] = fi_mr_desc( sofi->mr_slab->mr );
+
+        /* IOV[2] : Smart management (copy or tag) of the body pointer */
+        iov [2].iov_len = sz_body;
+        nn_sofi_mr_outgoing( sofi, nn_chunkref_data (&sofi->outmsg.body), sz_body,
+                         &iov[2].iov_base, &iov_desc[2]);
+
+        _ofi_debug("OFI: SOFI: Sending payload (len=%lu)\n", sz_sphdr+sz_body );
+        ret = ofi_tx_msg( sofi->ep, iov, iov_desc, 3, 0, NN_SOFI_IO_TIMEOUT_SEC );
+
+    } else {
+
+        /* IOV[2] : Smart management (copy or tag) of the body pointer */
+        iov [1].iov_len = sz_body;
+        nn_sofi_mr_outgoing( sofi, nn_chunkref_data (&sofi->outmsg.body), sz_body,
+                         &iov[1].iov_base, &iov_desc[2]);
+
+        _ofi_debug("OFI: SOFI: Sending payload (len=%lu)\n", sz_sphdr+sz_body );
+        ret = ofi_tx_msg( sofi->ep, iov, iov_desc, 2, 0, NN_SOFI_IO_TIMEOUT_SEC );
+
+    }
 
     /* Send payload */
-    _ofi_debug("OFI: SOFI: Sending payload (len=%lu)\n", sz_sphdr+sz_body );
-    ret = ofi_tx_msg( sofi->ep, iov, iov_desc, 3, 0, NN_SOFI_IO_TIMEOUT_SEC );
     if (ret) {
         printf("OFI: Error sending data!\n");
 

@@ -623,11 +623,11 @@ static void nn_sofi_poller_thread (void *arg)
         //     break;
         // }
 
-        /* Handle errors */
-        if (ret) {
-            printf("OFI: Unable to receive payload!\n");
-            goto error;
-        }
+        // /* Handle errors */
+        // if (ret) {
+        //     printf("OFI: Unable to receive payload!\n");
+        //     goto error;
+        // }
 
         // /* Final part of small slab messages */
         // if (size < self->slab_size) {

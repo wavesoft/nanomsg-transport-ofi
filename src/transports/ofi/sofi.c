@@ -35,6 +35,9 @@
 const uint8_t FT_PACKET_KEEPALIVE[8] = {0xFF, 0xFF, 0xFF, 0xFF,
                                         0xFF, 0xFF, 0xFF, 0xFF };
 
+#define FI_MR_DESC_OFFSET(mr,base,reference) \
+        ((void*)fi_mr_desc(mr) + (((void*)reference) - ((void*)base)))
+
 
 /* Helper macro to enable or disable verbose logs on console */
 #ifdef OFI_DEBUG_LOG
@@ -389,7 +392,7 @@ void nn_sofi_mr_outgoing ( struct nn_sofi *self, void * ptr, size_t len, void **
         memcpy( self->ptr_slab_out, ptr, len );
         /* Update pointer */
         *sendptr = self->ptr_slab_out;
-        *descptr = fi_mr_desc( self->mr_slab->mr );
+        *descptr = FI_MR_DESC_OFFSET( self->mr_slab->mr, self->ptr_slab_out, self->mr_slab_ptr );
     }
     else
     {
@@ -429,7 +432,7 @@ static int nn_sofi_send (struct nn_pipebase *self, struct nn_msg *msg)
     /* IOV[0] : Use outhdr pointer */
     iov [0].iov_base = sofi->ptr_slab_sysptr->outhdr;
     iov [0].iov_len = sz_outhdr;
-    iov_desc[0] = fi_mr_desc( sofi->mr_slab->mr );
+    iov_desc[0] = FI_MR_DESC_OFFSET( sofi->mr_slab->mr, &sofi->ptr_slab_sysptr->outhdr, sofi->ptr_slab_sysptr );
 
     /* Include SPHDR only if exists! */
     if (sz_sphdr > 0) {
@@ -438,7 +441,7 @@ static int nn_sofi_send (struct nn_pipebase *self, struct nn_msg *msg)
         memcpy( sofi->ptr_slab_sysptr->sphdr, nn_chunkref_data (&sofi->outmsg.sphdr), sz_sphdr );
         iov [1].iov_base = sofi->ptr_slab_sysptr->sphdr;
         iov [1].iov_len = sz_sphdr;
-        iov_desc[1] = fi_mr_desc( sofi->mr_slab->mr );
+        iov_desc[1] = FI_MR_DESC_OFFSET( sofi->mr_slab->mr, &sofi->ptr_slab_sysptr->sphdr, sofi->ptr_slab_sysptr );
 
         /* IOV[2] : Smart management (copy or tag) of the body pointer */
         iov [2].iov_len = sz_body;
@@ -525,7 +528,7 @@ static void nn_sofi_poller_thread (void *arg)
         /* Receive data from OFI */
         iov [0].iov_base = self->ptr_slab_sysptr->inhdr;
         iov [0].iov_len = sizeof(self->ptr_slab_sysptr->inhdr);
-        iov_desc[0] = fi_mr_desc( self->mr_slab->mr );
+        iov_desc[0] = FI_MR_DESC_OFFSET( self->mr_slab->mr, &self->ptr_slab_sysptr->inhdr, self->ptr_slab_sysptr );
 
         /* Initialize msg with MAXIMUM POSSIBLE receive size */
         nn_msg_term (&self->inmsg);
@@ -744,7 +747,7 @@ static void nn_sofi_handler (struct nn_fsm *self, int src, int type,
                     memcpy( sofi->ptr_slab_sysptr->outhdr, FT_PACKET_KEEPALIVE, sizeof(FT_PACKET_KEEPALIVE) );
                     iov [0].iov_base = sofi->ptr_slab_sysptr->outhdr;
                     iov [0].iov_len = sizeof(FT_PACKET_KEEPALIVE);
-                    iov_desc[0] = fi_mr_desc( sofi->mr_slab->mr );
+                    iov_desc[0] = FI_MR_DESC_OFFSET( sofi->mr_slab->mr, &sofi->ptr_slab_sysptr->outhdr, sofi->ptr_slab_sysptr );
                     ret = ofi_tx_msg( sofi->ep, iov, iov_desc, 1, 0, NN_SOFI_KEEPALIVE_INTERVAL / 1000 );
                     if (ret) {
                         /* TODO: Handle errors */

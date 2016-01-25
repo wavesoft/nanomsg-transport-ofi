@@ -182,15 +182,20 @@ int ft_wait(struct fid_cq *cq)
 /**
  * Wait for completion queue, also listening for shutdown events on the event queue
  */
-int ft_wait_shutdown_aware(struct fid_cq *cq, struct fid_eq *eq, int timeout)
+int ft_wait_shutdown_aware(struct fid_cq *cq, struct fid_eq *eq, int timeout, struct fi_cq_data_entry * ret_entry)
 {
 	struct fi_eq_cm_entry eq_entry;
 	struct fi_cq_data_entry entry;
+	struct fi_cq_data_entry * entry_ptr = &entry;
 	struct timespec a, b;
 	uint32_t event;
 	uint8_t shutdown_interval;
 	uint8_t fast_poller;
 	int ret;
+
+	/* Override entry pointer if we have given a fi_cq_data_entry to fill */
+	if (ret_entry != NULL)
+		entry_ptr = ret_entry;
 
 	/* Get the starting time to timeout after */
 	if (timeout >= 0)
@@ -206,7 +211,7 @@ int ft_wait_shutdown_aware(struct fid_cq *cq, struct fid_eq *eq, int timeout)
 		// ret = fi_cq_sread(cq, &entry, 1, NULL, 500);
 		fast_poller=255; 
 		do {
-			ret = fi_cq_read(cq, &entry, 1);
+			ret = fi_cq_read(cq, entry_ptr, 1);
 		} while (nn_fast( (ret == -FI_EAGAIN) && (--fast_poller > 0) ));
 
 		/* Operation failed */
@@ -434,7 +439,7 @@ ssize_t ofi_tx_msg( struct ofi_active_endpoint * EP, const struct iovec *msg_iov
 	}
 
 	/* Wait for Tx CQ event (when 'the buffer can be reused' - INJECT_COMPLETE) */
-	ret = ft_wait_shutdown_aware(EP->tx_cq, EP->eq, timeout);
+	ret = ft_wait_shutdown_aware(EP->tx_cq, EP->eq, timeout, NULL);
 	if (ret) {
 
 		/* Be silent on known errors */
@@ -454,9 +459,10 @@ ssize_t ofi_tx_msg( struct ofi_active_endpoint * EP, const struct iovec *msg_iov
  * Receive a scatter-gather array message over OFI
  */
 ssize_t ofi_rx_msg( struct ofi_active_endpoint * EP, const struct iovec *msg_iov, void ** msg_iov_desc, 
-		size_t iov_count, uint64_t flags, int timeout )
+		size_t iov_count, size_t * rx_size, uint64_t flags, int timeout )
 {
 	int ret;
+	struct fi_cq_data_entry cq_entry;
 
 	/* Prepare fi_msg */
 	// struct fi_msg msg = {
@@ -484,7 +490,7 @@ ssize_t ofi_rx_msg( struct ofi_active_endpoint * EP, const struct iovec *msg_iov
 	}
 
 	/* Wait for Rx CQ */
-	ret = ft_wait_shutdown_aware(EP->rx_cq, EP->eq, timeout);
+	ret = ft_wait_shutdown_aware(EP->rx_cq, EP->eq, timeout, &cq_entry);
 	if (ret) {
 
 		/* Be silent on known errors */
@@ -495,6 +501,10 @@ ssize_t ofi_rx_msg( struct ofi_active_endpoint * EP, const struct iovec *msg_iov
 		FT_PRINTERR("ft_wait<rx_cq>", ret);
 		return ret;
 	}
+
+	/* Update size pointer if specified */
+	if (rx_size != NULL)
+		*rx_size = cq_entry.len;
 
 	/* Success */
 	return 0;
@@ -990,7 +1000,7 @@ int ofi_mr_alloc( struct ofi_active_endpoint * ep, struct ofi_mr ** mmr )
 /**
  * Tag a particular memory region as shared
  */
-int ofi_mr_manage( struct ofi_active_endpoint * EP, struct ofi_mr * mr, void * buf, size_t len, uint64_t requested_key, enum ofi_mr_flags flags )
+int ofi_mr_manage( struct ofi_active_endpoint * EP, struct ofi_mr * mr, void * buf, size_t len, int requested_key, enum ofi_mr_flags flags )
 {
 	int ret;
 	uint64_t access_flags = 0;
@@ -1020,6 +1030,9 @@ int ofi_mr_manage( struct ofi_active_endpoint * EP, struct ofi_mr * mr, void * b
 		FT_PRINTERR("fi_mr_reg", ret);
 		return ret;
 	}
+
+	/* Keep pointer reference */
+	mr->ptr = buf;
 
 	/* Success */
 	return 0;

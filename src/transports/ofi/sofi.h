@@ -66,6 +66,8 @@ struct nn_sofi {
 
     /* Input buffers */
     struct nn_msg inmsg;
+    struct nn_chunk * inmsg_chunk;
+    struct ofi_mr * mr_inmsg;
 
     /* Output buffers */
     struct nn_msg outmsg;
@@ -89,8 +91,8 @@ struct nn_sofi {
     /* First draft of smart MM */
     int                     slab_size, recv_buffer_size;
     struct ofi_mr           *mr_slab, *mr_user;
-    void                    *mr_slab_ptr, *mr_slab_data_in, *mr_slab_data_out, *mr_slab_inmsg;
-    struct nn_ofi_sys_ptrs  *mr_sys_ptr;
+    void                    *mr_slab_ptr, /* *mr_slab_data_in, */ *ptr_slab_out, *mr_slab_inmsg;
+    struct nn_ofi_sys_ptrs  *ptr_slab_sysptr;
 
 };
 

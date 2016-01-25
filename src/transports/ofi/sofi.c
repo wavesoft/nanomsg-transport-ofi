@@ -71,6 +71,7 @@ const uint8_t FT_PACKET_KEEPALIVE[8] = {0xFF, 0xFF, 0xFF, 0xFF,
 /* MR Keys */
 #define NN_SOFI_MR_KEY_USER                 1
 #define NN_SOFI_MR_KEY_SLAB                 2
+#define NN_SOFI_MR_KEY_INMSG                3
 
 /*  State machine functions. */
 static void nn_sofi_handler (struct nn_fsm *self, int src, int type, 
@@ -86,7 +87,65 @@ const struct nn_pipebase_vfptr nn_sofi_pipebase_vfptr = {
     nn_sofi_recv
 };
 
+/* Polling function forward declaration */
 static void nn_sofi_poller_thread (void *arg);
+
+/* =============================================================== */
+/* == BEGIN HACKING ============================================== */
+/* =============================================================== */
+
+#include "../../utils/atomic.h"
+#include <assert.h>
+
+#define NN_SOFI_CHUNK_TAG 0xdeadcafe
+
+typedef void (*nn_ofi_chunk_free_fn) (void *p);
+
+/* Local description of nn_chunk for hacking */
+struct nn_sofi_chunk {
+
+    /*  Number of places the chunk is referenced from. */
+    struct nn_atomic refcount;
+
+    /*  Size of the message in bytes. */
+    size_t size;
+
+    /*  Deallocation function. */
+    nn_ofi_chunk_free_fn ffn;
+
+    /*  The structure if followed by optional empty space, a 32 bit unsigned
+        integer specifying the size of said empty space, a 32 bit tag and
+        the message data itself. */
+};
+
+static struct nn_sofi_chunk *nn_sofi_chunk_getptr (void *p)
+{
+    uint32_t off;
+
+    nn_assert (nn_getl ((uint8_t*) p - sizeof (uint32_t)) == NN_SOFI_CHUNK_TAG);
+    off = nn_getl ((uint8_t*) p - 2 * sizeof (uint32_t));
+
+    return (struct  nn_sofi_chunk*) ((uint8_t*) p - 2 *sizeof (uint32_t) - off -
+        sizeof (struct nn_sofi_chunk));
+}
+
+/**
+ * Hack to update chunkref size
+ */
+void nn_sofi_DANGEROUS_hack_chunk_size( void * ptr, size_t size )
+{
+
+    /* Access the internals of the chunk */
+    struct nn_sofi_chunk * chunk = nn_sofi_chunk_getptr(ptr);
+
+    /* Fake size without reallocation */
+    printf("!!!! Hacking from %lu to %lu (ptr=%p) !!!!\n", chunk->size, size, ptr);
+    chunk->size = size;
+}
+
+/* =============================================================== */
+/* == END HACKING ================================================ */
+/* =============================================================== */
 
 /**
  * Create a streaming (connected) OFI Socket
@@ -132,18 +191,20 @@ void nn_sofi_init (struct nn_sofi *self,
     _ofi_debug("OFI: SOFI: Socket options NN_OFI_SLABMR_SIZE=%i, NN_RCVBUF=%i\n", self->slab_size, self->recv_buffer_size);
 
     /* Allocate slab buffer */
-    self->mr_slab_ptr = nn_alloc( self->slab_size * 2 + sizeof( struct nn_ofi_sys_ptrs ), "ofi (slab memory)" );
+    size_t slab_size = sizeof( struct nn_ofi_sys_ptrs ) + self->slab_size;
+    self->mr_slab_ptr = nn_alloc( slab_size, "ofi (slab memory)" );
     if (!self->mr_slab_ptr) {
         printf("OFI: SOFI: ERROR: Unable to allocate slab memory region!\n");
         return;
     }
 
     /* Get pointer to slab user/slab data */
-    self->mr_slab_data_in = self->mr_slab_ptr + sizeof( struct nn_ofi_sys_ptrs );
-    self->mr_slab_data_out = self->mr_slab_data_in + self->slab_size;
-    self->mr_sys_ptr = (struct nn_ofi_sys_ptrs *) self->mr_slab_ptr;
+    self->ptr_slab_sysptr = (struct nn_ofi_sys_ptrs *) self->mr_slab_ptr;
+    // self->mr_slab_data_in = self->mr_slab_ptr + sizeof( struct nn_ofi_sys_ptrs );
+    // self->ptr_slab_out = self->mr_slab_data_in + self->slab_size;
+    self->ptr_slab_out = self->mr_slab_ptr + sizeof( struct nn_ofi_sys_ptrs );
 
-    /* Allocate a new memory region management helper */
+    /* [1] MR Helper : For SLAB */
     ret = ofi_mr_alloc( self->ep, &self->mr_slab );
     if (ret) {
        /* TODO: Handle error */
@@ -153,18 +214,52 @@ void nn_sofi_init (struct nn_sofi *self,
 
     /* Mark the memory region */
     ret = ofi_mr_manage( self->ep, self->mr_slab, self->mr_slab_ptr, 
-        self->slab_size * 2 + sizeof( struct nn_ofi_sys_ptrs ), NN_SOFI_MR_KEY_SLAB, MR_SEND | MR_RECV );
+        slab_size, NN_SOFI_MR_KEY_SLAB, MR_SEND | MR_RECV );
     if (ret) {
        /* TODO: Handle error */
        printf("OFI: SOFI: ERROR: Unable to mark the slab memory MR region!\n");
        return;
     }
 
-    /* Allocate a new memory region management helper */
+    /* ==================== */
+
+    /* [2] MR Helper : For USER DATA */
     ret = ofi_mr_alloc( self->ep, &self->mr_user );
     if (ret) {
        /* TODO: Handle error */
        printf("OFI: SOFI: ERROR: Unable to allocate an MR management object for user objects!\n");
+       return;
+    }
+
+    /* ==================== */
+
+    /**
+     * Allocate a reusable chunk for incoming messages
+     */
+    ret = nn_chunk_alloc( self->recv_buffer_size, 0, (void**)&self->inmsg_chunk );
+    if (ret) {
+       /* TODO: Handle error */
+       printf("OFI: SOFI: ERROR: Unable to allocate inmsg chunk!\n");
+       return;
+    }
+
+    /* Increment reference counter by 1 so it's not disposed on msg_term */
+    nn_chunk_addref( self->inmsg_chunk, 1 );
+
+    /* [3] MR Helper : For INPTR */
+    ret = ofi_mr_alloc( self->ep, &self->mr_inmsg );
+    if (ret) {
+       /* TODO: Handle error */
+       printf("OFI: SOFI: ERROR: Unable to allocate an MR management object for inmsg objects!\n");
+       return;
+    }
+
+    /* Mark the memory region */
+    ret = ofi_mr_manage( self->ep, self->mr_inmsg, self->inmsg_chunk, 
+        self->recv_buffer_size, NN_SOFI_MR_KEY_INMSG, MR_RECV );
+    if (ret) {
+       /* TODO: Handle error */
+       printf("OFI: SOFI: ERROR: Unable to mark the slab memory MR region!\n");
        return;
     }
 
@@ -193,6 +288,10 @@ void nn_sofi_init (struct nn_sofi *self,
  */
 void nn_sofi_term (struct nn_sofi *self)
 {
+
+    /* Free memory */
+    nn_chunk_free( self->inmsg_chunk );
+    nn_free( self->mr_slab_ptr );
 
     /* Cleanup instantiated resources */
     nn_list_item_term (&self->item);
@@ -261,7 +360,7 @@ static void nn_sofi_shutdown (struct nn_fsm *self, int src, int type,
         _ofi_debug("OFI: Freeing memory resources\n");
         ofi_mr_free( sofi->ep, &sofi->mr_slab );
         ofi_mr_free( sofi->ep, &sofi->mr_user );
-        nn_free( sofi->mr_slab_ptr );
+        ofi_mr_free( sofi->ep, &sofi->mr_inmsg );
 
         /*  Stop endpoint and wait for worker. */
         _ofi_debug("OFI: Freeing endpoint resources\n");
@@ -287,9 +386,9 @@ void nn_sofi_mr_outgoing ( struct nn_sofi *self, void * ptr, size_t len, void **
     if (len < self->slab_size)
     {
         /* Copy to already allocated user-region of shared MR */
-        memcpy( self->mr_slab_data_out, ptr, len );
+        memcpy( self->ptr_slab_out, ptr, len );
         /* Update pointer */
-        *sendptr = self->mr_slab_data_out;
+        *sendptr = self->ptr_slab_out;
         *descptr = fi_mr_desc( self->mr_slab->mr );
     }
     else
@@ -316,50 +415,36 @@ static int nn_sofi_send (struct nn_pipebase *self, struct nn_msg *msg)
     sofi = nn_cont (self, struct nn_sofi, pipebase);
 
     /*  Start async sending. */
-    size_t sz_outhdr = sizeof(sofi->mr_sys_ptr->outhdr);
+    size_t sz_outhdr = sizeof(sofi->ptr_slab_sysptr->outhdr);
     size_t sz_sphdr = nn_chunkref_size (&msg->sphdr);
     size_t sz_body = nn_chunkref_size (&msg->body);
 
     /*  Serialise the message header. */
-    nn_putll (sofi->mr_sys_ptr->outhdr, sz_sphdr + sz_body);
+    nn_putll (sofi->ptr_slab_sysptr->outhdr, sz_sphdr + sz_body);
 
     /*  Move the message to the local storage. */
     nn_msg_term (&sofi->outmsg);
     nn_msg_mv (&sofi->outmsg, msg);
 
-    /*  IOV[0] : Output Header. */
-    iov [0].iov_base = sofi->mr_sys_ptr->outhdr;
+    /* IOV[0] : Use outhdr pointer */
+    iov [0].iov_base = sofi->ptr_slab_sysptr->outhdr;
     iov [0].iov_len = sz_outhdr;
     iov_desc[0] = fi_mr_desc( sofi->mr_slab->mr );
 
-    /* Send header */
-    _ofi_debug("OFI: SOFI: Sending header [type=data,size=%lu] (len=%lu)\n", sz_sphdr+sz_body, sz_outhdr );
-    ret = ofi_tx_msg( sofi->ep, iov, iov_desc, 1, FI_TRANSMIT_COMPLETE, NN_SOFI_IO_TIMEOUT_SEC );
-    if (ret) {
-        printf("OFI: Error sending data!\n");
-
-        /* Shutdown because of error */        
-        sofi->shutdown_reason = NN_SOFI_SHUTDOWN_DISCONNECT;
-        nn_timer_start( &sofi->shutdown_timer, 1 );
-
-        /* This did not work out, but don't let nanomsg know */
-        return 0;
-    }
-
-    /* IOV[1] : SPHDR to shared MR */
-    memcpy( sofi->mr_sys_ptr->sphdr, nn_chunkref_data (&sofi->outmsg.sphdr), sz_sphdr );
-    iov [0].iov_base = sofi->mr_sys_ptr->sphdr;
-    iov [0].iov_len = sz_sphdr;
-    iov_desc[0] = fi_mr_desc( sofi->mr_slab->mr );
+    /* IOV[1] : Copy outmsg SPHDR to shared MR[sphdr] */
+    memcpy( sofi->ptr_slab_sysptr->sphdr, nn_chunkref_data (&sofi->outmsg.sphdr), sz_sphdr );
+    iov [1].iov_base = sofi->ptr_slab_sysptr->sphdr;
+    iov [1].iov_len = sz_sphdr;
+    iov_desc[1] = fi_mr_desc( sofi->mr_slab->mr );
 
     /* IOV[2] : Smart management (copy or tag) of the body pointer */
-    iov [1].iov_len = sz_body;
+    iov [2].iov_len = sz_body;
     nn_sofi_mr_outgoing( sofi, nn_chunkref_data (&sofi->outmsg.body), sz_body,
-                     &iov[1].iov_base, &iov_desc[2]);
+                     &iov[2].iov_base, &iov_desc[2]);
 
     /* Send payload */
     _ofi_debug("OFI: SOFI: Sending payload (len=%lu)\n", sz_sphdr+sz_body );
-    ret = ofi_tx_msg( sofi->ep, iov, iov_desc, 2, 0, NN_SOFI_IO_TIMEOUT_SEC );
+    ret = ofi_tx_msg( sofi->ep, iov, iov_desc, 3, 0, NN_SOFI_IO_TIMEOUT_SEC );
     if (ret) {
         printf("OFI: Error sending data!\n");
 
@@ -392,6 +477,7 @@ static int nn_sofi_recv (struct nn_pipebase *self, struct nn_msg *msg)
     sofi = nn_cont (self, struct nn_sofi, pipebase);
 
     /* Move received message to the user. */
+    nn_chunk_addref( sofi->inmsg_chunk, 1 );
     nn_msg_mv (msg, &sofi->inmsg);
     nn_msg_init (&sofi->inmsg, 0);
 
@@ -421,12 +507,26 @@ static void nn_sofi_poller_thread (void *arg)
         /* --------------------------------------------------- */
 
         /* Receive data from OFI */
-        iov [0].iov_base = self->mr_sys_ptr->inhdr;
-        iov [0].iov_len = sizeof(self->mr_sys_ptr->inhdr);
+        iov [0].iov_base = self->ptr_slab_sysptr->inhdr;
+        iov [0].iov_len = sizeof(self->ptr_slab_sysptr->inhdr);
         iov_desc[0] = fi_mr_desc( self->mr_slab->mr );
 
-        _ofi_debug("OFI: SOFI: Waiting for incoming header\n");
-        ret = ofi_rx_msg( self->ep, iov, iov_desc, 1, 0, -1 );
+        /* Initialize msg with MAXIMUM POSSIBLE receive size */
+        nn_msg_term (&self->inmsg);
+        nn_msg_init_chunk (&self->inmsg, self->inmsg_chunk);
+
+        // /* Manage this memory region */
+        // ofi_mr_manage( self->ep, self->mr_user, nn_chunkref_data(&self->inmsg.body), 
+        //     self->recv_buffer_size, NN_SOFI_MR_KEY_USER, MR_RECV );
+
+        /* Use the message body buffer for receving endpoint */
+        iov [1].iov_base = self->inmsg_chunk;
+        iov [1].iov_len = self->recv_buffer_size;
+        iov_desc[1] = fi_mr_desc( self->mr_inmsg->mr );
+
+        /* Wait for incoming data */
+        _ofi_debug("OFI: SOFI: Waiting for incoming data\n");
+        ret = ofi_rx_msg( self->ep, iov, iov_desc, 2, NULL, 0, -1 );
         if (ret == -FI_REMOTE_DISCONNECT) { /* Remotely disconnected */
             _ofi_debug("OFI: Remotely disconnected!\n");
             break;
@@ -450,7 +550,7 @@ static void nn_sofi_poller_thread (void *arg)
         self->keepalive_rx_ctr = 0;
 
         /* Check if this is a polling message */
-        if (memcmp(self->mr_sys_ptr->inhdr, FT_PACKET_KEEPALIVE, sizeof(FT_PACKET_KEEPALIVE)) == 0) {
+        if (memcmp(self->ptr_slab_sysptr->inhdr, FT_PACKET_KEEPALIVE, sizeof(FT_PACKET_KEEPALIVE)) == 0) {
             _ofi_debug("OFI: SOFI: Received keepalive packet\n");
             continue;
         }
@@ -458,43 +558,51 @@ static void nn_sofi_poller_thread (void *arg)
         /*  Message header was received. Check that message size
             is acceptable by comparing with NN_RCVMAXSIZE;
             if it's too large, drop the connection. */
-        size = nn_getll ( self->mr_sys_ptr->inhdr );
+        size = nn_getll ( self->ptr_slab_sysptr->inhdr );
         _ofi_debug("OFI: SOFI: Got incoming message of %li bytes\n", size);
 
-        /* Initialize msg with rx chunk */
-        nn_msg_term (&self->inmsg);
-        nn_msg_init( &self->inmsg, size );
-
-        /* Decide how to receive the message */
-        if (size < self->slab_size) {
-            _ofi_debug("OFI: SOFI: Using memcpy because size < %i\n", self->slab_size);
-
-            /* Use the memory slab as the receving endpoint */
-            iov [0].iov_base = self->mr_slab_data_in;
-            iov [0].iov_len = size;
-            iov_desc[0] = fi_mr_desc( self->mr_slab->mr );
-        
+        /* Hack to force new message size on the chunkref */
+        if (size <= self->recv_buffer_size) {
+            nn_sofi_DANGEROUS_hack_chunk_size( self->inmsg_chunk, size );
         } else {
-            _ofi_debug("OFI: SOFI: Using mr because size >= %i\n", self->slab_size);
-
-            /* Manage this memory region */
-            ofi_mr_manage( self->ep, self->mr_user, nn_chunkref_data(&self->inmsg.body), 
-                size, NN_SOFI_MR_KEY_USER, MR_RECV );
-
-            /* Use the message buffer as our new shared memory region */
-            iov [0].iov_base = nn_chunkref_data(&self->inmsg.body);
-            iov [0].iov_len = size;
-            iov_desc[0] = fi_mr_desc( self->mr_user->mr );
-
+            printf("WARNING: Silent data truncation from %lu to %d (increase your receive buffer size!)\n", size, self->recv_buffer_size );
+            nn_sofi_DANGEROUS_hack_chunk_size( self->inmsg_chunk, self->recv_buffer_size );
         }
 
-        /* Receive the actual message */
-        _ofi_debug("OFI: SOFI: Receiving data\n");
-        ret = ofi_rx_msg( self->ep, iov, iov_desc, 1, 0, -1 );
-        if (ret == -FI_REMOTE_DISCONNECT) { /* Remotely disconnected */
-            _ofi_debug("OFI: Remotely disconnected!\n");
-            break;
-        }
+        // /* Initialize msg with rx chunk */
+        // nn_msg_term (&self->inmsg);
+        // nn_msg_init( &self->inmsg, size );
+
+        // /* Decide how to receive the message */
+        // if (size < self->slab_size) {
+        //     _ofi_debug("OFI: SOFI: Using memcpy because size < %i\n", self->slab_size);
+
+        //     /* Use the memory slab as the receving endpoint */
+        //     iov [0].iov_base = self->mr_slab_data_in;
+        //     iov [0].iov_len = size;
+        //     iov_desc[0] = fi_mr_desc( self->mr_slab->mr );
+        
+        // } else {
+        //     _ofi_debug("OFI: SOFI: Using mr because size >= %i\n", self->slab_size);
+
+        //     /* Manage this memory region */
+        //     ofi_mr_manage( self->ep, self->mr_user, nn_chunkref_data(&self->inmsg.body), 
+        //         size, NN_SOFI_MR_KEY_USER, MR_RECV );
+
+        //     /* Use the message buffer as our new shared memory region */
+        //     iov [0].iov_base = nn_chunkref_data(&self->inmsg.body);
+        //     iov [0].iov_len = size;
+        //     iov_desc[0] = fi_mr_desc( self->mr_user->mr );
+
+        // }
+
+        // /* Receive the actual message */
+        // _ofi_debug("OFI: SOFI: Receiving data\n");
+        // ret = ofi_rx_msg( self->ep, iov, iov_desc, 1, 0, -1 );
+        // if (ret == -FI_REMOTE_DISCONNECT) { /* Remotely disconnected */
+        //     _ofi_debug("OFI: Remotely disconnected!\n");
+        //     break;
+        // }
 
         /* Handle errors */
         if (ret) {
@@ -502,11 +610,11 @@ static void nn_sofi_poller_thread (void *arg)
             goto error;
         }
 
-        /* Final part of small slab messages */
-        if (size < self->slab_size) {
-            _ofi_debug("OFI: SOFI: Final memcpy to body");
-            memcpy( nn_chunkref_data(&self->inmsg.body), self->mr_slab_data_in, size );
-        }
+        // /* Final part of small slab messages */
+        // if (size < self->slab_size) {
+        //     _ofi_debug("OFI: SOFI: Final memcpy to body");
+        //     memcpy( nn_chunkref_data(&self->inmsg.body), self->mr_slab_data_in, size );
+        // }
 
         /* Notify FSM for the fact that we have received data  */
         nn_ctx_enter( self->fsm.ctx );
@@ -617,8 +725,8 @@ static void nn_sofi_handler (struct nn_fsm *self, int src, int type,
 
                     /* Send keepalive message */
                     _ofi_debug("OFI: SOFI: Sending keepalive!\n");
-                    memcpy( sofi->mr_sys_ptr->outhdr, FT_PACKET_KEEPALIVE, sizeof(FT_PACKET_KEEPALIVE) );
-                    iov [0].iov_base = sofi->mr_sys_ptr->outhdr;
+                    memcpy( sofi->ptr_slab_sysptr->outhdr, FT_PACKET_KEEPALIVE, sizeof(FT_PACKET_KEEPALIVE) );
+                    iov [0].iov_base = sofi->ptr_slab_sysptr->outhdr;
                     iov [0].iov_len = sizeof(FT_PACKET_KEEPALIVE);
                     iov_desc[0] = fi_mr_desc( sofi->mr_slab->mr );
                     ret = ofi_tx_msg( sofi->ep, iov, iov_desc, 1, 0, NN_SOFI_KEEPALIVE_INTERVAL / 1000 );

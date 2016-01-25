@@ -145,7 +145,7 @@ int ofi_alloc( struct ofi_resources * R, enum fi_ep_type ep_type );
 ssize_t ofi_tx_msg( struct ofi_active_endpoint * EP, const struct iovec *msg_iov, void ** msg_iov_desc, 
 	size_t iov_count, uint64_t flags, int timeout );
 ssize_t ofi_rx_msg( struct ofi_active_endpoint * EP, const struct iovec *msg_iov, void ** msg_iov_desc, 
-	size_t iov_count, uint64_t flags, int timeout );
+		size_t iov_count, size_t * rx_size, uint64_t flags, int timeout );
 
 // /**
 //  * Tagged ofi Rx/Tx with additional control information
@@ -231,7 +231,7 @@ int64_t ofi_get_elapsed(const struct timespec *b, const struct timespec *a,
  * Shared region managements
  */
 int ofi_mr_alloc( struct ofi_active_endpoint * ep, struct ofi_mr ** mr );
-int ofi_mr_manage( struct ofi_active_endpoint * EP, struct ofi_mr * mr, void * buf, size_t len, uint64_t requested_key, enum ofi_mr_flags flags );
+int ofi_mr_manage( struct ofi_active_endpoint * EP, struct ofi_mr * mr, void * buf, size_t len, int requested_key, enum ofi_mr_flags flags );
 int ofi_mr_unmanage( struct ofi_active_endpoint * ep, struct ofi_mr * mr );
 int ofi_mr_free( struct ofi_active_endpoint * ep, struct ofi_mr ** mr );
 

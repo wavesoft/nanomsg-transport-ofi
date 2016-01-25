@@ -408,23 +408,24 @@ ssize_t ofi_tx_msg( struct ofi_active_endpoint * EP, const struct iovec *msg_iov
 {
 	ssize_t ret;
 
-	/* Count the size of the message */
-	ret = 0;
-	for (int i=0; i<iov_count; i++)
-		ret += msg_iov[i].iov_len;
+	// /* Count the size of the message */
+	// ret = 0;
+	// for (int i=0; i<iov_count; i++)
+	// 	ret += msg_iov[i].iov_len;
 
 	/* Prepare fi_msg */
-	// struct fi_msg msg = {
-	// 	.msg_iov = msg_iov,
-	// 	.iov_count = iov_count,
-	// 	.desc = msg_iov_desc,
-	// 	.addr = EP->remote_fi_addr,
-	// 	.context = &EP->tx_ctx,
-	// 	.data = ret
-	// };
+	struct fi_msg msg = {
+		.msg_iov = msg_iov,
+		.iov_count = iov_count,
+		.desc = msg_iov_desc,
+		.addr = EP->remote_fi_addr,
+		.context = &EP->tx_ctx,
+		.data = 0
+	};
 
 	/* Send data */
-	ret = fi_sendv(EP->ep, msg_iov, msg_iov_desc, iov_count, EP->remote_fi_addr, &EP->tx_ctx );
+	// ret = fi_sendmsg(EP->ep, msg_iov, msg_iov_desc, iov_count, EP->remote_fi_addr, &EP->tx_ctx );
+	ret = fi_sendmsg(EP->ep, &msg, 0);
 	if (ret) {
 
 		/* If we are in a bad state, we were remotely disconnected */
@@ -465,17 +466,18 @@ ssize_t ofi_rx_msg( struct ofi_active_endpoint * EP, const struct iovec *msg_iov
 	struct fi_cq_data_entry cq_entry;
 
 	/* Prepare fi_msg */
-	// struct fi_msg msg = {
-	// 	.msg_iov = msg_iov,
-	// 	.iov_count = iov_count,
-	// 	.desc = msg_iov_desc,
-	// 	.addr = EP->remote_fi_addr,
-	// 	.context = &EP->rx_ctx,
-	// 	.data = 0
-	// };
+	struct fi_msg msg = {
+		.msg_iov = msg_iov,
+		.iov_count = iov_count,
+		.desc = msg_iov_desc,
+		.addr = EP->remote_fi_addr,
+		.context = &EP->rx_ctx,
+		.data = 0
+	};
 
 	/* Receive data */
-	ret = fi_recvv(EP->ep, msg_iov, msg_iov_desc, iov_count, EP->remote_fi_addr, &EP->rx_ctx);
+	// ret = fi_recvv(EP->ep, msg_iov, msg_iov_desc, iov_count, EP->remote_fi_addr, &EP->rx_ctx);
+	ret = fi_recvmsg(EP->ep, &msg, 0);
 	if (ret) {
 
 		/* If we are in a bad state, we were remotely disconnected */

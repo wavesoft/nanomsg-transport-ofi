@@ -142,7 +142,7 @@ void nn_sofi_DANGEROUS_hack_chunk_size( void * ptr, size_t size )
     struct nn_sofi_chunk * chunk = nn_sofi_chunk_getptr(ptr);
 
     /* Fake size without reallocation */
-    printf("!!!! Hacking from %lu to %lu (ptr=%p) !!!!\n", chunk->size, size, ptr);
+    //printf("!!!! Hacking from %lu to %lu (ptr=%p) !!!!\n", chunk->size, size, ptr);
     chunk->size = size;
 }
 
@@ -529,7 +529,7 @@ static void nn_sofi_poller_thread (void *arg)
         iov_desc[0] = FI_MR_DESC_OFFSET( self->mr_slab->mr, &self->ptr_slab_sysptr->inhdr, self->ptr_slab_sysptr );
 
         /* Initialize msg with MAXIMUM POSSIBLE receive size */
-        nn_msg_term (&self->inmsg);
+        // nn_msg_term (&self->inmsg);
         nn_msg_init_chunk (&self->inmsg, self->inmsg_chunk);
 
         // /* Manage this memory region */

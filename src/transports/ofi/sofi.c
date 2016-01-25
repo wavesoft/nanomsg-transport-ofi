@@ -518,32 +518,39 @@ static void nn_sofi_poller_thread (void *arg)
     void * iov_desc  [2];
     struct nn_sofi * self = (struct nn_sofi *) arg;
 
+    /* Post receive buffers */
+    
+
+    /* Input header pointer */
+    iov [0].iov_base = self->ptr_slab_sysptr->inhdr;
+    iov [0].iov_len = sizeof(self->ptr_slab_sysptr->inhdr);
+    iov_desc[0] = FI_MR_DESC_OFFSET( self->mr_slab->mr, &self->ptr_slab_sysptr->inhdr, self->ptr_slab_sysptr );
+
+    /* Use the message body buffer for receving endpoint */
+    iov [1].iov_base = self->inmsg_chunk;
+    iov [1].iov_len = self->recv_buffer_size;
+    iov_desc[1] = fi_mr_desc( self->mr_inmsg->mr );
+
+    /* Wait for incoming data */
+    _ofi_debug("OFI: SOFI: Posting receive buffers\n");
+    ret = ofi_rx_postmsg( self->ep, iov, iov_desc, 2, 0 );
+    if (ret) {
+        printf("OFI: Unable to post receive buffers!\n");
+        goto error;
+    }
+
     /* Infinite loop */
     while (1) {
 
         /* --------------------------------------------------- */
 
-        /* Receive data from OFI */
-        iov [0].iov_base = self->ptr_slab_sysptr->inhdr;
-        iov [0].iov_len = sizeof(self->ptr_slab_sysptr->inhdr);
-        iov_desc[0] = FI_MR_DESC_OFFSET( self->mr_slab->mr, &self->ptr_slab_sysptr->inhdr, self->ptr_slab_sysptr );
-
         /* Initialize msg with MAXIMUM POSSIBLE receive size */
         // nn_msg_term (&self->inmsg);
         nn_msg_init_chunk (&self->inmsg, self->inmsg_chunk);
 
-        // /* Manage this memory region */
-        // ofi_mr_manage( self->ep, self->mr_user, nn_chunkref_data(&self->inmsg.body), 
-        //     self->recv_buffer_size, NN_SOFI_MR_KEY_USER, MR_RECV );
-
-        /* Use the message body buffer for receving endpoint */
-        iov [1].iov_base = self->inmsg_chunk;
-        iov [1].iov_len = self->recv_buffer_size;
-        iov_desc[1] = fi_mr_desc( self->mr_inmsg->mr );
-
         /* Wait for incoming data */
         _ofi_debug("OFI: SOFI: Waiting for incoming data\n");
-        ret = ofi_rx_msg( self->ep, iov, iov_desc, 2, NULL, 0, -1 );
+        ret = ofi_rx_waitmsg( self->ep, -1 );
         if (ret == -FI_REMOTE_DISCONNECT) { /* Remotely disconnected */
             _ofi_debug("OFI: Remotely disconnected!\n");
             break;

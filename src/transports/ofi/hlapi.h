@@ -147,6 +147,10 @@ ssize_t ofi_tx_msg( struct ofi_active_endpoint * EP, const struct iovec *msg_iov
 ssize_t ofi_rx_msg( struct ofi_active_endpoint * EP, const struct iovec *msg_iov, void ** msg_iov_desc, 
 		size_t iov_count, size_t * rx_size, uint64_t flags, int timeout );
 
+ssize_t ofi_rx_waitmsg( struct ofi_active_endpoint * EP, int timeout  );
+ssize_t ofi_rx_postmsg( struct ofi_active_endpoint * EP, const struct iovec *msg_iov, void ** msg_iov_desc, 
+		size_t iov_count, uint64_t flags );
+
 // /**
 //  * Tagged ofi Rx/Tx with additional control information
 //  */

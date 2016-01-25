@@ -281,7 +281,7 @@ int ft_wait_shutdown_aware(struct fid_cq *cq, struct fid_eq *eq, int timeout, st
 	 //       	usleep(100); 
 		// 	fast_poller = 0;
 		// }
-		pthread_yield();
+		// pthread_yield();
 
 
 	}
@@ -454,6 +454,69 @@ ssize_t ofi_tx_msg( struct ofi_active_endpoint * EP, const struct iovec *msg_iov
 
 		/* Otherwise display error */
 		FT_PRINTERR("ft_wait<tx_cq>", ret);
+		return ret;
+	}
+
+	/* Success */
+	return 0;
+}
+
+/**
+ * Post the receive buffers
+ */
+ssize_t ofi_rx_postmsg( struct ofi_active_endpoint * EP, const struct iovec *msg_iov, void ** msg_iov_desc, 
+		size_t iov_count, uint64_t flags )
+{
+	int ret;
+
+	/* Prepare fi_msg */
+	struct fi_msg msg = {
+		.msg_iov = msg_iov,
+		.iov_count = iov_count,
+		.desc = msg_iov_desc,
+		.addr = EP->remote_fi_addr,
+		.context = &EP->rx_ctx,
+		.data = 0
+	};
+
+	/* Receive data */
+	// ret = fi_recvv(EP->ep, msg_iov, msg_iov_desc, iov_count, EP->remote_fi_addr, &EP->rx_ctx);
+	ret = fi_recvmsg(EP->ep, &msg, 0);
+	if (ret) {
+
+		/* If we are in a bad state, we were remotely disconnected */
+		if (ret == -FI_EOPBADSTATE) {
+			_ofi_debug("OFI: HLAPI: ofi_rx() returned %i, considering shutdown.\n", ret);
+			return -FI_REMOTE_DISCONNECT;
+		}
+
+		/* Otherwise display error */
+		FT_PRINTERR("ofi_rx_msg", ret);
+		return ret;
+	}
+
+	/* Success */
+	return 0;
+}
+
+/**
+ * Wait for Rx Event
+ */
+ssize_t ofi_rx_waitmsg( struct ofi_active_endpoint * EP, int timeout  )
+{
+	int ret;
+	struct fi_cq_data_entry cq_entry;
+
+	/* Wait for Rx CQ */
+	ret = ft_wait_shutdown_aware(EP->rx_cq, EP->eq, timeout, &cq_entry);
+	if (ret) {
+
+		/* Be silent on known errors */
+		if ((ret == -FI_REMOTE_DISCONNECT) || (ret == -FI_ENODATA))
+			return ret;
+
+		/* Otherwise display error */
+		FT_PRINTERR("ft_wait<rx_cq>", ret);
 		return ret;
 	}
 

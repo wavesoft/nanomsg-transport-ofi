@@ -463,6 +463,9 @@ static int nn_sofi_send (struct nn_pipebase *self, struct nn_msg *msg)
 
     }
 
+    /* Success */
+    nn_pipebase_sent (&sofi->pipebase);
+
     /* Send payload */
     if (ret) {
         printf("OFI: Error sending data!\n");
@@ -474,9 +477,6 @@ static int nn_sofi_send (struct nn_pipebase *self, struct nn_msg *msg)
         /* This did not work out, but don't let nanomsg know */
         return 0;
     }
-
-    /* Success */
-    nn_pipebase_sent (&sofi->pipebase);
 
     /* Restart keepalive tx counter */
     sofi->keepalive_tx_ctr = 0;

@@ -576,8 +576,8 @@ static void nn_sofi_poller_thread (void *arg)
         self->keepalive_rx_ctr = 0;
 
         /* Check if this is a polling message */
-        // if (memcmp(self->ptr_slab_sysptr->inhdr, FT_PACKET_KEEPALIVE, sizeof(FT_PACKET_KEEPALIVE)) == 0) {
-        if (size == 0) {
+        //if (memcmp(self->ptr_slab_sysptr->inhdr, FT_PACKET_KEEPALIVE, sizeof(FT_PACKET_KEEPALIVE)) == 0) {
+        if ((sizeof(FT_PACKET_KEEPALIVE) == size) && (memcmp(self->inmsg_chunk, FT_PACKET_KEEPALIVE, sizeof(FT_PACKET_KEEPALIVE)) == 0)) {
             _ofi_debug("OFI: SOFI: Received keepalive packet\n");
             continue;
         }
@@ -755,12 +755,12 @@ static void nn_sofi_handler (struct nn_fsm *self, int src, int type,
 
                     /* Send keepalive message */
                     _ofi_debug("OFI: SOFI: Sending keepalive!\n");
-                    // memcpy( sofi->ptr_slab_sysptr->outhdr, FT_PACKET_KEEPALIVE, sizeof(FT_PACKET_KEEPALIVE) );
                     // iov [0].iov_base = sofi->ptr_slab_sysptr->outhdr;
                     // iov [0].iov_len = 0;
                     // iov_desc[0] = FI_MR_DESC_OFFSET( sofi->mr_slab->mr, &sofi->ptr_slab_sysptr->outhdr, sofi->ptr_slab_sysptr );
                     // ret = ofi_tx_msg( sofi->ep, iov, iov_desc, 1, 0, NN_SOFI_KEEPALIVE_INTERVAL / 1000 );
-                    ret = ofi_tx_data( sofi->ep, sofi->ptr_slab_sysptr->outhdr, 0, 
+                    memcpy( sofi->ptr_slab_sysptr->outhdr, FT_PACKET_KEEPALIVE, sizeof(FT_PACKET_KEEPALIVE) );
+                    ret = ofi_tx_data( sofi->ep, sofi->ptr_slab_sysptr->outhdr, sizeof(FT_PACKET_KEEPALIVE), 
                         FI_MR_DESC_OFFSET( sofi->mr_slab->mr, &sofi->ptr_slab_sysptr->outhdr, sofi->ptr_slab_sysptr ),
                         NN_SOFI_KEEPALIVE_INTERVAL / 1000 );
                     if (ret) {

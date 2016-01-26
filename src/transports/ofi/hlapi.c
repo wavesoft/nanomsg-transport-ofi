@@ -462,26 +462,58 @@ ssize_t ofi_tx_msg( struct ofi_active_endpoint * EP, const struct iovec *msg_iov
 }
 
 /**
- * Post the receive buffers
+ * Send a single-pointer data
  */
-ssize_t ofi_rx_postmsg( struct ofi_active_endpoint * EP, const struct iovec *msg_iov, void ** msg_iov_desc, 
-		size_t iov_count, uint64_t flags )
+ssize_t ofi_tx_data( struct ofi_active_endpoint * EP, void * buf, const size_t tx_size, 
+		void *desc, int timeout )
+{
+	ssize_t ret;
+
+	/* Send data */
+	// ret = fi_sendmsg(EP->ep, msg_iov, msg_iov_desc, iov_count, EP->remote_fi_addr, &EP->tx_ctx );
+	ret = fi_send(EP->ep, buf, tx_size, desc, EP->remote_fi_addr, &EP->tx_ctx);
+	if (ret) {
+
+		/* If we are in a bad state, we were remotely disconnected */
+		if (ret == -FI_EOPBADSTATE) {
+			_ofi_debug("OFI: HLAPI: ofi_tx_msg() returned -FI_EOPBADSTATE, considering shutdown.\n");
+			return -FI_REMOTE_DISCONNECT;			
+		}
+
+		/* Otherwise display error */
+		FT_PRINTERR("ofi_tx_msg", ret);
+		return ret;
+	}
+
+	/* Wait for Tx CQ event (when 'the buffer can be reused' - INJECT_COMPLETE) */
+	ret = ft_wait_shutdown_aware(EP->tx_cq, EP->eq, timeout, NULL);
+	if (ret) {
+
+		/* Be silent on known errors */
+		if ((ret == -FI_REMOTE_DISCONNECT) || (ret == -FI_ENODATA))
+			return ret;
+
+		/* Otherwise display error */
+		FT_PRINTERR("ft_wait<tx_cq>", ret);
+		return ret;
+	}
+
+	/* Success */
+	return 0;
+
+}
+
+/**
+ * Receive data on a single buffer
+ */
+ssize_t ofi_rx_data( struct ofi_active_endpoint * EP, void * buf, const size_t max_size, 
+		void *desc, size_t * rx_size, int timeout )
 {
 	int ret;
-
-	/* Prepare fi_msg */
-	struct fi_msg msg = {
-		.msg_iov = msg_iov,
-		.iov_count = iov_count,
-		.desc = msg_iov_desc,
-		.addr = EP->remote_fi_addr,
-		.context = &EP->rx_ctx,
-		.data = 0
-	};
+	struct fi_cq_data_entry cq_entry;
 
 	/* Receive data */
-	// ret = fi_recvv(EP->ep, msg_iov, msg_iov_desc, iov_count, EP->remote_fi_addr, &EP->rx_ctx);
-	ret = fi_recvmsg(EP->ep, &msg, 0);
+	ret = fi_recv(EP->ep, buf, max_size, desc, EP->remote_fi_addr, &EP->rx_ctx);
 	if (ret) {
 
 		/* If we are in a bad state, we were remotely disconnected */
@@ -491,21 +523,9 @@ ssize_t ofi_rx_postmsg( struct ofi_active_endpoint * EP, const struct iovec *msg
 		}
 
 		/* Otherwise display error */
-		FT_PRINTERR("ofi_rx_msg", ret);
+		FT_PRINTERR("ofi_rx_data", ret);
 		return ret;
 	}
-
-	/* Success */
-	return 0;
-}
-
-/**
- * Wait for Rx Event
- */
-ssize_t ofi_rx_waitmsg( struct ofi_active_endpoint * EP, int timeout  )
-{
-	int ret;
-	struct fi_cq_data_entry cq_entry;
 
 	/* Wait for Rx CQ */
 	ret = ft_wait_shutdown_aware(EP->rx_cq, EP->eq, timeout, &cq_entry);
@@ -520,7 +540,11 @@ ssize_t ofi_rx_waitmsg( struct ofi_active_endpoint * EP, int timeout  )
 		return ret;
 	}
 
-	/* Success */
+	/* Update size pointer if specified */
+	if (rx_size != NULL)
+		*rx_size = cq_entry.len;
+
+	/* Return 0 */
 	return 0;
 }
 

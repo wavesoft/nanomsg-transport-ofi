@@ -50,7 +50,7 @@ patch -p0 -d ${NANOMSG_DIR} < ${CURR_PATH}/patch/nanomsg-patch-global.patch
 [ $? -ne 0 ] && echo -e "** FAILED **\nUnable to apply patch to src/core/global.c!" && exit 1
 patch -p0 -d ${NANOMSG_DIR} < ${CURR_PATH}/patch/nanomsg-patch-symbol.patch
 [ $? -ne 0 ] && echo -e "** FAILED **\nUnable to apply patch to src/core/symbol.c!" && exit 1
-patch -d ${NANOMSG_DIR} < ${CURR_PATH}/patch/nanomsg-patch-maxtransport.patch
+patch -p0 -d ${NANOMSG_DIR} < ${CURR_PATH}/patch/nanomsg-patch-maxtransport.patch
 [ $? -ne 0 ] && echo -e "** FAILED **\nUnable to apply patch to src/core/sock.h!" && exit 1
 patch -d ${NANOMSG_DIR} < ${CURR_PATH}/patch/nanomsg-patch-makefile.patch
 [ $? -ne 0 ] && echo -e "** FAILED **\nUnable to apply patch to Makefile.am!" && exit 1

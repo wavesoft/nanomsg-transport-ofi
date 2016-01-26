@@ -421,45 +421,53 @@ static int nn_sofi_send (struct nn_pipebase *self, struct nn_msg *msg)
     size_t sz_body = nn_chunkref_size (&msg->body);
 
     /*  Serialise the message header. */
-    nn_putll (sofi->ptr_slab_sysptr->outhdr, sz_sphdr + sz_body);
+    // nn_putll (sofi->ptr_slab_sysptr->outhdr, sz_sphdr + sz_body);
 
     /*  Move the message to the local storage. */
     nn_msg_term (&sofi->outmsg);
     nn_msg_mv (&sofi->outmsg, msg);
 
     /* IOV[0] : Use outhdr pointer */
-    iov [0].iov_base = sofi->ptr_slab_sysptr->outhdr;
-    iov [0].iov_len = sz_outhdr;
-    iov_desc[0] = FI_MR_DESC_OFFSET( sofi->mr_slab->mr, &sofi->ptr_slab_sysptr->outhdr, sofi->ptr_slab_sysptr );
+    // iov [0].iov_base = sofi->ptr_slab_sysptr->outhdr;
+    // iov [0].iov_len = sz_outhdr;
+    // iov_desc[0] = FI_MR_DESC_OFFSET( sofi->mr_slab->mr, &sofi->ptr_slab_sysptr->outhdr, sofi->ptr_slab_sysptr );
 
     /* Include SPHDR only if exists! */
-    if (sz_sphdr > 0) {
+    // if (sz_sphdr > 0) {
 
         /* IOV[1] : Copy outmsg SPHDR to shared MR[sphdr] */
-        memcpy( sofi->ptr_slab_sysptr->sphdr, nn_chunkref_data (&sofi->outmsg.sphdr), sz_sphdr );
-        iov [1].iov_base = sofi->ptr_slab_sysptr->sphdr;
-        iov [1].iov_len = sz_sphdr;
-        iov_desc[1] = FI_MR_DESC_OFFSET( sofi->mr_slab->mr, &sofi->ptr_slab_sysptr->sphdr, sofi->ptr_slab_sysptr );
+        // memcpy( sofi->ptr_slab_sysptr->sphdr, nn_chunkref_data (&sofi->outmsg.sphdr), sz_sphdr );
+        // iov [1].iov_base = sofi->ptr_slab_sysptr->sphdr;
+        // iov [1].iov_len = sz_sphdr;
+        // iov_desc[1] = FI_MR_DESC_OFFSET( sofi->mr_slab->mr, &sofi->ptr_slab_sysptr->sphdr, sofi->ptr_slab_sysptr );
 
         /* IOV[2] : Smart management (copy or tag) of the body pointer */
-        iov [2].iov_len = sz_body;
-        nn_sofi_mr_outgoing( sofi, nn_chunkref_data (&sofi->outmsg.body), sz_body,
-                         &iov[2].iov_base, &iov_desc[2]);
+        // iov [2].iov_len = sz_body;
+        // nn_sofi_mr_outgoing( sofi, nn_chunkref_data (&sofi->outmsg.body), sz_body,
+        //                  &iov[2].iov_base, &iov_desc[2]);
 
-        _ofi_debug("OFI: SOFI: Sending payload (len=%lu)\n", sz_sphdr+sz_body );
-        ret = ofi_tx_msg( sofi->ep, iov, iov_desc, 3, 0, NN_SOFI_IO_TIMEOUT_SEC );
+        // _ofi_debug("OFI: SOFI: Sending payload (len=%lu)\n", sz_sphdr+sz_body );
+        // ret = ofi_tx_msg( sofi->ep, iov, iov_desc, 3, 0, NN_SOFI_IO_TIMEOUT_SEC );
 
-    } else {
+        /* Manage this memory region */
+        ofi_mr_manage( sofi->ep, sofi->mr_user, 
+            nn_chunkref_data (&sofi->outmsg.body), sz_body, NN_SOFI_MR_KEY_USER, MR_SEND );
 
-        /* IOV[2] : Smart management (copy or tag) of the body pointer */
-        iov [1].iov_len = sz_body;
-        nn_sofi_mr_outgoing( sofi, nn_chunkref_data (&sofi->outmsg.body), sz_body,
-                         &iov[1].iov_base, &iov_desc[2]);
+        _ofi_debug("OFI: SOFI: Sending payload (len=%lu)\n", sz_body );
+        ret = ofi_tx_data( sofi->ep, nn_chunkref_data (&sofi->outmsg.body), 
+            sz_body, fi_mr_desc( sofi->mr_user->mr ), NN_SOFI_IO_TIMEOUT_SEC );
 
-        _ofi_debug("OFI: SOFI: Sending payload (len=%lu)\n", sz_sphdr+sz_body );
-        ret = ofi_tx_msg( sofi->ep, iov, iov_desc, 2, 0, NN_SOFI_IO_TIMEOUT_SEC );
+    // } else {
 
-    }
+    //     /* IOV[2] : Smart management (copy or tag) of the body pointer */
+    //     iov [1].iov_len = sz_body;
+    //     nn_sofi_mr_outgoing( sofi, nn_chunkref_data (&sofi->outmsg.body), sz_body,
+    //                      &iov[1].iov_base, &iov_desc[2]);
+
+    //     _ofi_debug("OFI: SOFI: Sending payload (len=%lu)\n", sz_sphdr+sz_body );
+    //     ret = ofi_tx_msg( sofi->ep, iov, iov_desc, 2, 0, NN_SOFI_IO_TIMEOUT_SEC );
+
+    // }
 
     /* Send payload */
     if (ret) {
@@ -521,29 +529,32 @@ static void nn_sofi_poller_thread (void *arg)
     /* Infinite loop */
     while (1) {
 
-        /* --------------------------------------------------- */
+        /* Wait for an incoming message buffer on a single pointer */
+        _ofi_debug("OFI: SOFI: Waiting for incoming data\n");
+        ret = ofi_rx_data( self->ep, 
+            self->inmsg_chunk, self->recv_buffer_size, fi_mr_desc( self->mr_inmsg->mr ),
+            &size, -1 );
 
-        /* Receive data from OFI */
-        iov [0].iov_base = self->ptr_slab_sysptr->inhdr;
-        iov [0].iov_len = sizeof(self->ptr_slab_sysptr->inhdr);
-        iov_desc[0] = FI_MR_DESC_OFFSET( self->mr_slab->mr, &self->ptr_slab_sysptr->inhdr, self->ptr_slab_sysptr );
+        // /* Receive data from OFI */
+        // iov [0].iov_base = self->ptr_slab_sysptr->inhdr;
+        // iov [0].iov_len = sizeof(self->ptr_slab_sysptr->inhdr);
+        // iov_desc[0] = FI_MR_DESC_OFFSET( self->mr_slab->mr, &self->ptr_slab_sysptr->inhdr, self->ptr_slab_sysptr );
 
         /* Initialize msg with MAXIMUM POSSIBLE receive size */
         // nn_msg_term (&self->inmsg);
-        nn_msg_init_chunk (&self->inmsg, self->inmsg_chunk);
+        // nn_msg_init_chunk (&self->inmsg, self->inmsg_chunk);
 
         // /* Manage this memory region */
         // ofi_mr_manage( self->ep, self->mr_user, nn_chunkref_data(&self->inmsg.body), 
         //     self->recv_buffer_size, NN_SOFI_MR_KEY_USER, MR_RECV );
 
         /* Use the message body buffer for receving endpoint */
-        iov [1].iov_base = self->inmsg_chunk;
-        iov [1].iov_len = self->recv_buffer_size;
-        iov_desc[1] = fi_mr_desc( self->mr_inmsg->mr );
+        // iov [1].iov_base = self->inmsg_chunk;
+        // iov [1].iov_len = self->recv_buffer_size;
+        // iov_desc[1] = fi_mr_desc( self->mr_inmsg->mr );
 
         /* Wait for incoming data */
-        _ofi_debug("OFI: SOFI: Waiting for incoming data\n");
-        ret = ofi_rx_msg( self->ep, iov, iov_desc, 2, NULL, 0, -1 );
+        // ret = ofi_rx_msg( self->ep, iov, iov_desc, 2, NULL, 0, -1 );
         if (ret == -FI_REMOTE_DISCONNECT) { /* Remotely disconnected */
             _ofi_debug("OFI: Remotely disconnected!\n");
             break;
@@ -561,21 +572,23 @@ static void nn_sofi_poller_thread (void *arg)
             break;
         }
 
-        /* --------------------------------------------------- */
-
         /* Restart keepalive rx timer */
         self->keepalive_rx_ctr = 0;
 
         /* Check if this is a polling message */
-        if (memcmp(self->ptr_slab_sysptr->inhdr, FT_PACKET_KEEPALIVE, sizeof(FT_PACKET_KEEPALIVE)) == 0) {
+        // if (memcmp(self->ptr_slab_sysptr->inhdr, FT_PACKET_KEEPALIVE, sizeof(FT_PACKET_KEEPALIVE)) == 0) {
+        if (size == 0) {
             _ofi_debug("OFI: SOFI: Received keepalive packet\n");
             continue;
         }
 
+        /* Initialize a new message on the shared pointer */
+        nn_msg_init_chunk (&self->inmsg, self->inmsg_chunk);
+
         /*  Message header was received. Check that message size
             is acceptable by comparing with NN_RCVMAXSIZE;
             if it's too large, drop the connection. */
-        size = nn_getll ( self->ptr_slab_sysptr->inhdr );
+        // size = nn_getll ( self->ptr_slab_sysptr->inhdr );
         _ofi_debug("OFI: SOFI: Got incoming message of %li bytes\n", size);
 
         /* Hack to force new message size on the chunkref */
@@ -742,11 +755,14 @@ static void nn_sofi_handler (struct nn_fsm *self, int src, int type,
 
                     /* Send keepalive message */
                     _ofi_debug("OFI: SOFI: Sending keepalive!\n");
-                    memcpy( sofi->ptr_slab_sysptr->outhdr, FT_PACKET_KEEPALIVE, sizeof(FT_PACKET_KEEPALIVE) );
-                    iov [0].iov_base = sofi->ptr_slab_sysptr->outhdr;
-                    iov [0].iov_len = sizeof(FT_PACKET_KEEPALIVE);
-                    iov_desc[0] = FI_MR_DESC_OFFSET( sofi->mr_slab->mr, &sofi->ptr_slab_sysptr->outhdr, sofi->ptr_slab_sysptr );
-                    ret = ofi_tx_msg( sofi->ep, iov, iov_desc, 1, 0, NN_SOFI_KEEPALIVE_INTERVAL / 1000 );
+                    // memcpy( sofi->ptr_slab_sysptr->outhdr, FT_PACKET_KEEPALIVE, sizeof(FT_PACKET_KEEPALIVE) );
+                    // iov [0].iov_base = sofi->ptr_slab_sysptr->outhdr;
+                    // iov [0].iov_len = 0;
+                    // iov_desc[0] = FI_MR_DESC_OFFSET( sofi->mr_slab->mr, &sofi->ptr_slab_sysptr->outhdr, sofi->ptr_slab_sysptr );
+                    // ret = ofi_tx_msg( sofi->ep, iov, iov_desc, 1, 0, NN_SOFI_KEEPALIVE_INTERVAL / 1000 );
+                    ret = ofi_tx_data( sofi->ep, sofi->ptr_slab_sysptr->outhdr, 0, 
+                        FI_MR_DESC_OFFSET( sofi->mr_slab->mr, &sofi->ptr_slab_sysptr->outhdr, sofi->ptr_slab_sysptr ),
+                        NN_SOFI_KEEPALIVE_INTERVAL / 1000 );
                     if (ret) {
                         /* TODO: Handle errors */
                         printf("OFI: SOFI: Error sending keepalive! Assuming disconnected remote endpoint.\n");

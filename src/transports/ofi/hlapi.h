@@ -140,16 +140,20 @@ struct ofi_mr {
 int ofi_alloc( struct ofi_resources * R, enum fi_ep_type ep_type );
 
 /**
- * OFI messages Rx/Tx
+ * Scattter-gather version
  */
 ssize_t ofi_tx_msg( struct ofi_active_endpoint * EP, const struct iovec *msg_iov, void ** msg_iov_desc, 
 	size_t iov_count, uint64_t flags, int timeout );
 ssize_t ofi_rx_msg( struct ofi_active_endpoint * EP, const struct iovec *msg_iov, void ** msg_iov_desc, 
 		size_t iov_count, size_t * rx_size, uint64_t flags, int timeout );
 
-ssize_t ofi_rx_waitmsg( struct ofi_active_endpoint * EP, int timeout  );
-ssize_t ofi_rx_postmsg( struct ofi_active_endpoint * EP, const struct iovec *msg_iov, void ** msg_iov_desc, 
-		size_t iov_count, uint64_t flags );
+/**
+ * Single pointer version
+ */
+ssize_t ofi_rx_data( struct ofi_active_endpoint * EP, void * buf, const size_t max_size, 
+		void *desc, size_t * rx_size, int timeout );
+ssize_t ofi_tx_data( struct ofi_active_endpoint * EP, void * buf, const size_t tx_size, 
+		void *desc, int timeout );
 
 // /**
 //  * Tagged ofi Rx/Tx with additional control information

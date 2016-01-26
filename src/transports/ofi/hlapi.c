@@ -277,12 +277,10 @@ int ft_wait_shutdown_aware(struct fid_cq *cq, struct fid_eq *eq, int timeout, st
 		}
 
 		// /* Let some other CPU work to be done */
-		// if (++fast_poller > 100) {
-	 //       	usleep(100); 
-		// 	fast_poller = 0;
-		// }
-		// pthread_yield();
-
+		if (++fast_poller > 100) {
+			usleep(10);
+			fast_poller = 0;
+		}
 
 	}
 }

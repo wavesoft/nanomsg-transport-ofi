@@ -137,10 +137,8 @@ static struct nn_sofi_chunk *nn_sofi_chunk_getptr (void *p)
  */
 void nn_sofi_DANGEROUS_hack_chunk_size( void * ptr, size_t size )
 {
-
     /* Access the internals of the chunk */
     struct nn_sofi_chunk * chunk = nn_sofi_chunk_getptr(ptr);
-
     /* Fake size without reallocation */
     //printf("!!!! Hacking from %lu to %lu (ptr=%p) !!!!\n", chunk->size, size, ptr);
     chunk->size = size;

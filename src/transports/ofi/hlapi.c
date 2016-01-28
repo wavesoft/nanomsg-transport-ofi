@@ -120,6 +120,42 @@ int64_t ofi_get_elapsed(const struct timespec *b, const struct timespec *a,
 }
 
 /**
+ * Calculate how many kilo-cycles we can run per millisedon
+ */
+uint32_t ofi_calc_kinstr_perms()
+{
+	struct timespec a, b;
+	uint64_t kinst_ms;
+
+	/* Run one million actions and count how much time it takes */
+	clock_gettime(CLOCK_MONOTONIC, &a);
+	for (int i=0; i<1000000; i++) {
+		/* Do some moderate heap alloc/math operations */
+		volatile int v = 0;
+		v = v + 1;
+	}
+	clock_gettime(CLOCK_MONOTONIC, &b);
+
+	/* Count kinst_ms spent */
+	kinst_ms = 1000000000 / (b.tv_nsec - a.tv_nsec);
+
+	/* Count how many mega-cycles we can run in 1 millisecond */
+
+	/* Wrap to maximum 32-bit */
+	if (kinst_ms > 4294967295) {
+		return 4294967295;
+	}
+
+	/* Return at least one */
+	if (kinst_ms == 0) {
+		return 1;
+	}
+
+	/* Return */
+	return (uint32_t) kinst_ms;
+}
+
+/**
  * Get Tx Prefix size acccording to the tx_attr
  */
 size_t ft_tx_prefix_size( struct fi_info * fi )
@@ -375,33 +411,8 @@ void dbg_readerr(struct fid_eq *eq, const char *eq_str)
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////
-// OFI Low-Level Functions
+// I/O Interfaces
 //////////////////////////////////////////////////////////////////////////////////////////
-
-/**
- * Allocate hints and prepare core structures
- */
-int ofi_alloc( struct ofi_resources * R, enum fi_ep_type ep_type )
-{
-
-	/* Allocate hints */
-	R->hints = fi_allocinfo();
-	if (!R->hints) {
-		printf("OFI: Unable to allocate hints structure!\n");
-		return 255;
-	}
-
-	/* Setup hints capabilities and more */
-	R->hints->ep_attr->type	= ep_type;
-	R->hints->caps			= FI_MSG;
-	R->hints->mode			= FI_CONTEXT | FI_LOCAL_MR;
-
-	/* Prepare flags */
-	R->flags = 0;
-
-	/* Success */
-	return 0;
-}
 
 /**
  * Send a scatter-gather array message over OFI
@@ -603,6 +614,129 @@ ssize_t ofi_rx_msg( struct ofi_active_endpoint * EP, const struct iovec *msg_iov
 }
 
 /**
+ * Post receive buffers
+ */
+int ofi_rx_post( struct ofi_active_endpoint * EP, void * buf, const size_t max_size, void *desc )
+{
+	int ret;
+
+	/* Receive data */
+	ret = fi_recv(EP->ep, buf, max_size, desc, EP->remote_fi_addr, &EP->rx_ctx);
+	if (ret) {
+
+		/* If we are in a bad state, we were remotely disconnected */
+		if (ret == -FI_EOPBADSTATE) {
+			_ofi_debug("OFI: HLAPI: ofi_rx() returned %i, considering shutdown.\n", ret);
+			return -FI_REMOTE_DISCONNECT;
+		}
+
+		/* Otherwise display error */
+		FT_PRINTERR("ofi_rx_data", ret);
+		return ret;
+	}
+
+	/* We succeeded */
+	return 0;
+}
+
+/**
+ * Check for incoming cq event
+ */
+int ofi_rx_poll( struct ofi_active_endpoint * EP, size_t * rx_size, uint32_t timeout )
+{
+
+	/* Local properties */
+	int ret;
+	uint32_t ms_left = timeout;
+	uint16_t k_tousand, k_ms;
+	struct fi_cq_data_entry cq_entry;
+
+	/* Loop for waiting the specified number of milliseconds */
+	while (ms_left--) {
+
+		/* Loop for waiting a millisecond */
+		k_ms = EP->kinstructions_per_ms; while (k_ms--) { 
+		k_tousand = 1000; while (k_tousand--) {
+
+			/* Wait for 1 CQ event */
+			ret = fi_cq_read( EP->rx_cq, &cq_entry, 1 );
+
+			/* Break if state changes */
+			if (nn_fast(ret == -FI_EAGAIN)) {
+				continue;
+			} else if (nn_slow(ret == -FI_EAVAIL)) {
+				struct fi_cq_err_entry err_entry;
+
+				/* Handle disconnection error */
+				ret = fi_cq_readerr(EP->rx_cq, &err_entry, 0);
+				if (err_entry.err == FI_ECANCELED) {
+					return -FI_REMOTE_DISCONNECT;
+				}
+
+				/* Display other erors */
+				printf("OFI: ofi_rx_poll: %s (%s)\n",
+					fi_strerror(err_entry.err),
+					fi_cq_strerror(EP->rx_cq, err_entry.prov_errno, err_entry.err_data, NULL, 0)
+				);
+
+				/* Return error */
+				return err_entry.err;
+
+			/* Return errors */
+			} else if (nn_slow(ret < 0)) {
+				return ret;
+
+			/* Anything else is a success */
+			} else {
+
+				/* If we have an rx_size pointer, update it */
+				if (nn_fast(rx_size != NULL))
+					*rx_size = cq_entry.len;
+
+				return 0;
+
+			}
+
+		} } /* End of millisecond loop (x2) */
+
+	} /* End of timeout loop */
+
+	/* We timed out */
+	return -FI_ENODATA;
+
+}
+
+
+//////////////////////////////////////////////////////////////////////////////////////////
+// OFI Low-Level Functions
+//////////////////////////////////////////////////////////////////////////////////////////
+
+/**
+ * Allocate hints and prepare core structures
+ */
+int ofi_alloc( struct ofi_resources * R, enum fi_ep_type ep_type )
+{
+
+	/* Allocate hints */
+	R->hints = fi_allocinfo();
+	if (!R->hints) {
+		printf("OFI: Unable to allocate hints structure!\n");
+		return 255;
+	}
+
+	/* Setup hints capabilities and more */
+	R->hints->ep_attr->type	= ep_type;
+	R->hints->caps			= FI_MSG;
+	R->hints->mode			= FI_CONTEXT | FI_LOCAL_MR;
+
+	/* Prepare flags */
+	R->flags = 0;
+
+	/* Success */
+	return 0;
+}
+
+/**
  * Resolve an address
  */
 int ofi_resolve_address( struct ofi_resources * R, const char * node, const char * service, void ** addr, size_t * addr_len )
@@ -652,6 +786,9 @@ int ofi_open_fabric( struct ofi_resources * R )
 	printf("OFI: Using fabric=%s, provider=%s\n", 
 		R->fi->fabric_attr->name, 
 		R->fi->fabric_attr->prov_name );
+
+	/* Cache roughly how many instructions per ms does this CPU cost */
+	R->kinstructions_per_ms  = ofi_calc_kinstr_perms();
 
 	/* Success */
 	return 0;
@@ -769,6 +906,9 @@ int ofi_open_active_ep( struct ofi_resources * R, struct ofi_active_endpoint * E
 		FT_PRINTERR("fi_enable", ret);
 		return ret;
 	}
+
+	/* Cache kilo-instructions per second */
+	EP->kinstructions_per_ms = R->kinstructions_per_ms;
 
 	/* Success */
 	return 0;

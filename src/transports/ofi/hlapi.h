@@ -72,6 +72,9 @@ struct ofi_active_endpoint
 	unsigned char 		tx_prefix_size;
 	unsigned char		rx_prefix_size;
 
+	/* For fast poller loops */
+	uint32_t 			kinstructions_per_ms;
+
 };
 
 /**
@@ -96,6 +99,9 @@ struct ofi_resources
 	/* Fabric core structures */
 	struct fi_info 		*fi;
 	struct fid_fabric 	*fabric;
+
+	/* For fast poller loops */
+	uint32_t 			kinstructions_per_ms;
 
 };
 
@@ -154,6 +160,12 @@ ssize_t ofi_rx_data( struct ofi_active_endpoint * EP, void * buf, const size_t m
 		void *desc, size_t * rx_size, int timeout );
 ssize_t ofi_tx_data( struct ofi_active_endpoint * EP, void * buf, const size_t tx_size, 
 		void *desc, int timeout );
+
+/**
+ * Post/Poll receive version
+ */
+int ofi_rx_post( struct ofi_active_endpoint * EP, void * buf, const size_t max_size, void *desc );
+int ofi_rx_poll( struct ofi_active_endpoint * EP, size_t * rx_size, uint32_t timeout );
 
 // /**
 //  * Tagged ofi Rx/Tx with additional control information

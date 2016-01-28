@@ -22,6 +22,7 @@
 
 #include "ofi.h"
 #include "sofi.h"
+
 #include "../../ofi.h"
 
 #include "../../aio/ctx.h"
@@ -49,17 +50,17 @@ const uint8_t FT_PACKET_KEEPALIVE[8] = {0xFF, 0xFF, 0xFF, 0xFF,
 #endif
 
 /* State machine states */
-#define NN_SOFI_STATE_IDLE              1
-#define NN_SOFI_STATE_CONNECTED         2
-#define NN_SOFI_STATE_STOPPING          3
-#define NN_SOFI_STATE_DISCONNECTED      4
+#define NN_SOFI_STATE_IDLE                  1
+#define NN_SOFI_STATE_CONNECTED             2
+#define NN_SOFI_STATE_STOPPING              3
+#define NN_SOFI_STATE_DISCONNECTED          4
 
 /* Private SOFI events */
-#define NN_SOFI_ACTION_DATA             2010
+#define NN_SOFI_ACTION_DATA                 2010
 
 /* Private SOFI sources */
-#define NN_SOFI_SRC_SHUTDOWN_TIMER      1100
-#define NN_SOFI_SRC_KEEPALIVE_TIMER     1101
+#define NN_SOFI_SRC_SHUTDOWN_TIMER          1100
+#define NN_SOFI_SRC_KEEPALIVE_TIMER         1101
 
 /* Configurable times for keepalive */
 #define NN_SOFI_IO_TIMEOUT_SEC              5
@@ -518,7 +519,7 @@ static int nn_sofi_recv (struct nn_pipebase *self, struct nn_msg *msg)
  */
 static void nn_sofi_poller_thread (void *arg)
 {
-    ssize_t ret;
+    int ret;
     size_t size;
     struct iovec iov [2];
     void * iov_desc  [2];
@@ -527,11 +528,45 @@ static void nn_sofi_poller_thread (void *arg)
     /* Infinite loop */
     while (1) {
 
-        /* Wait for an incoming message buffer on a single pointer */
-        _ofi_debug("OFI: SOFI: Waiting for incoming data\n");
-        ret = ofi_rx_data( self->ep, 
-            self->inmsg_chunk, self->recv_buffer_size, fi_mr_desc( self->mr_inmsg->mr ),
-            &size, -1 );
+        /* Post receive buffers */
+        ret = ofi_rx_post( self->ep, self->inmsg_chunk, self->recv_buffer_size, fi_mr_desc( self->mr_inmsg->mr ) );
+        if (ret == -FI_REMOTE_DISCONNECT) { /* Remotely disconnected */
+            _ofi_debug("OFI: Remotely disconnected!\n");
+            goto error;
+        } else if (ret) {
+            printf("OFI: Unable to post receive buffer!\n");
+            goto error;
+        }
+
+        /* Wait for incoming CQ event while checking states */
+        while (1) {
+
+            /* Wait for event */
+            ret = ofi_rx_poll( self->ep, &size, 250 );
+
+            /* Check state */
+            if (self->state != NN_SOFI_STATE_CONNECTED) {
+                _ofi_debug("OFI: Exiting poller thread because changed state to %i\n", self->state);
+                goto cleanup;
+            }
+
+            /* Handle return code */
+            if (nn_fast(ret == 0)) {
+                break;
+            } else if (nn_slow(ret == -FI_REMOTE_DISCONNECT)) {
+                _ofi_debug("OFI: Remotely disconnected!\n");
+                goto cleanup;
+            } else {
+                goto error;
+            }
+
+        }
+
+        // /* Wait for an incoming message buffer on a single pointer */
+        // _ofi_debug("OFI: SOFI: Waiting for incoming data\n");
+        // ret = ofi_rx_data( self->ep, 
+        //     self->inmsg_chunk, self->recv_buffer_size, fi_mr_desc( self->mr_inmsg->mr ),
+        //     &size, -1 );
 
         // /* Receive data from OFI */
         // iov [0].iov_base = self->ptr_slab_sysptr->inhdr;
@@ -553,22 +588,22 @@ static void nn_sofi_poller_thread (void *arg)
 
         /* Wait for incoming data */
         // ret = ofi_rx_msg( self->ep, iov, iov_desc, 2, NULL, 0, -1 );
-        if (ret == -FI_REMOTE_DISCONNECT) { /* Remotely disconnected */
-            _ofi_debug("OFI: Remotely disconnected!\n");
-            break;
-        }
+        // if (ret == -FI_REMOTE_DISCONNECT) { /* Remotely disconnected */
+        //     _ofi_debug("OFI: Remotely disconnected!\n");
+        //     break;
+        // }
 
-        /* Handle errors */
-        if (ret) {
-            printf("OFI: Unable to receive header!\n");
-            goto error;
-        }
+        // /* Handle errors */
+        // if (ret) {
+        //     printf("OFI: Unable to receive header!\n");
+        //     goto error;
+        // }
 
-        /* If exited the connected state, stop thread */
-        if (self->state != NN_SOFI_STATE_CONNECTED) {
-            _ofi_debug("OFI: Exiting poller thread because changed state to %i\n", self->state);
-            break;
-        }
+        // /* If exited the connected state, stop thread */
+        // if (self->state != NN_SOFI_STATE_CONNECTED) {
+        //     _ofi_debug("OFI: Exiting poller thread because changed state to %i\n", self->state);
+        //     break;
+        // }
 
         /* Restart keepalive rx timer */
         self->keepalive_rx_ctr = 0;
@@ -657,15 +692,15 @@ static void nn_sofi_poller_thread (void *arg)
     }
 
     /* Skip error routine */
-    goto final;
+    goto cleanup;
 
 error:
 
     /* Just a placeholder for error handling */
     /* TODO: Properly handle errors */
-    _ofi_debug("OFI: Error handling routine is missing!\n");
+    _ofi_debug("OFI: Error handling routine (error=%i) is missing!\n", ret);
 
-final:
+cleanup:
 
     /* Notify FSM for the fact that we are disconnected  */
     if (self->state == NN_SOFI_STATE_CONNECTED) {

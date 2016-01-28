@@ -20,6 +20,8 @@
     IN THE SOFTWARE.
 */
 
+#include <unistd.h>
+#include <errno.h>
 #include "ofi.h"
 #include "sofi.h"
 
@@ -56,19 +58,21 @@ const uint8_t FT_PACKET_SHUTDOWN[8]  = {0xFF, 0xFF, 0xFF, 0xFF,
 #define NN_SOFI_STATE_CONNECTED             2
 #define NN_SOFI_STATE_STOPPING              3
 #define NN_SOFI_STATE_DISCONNECTED          4
+#define NN_SOFI_STATE_DISCONNECTING         5
 
 /* Private SOFI events */
-#define NN_SOFI_ACTION_DATA                 2010
+#define NN_SOFI_ACTION_PRE_RX               2010
+#define NN_SOFI_ACTION_RX                   2011
+#define NN_SOFI_ACTION_TX                   2012
+#define NN_SOFI_ACTION_ERROR                2013
+#define NN_SOFI_ACTION_DISCONNECT           2014
 
 /* Private SOFI sources */
 #define NN_SOFI_SRC_SHUTDOWN_TIMER          1100
 #define NN_SOFI_SRC_KEEPALIVE_TIMER         1101
 
 /* Configurable times for keepalive */
-#define NN_SOFI_IO_TIMEOUT_SEC              5
-#define NN_SOFI_KEEPALIVE_INTERVAL          1000
-#define NN_SOFI_KEEPALIVE_COUNTER           1
-#define NN_SOFI_KEEPALIVE_TIMEOUT_COUNTER   5
+#define NN_SOFI_KEEPALIVE_TIMEOUT           1000
 
 /* Shutdown reasons */
 #define NN_SOFI_SHUTDOWN_DISCONNECT         1
@@ -177,7 +181,7 @@ void nn_sofi_init (struct nn_sofi *self,
     nn_msg_init (&self->inmsg, 0);
 
     /* Prepare thread resources */
-    nn_efd_init( &self->sync );
+    // nn_efd_init( &self->sync );
 
     /* ==================== */
 
@@ -275,10 +279,11 @@ void nn_sofi_init (struct nn_sofi *self,
     nn_fsm_init (&self->fsm, nn_sofi_handler, nn_sofi_shutdown,
         src, self, owner);
     self->state = NN_SOFI_STATE_IDLE;
+    self->error = 0;
 
     /* Initialize timer */
-    nn_timer_init(&self->shutdown_timer, NN_SOFI_SRC_SHUTDOWN_TIMER, &self->fsm);
-    self->shutdown_reason = 0;
+    // nn_timer_init(&self->shutdown_timer, NN_SOFI_SRC_SHUTDOWN_TIMER, &self->fsm);
+    // self->shutdown_reason = 0;
     nn_timer_init(&self->keepalive_timer,  NN_SOFI_SRC_KEEPALIVE_TIMER, &self->fsm);
     self->keepalive_tx_ctr = 0;
     self->keepalive_rx_ctr = 0;
@@ -293,7 +298,8 @@ void nn_sofi_init (struct nn_sofi *self,
  * Cleanup all the SOFI resources
  */
 void nn_sofi_term (struct nn_sofi *self)
-{
+{  
+    _ofi_debug("OFI: SOFI: Terminating\n");
 
     /* Free memory */
     nn_chunk_free( self->inmsg_chunk );
@@ -301,7 +307,7 @@ void nn_sofi_term (struct nn_sofi *self)
 
     /* Cleanup instantiated resources */
     nn_list_item_term (&self->item);
-    nn_timer_term (&self->shutdown_timer);
+    // nn_timer_term (&self->shutdown_timer);
     nn_timer_term (&self->keepalive_timer);
     nn_fsm_event_term (&self->disconnected);
     nn_msg_term (&self->inmsg);
@@ -323,7 +329,7 @@ int nn_sofi_isidle (struct nn_sofi *self)
  */
 void nn_sofi_stop (struct nn_sofi *self)
 {
-    _ofi_debug("OFI: Stopping SOFI\n");
+    _ofi_debug("OFI: SOFI: Stopping\n");
 
     /* Stop FSM */
     nn_fsm_stop (&self->fsm);
@@ -418,77 +424,40 @@ static int nn_sofi_send (struct nn_pipebase *self, struct nn_msg *msg)
     void * iov_desc  [3];
     sofi = nn_cont (self, struct nn_sofi, pipebase);
 
+    /* Send only if connected */
+    if (sofi->state != NN_SOFI_STATE_CONNECTED)
+        return -EBADF;
+
     /*  Start async sending. */
     size_t sz_outhdr = sizeof(sofi->ptr_slab_sysptr->outhdr);
     size_t sz_sphdr = nn_chunkref_size (&msg->sphdr);
     size_t sz_body = nn_chunkref_size (&msg->body);
 
-    /*  Serialise the message header. */
-    // nn_putll (sofi->ptr_slab_sysptr->outhdr, sz_sphdr + sz_body);
-
     /*  Move the message to the local storage. */
     nn_msg_term (&sofi->outmsg);
     nn_msg_mv (&sofi->outmsg, msg);
 
-    /* IOV[0] : Use outhdr pointer */
-    // iov [0].iov_base = sofi->ptr_slab_sysptr->outhdr;
-    // iov [0].iov_len = sz_outhdr;
-    // iov_desc[0] = FI_MR_DESC_OFFSET( sofi->mr_slab->mr, &sofi->ptr_slab_sysptr->outhdr, sofi->ptr_slab_sysptr );
+    /* Manage this memory region */
+    ofi_mr_manage( sofi->ep, sofi->mr_user, 
+        nn_chunkref_data (&sofi->outmsg.body), sz_body, NN_SOFI_MR_KEY_USER, MR_SEND );
 
-    /* Include SPHDR only if exists! */
-    // if (sz_sphdr > 0) {
-
-        /* IOV[1] : Copy outmsg SPHDR to shared MR[sphdr] */
-        // memcpy( sofi->ptr_slab_sysptr->sphdr, nn_chunkref_data (&sofi->outmsg.sphdr), sz_sphdr );
-        // iov [1].iov_base = sofi->ptr_slab_sysptr->sphdr;
-        // iov [1].iov_len = sz_sphdr;
-        // iov_desc[1] = FI_MR_DESC_OFFSET( sofi->mr_slab->mr, &sofi->ptr_slab_sysptr->sphdr, sofi->ptr_slab_sysptr );
-
-        /* IOV[2] : Smart management (copy or tag) of the body pointer */
-        // iov [2].iov_len = sz_body;
-        // nn_sofi_mr_outgoing( sofi, nn_chunkref_data (&sofi->outmsg.body), sz_body,
-        //                  &iov[2].iov_base, &iov_desc[2]);
-
-        // _ofi_debug("OFI: SOFI: Sending payload (len=%lu)\n", sz_sphdr+sz_body );
-        // ret = ofi_tx_msg( sofi->ep, iov, iov_desc, 3, 0, NN_SOFI_IO_TIMEOUT_SEC );
-
-        /* Manage this memory region */
-        ofi_mr_manage( sofi->ep, sofi->mr_user, 
-            nn_chunkref_data (&sofi->outmsg.body), sz_body, NN_SOFI_MR_KEY_USER, MR_SEND );
-
-        _ofi_debug("OFI: SOFI: Sending payload (len=%lu)\n", sz_body );
-        ret = ofi_tx_data( sofi->ep, nn_chunkref_data (&sofi->outmsg.body), 
-            sz_body, fi_mr_desc( sofi->mr_user->mr ), NN_SOFI_IO_TIMEOUT_SEC );
-
-    // } else {
-
-    //     /* IOV[2] : Smart management (copy or tag) of the body pointer */
-    //     iov [1].iov_len = sz_body;
-    //     nn_sofi_mr_outgoing( sofi, nn_chunkref_data (&sofi->outmsg.body), sz_body,
-    //                      &iov[1].iov_base, &iov_desc[2]);
-
-    //     _ofi_debug("OFI: SOFI: Sending payload (len=%lu)\n", sz_sphdr+sz_body );
-    //     ret = ofi_tx_msg( sofi->ep, iov, iov_desc, 2, 0, NN_SOFI_IO_TIMEOUT_SEC );
-
-    // }
-
-    /* Success */
-    nn_pipebase_sent (&sofi->pipebase);
-
-    /* Send payload */
+    _ofi_debug("OFI: SOFI: Sending payload (len=%lu)\n", sz_body );
+    ret = fi_send( sofi->ep->ep, nn_chunkref_data (&sofi->outmsg.body), sz_body, 
+        fi_mr_desc( sofi->mr_user->mr ), sofi->ep->remote_fi_addr, &sofi->ep->tx_ctx);
     if (ret) {
-        printf("OFI: Error sending data!\n");
 
-        /* Shutdown because of error */        
-        sofi->shutdown_reason = NN_SOFI_SHUTDOWN_DISCONNECT;
-        nn_timer_start( &sofi->shutdown_timer, 1 );
+        /* If we are in a bad state, we were remotely disconnected */
+        if (ret == -FI_EOPBADSTATE) {
+            _ofi_debug("OFI: SOFI: fi_send returned -FI_EOPBADSTATE, considering shutdown.\n");
+            return -EBADF;           
+        }
 
-        /* This did not work out, but don't let nanomsg know */
+        /* Otherwise display error */
+        FT_PRINTERR("nn_sofi_send", ret);
+        sofi->error = ret;
+        nn_fsm_action ( &sofi->fsm, NN_SOFI_ACTION_ERROR );
         return 0;
     }
-
-    /* Restart keepalive tx counter */
-    sofi->keepalive_tx_ctr = 0;
 
     /* Success */
     return 0;
@@ -509,13 +478,13 @@ static int nn_sofi_recv (struct nn_pipebase *self, struct nn_msg *msg)
     nn_msg_mv (msg, &sofi->inmsg);
     nn_msg_init (&sofi->inmsg, 0);
 
-    /* Unblock thread to receive next chunk */
-    _ofi_debug("OFI: SOFI: Sending Rx Signal\n");
-    nn_efd_signal( &sofi->sync );
+    /* Tell fsm to prepare send buffers */
+    nn_fsm_action ( &sofi->fsm, NN_SOFI_ACTION_PRE_RX );
 
     /* Success */
     return 0;
 }
+
 
 /**
  * The internal poller thread, since OFI does not 
@@ -524,197 +493,132 @@ static int nn_sofi_recv (struct nn_pipebase *self, struct nn_msg *msg)
 static void nn_sofi_poller_thread (void *arg)
 {
     int ret;
-    size_t size;
-    struct iovec iov [2];
-    void * iov_desc  [2];
     struct nn_sofi * self = (struct nn_sofi *) arg;
+    struct fi_eq_cm_entry eq_entry;
+    struct fi_cq_err_entry err_entry;
+    struct fi_cq_data_entry cq_entry;
+    uint8_t fastpoller = 100;
+    uint32_t event;
 
-    /* Infinite loop */
-    while (1) {
+    /* Keep thread alive while  */
+    _ofi_debug("OFI: SOFI: Starting poller thread\n");
+    while ( self->state == NN_SOFI_STATE_CONNECTED ) {
 
-        /* Post receive buffers */
-        ret = ofi_rx_post( self->ep, self->inmsg_chunk, self->recv_buffer_size, fi_mr_desc( self->mr_inmsg->mr ) );
-        if (ret == -FI_REMOTE_DISCONNECT) { /* Remotely disconnected */
-            _ofi_debug("OFI: Remotely disconnected!\n");
-            goto error;
-        } else if (ret) {
-            printf("OFI: Unable to post receive buffer!\n");
-            goto error;
-        }
+        /* ========================================= */
+        /* Wait for Rx CQ event */
+        /* ========================================= */
+        ret = fi_cq_read( self->ep->rx_cq, &cq_entry, 1 );
+        if (nn_slow(ret > 0)) {
 
-        /* Wait for incoming CQ event while checking states */
-        while (1) {
+            /* Initialize a new message on the shared pointer */
+            nn_msg_init_chunk (&self->inmsg, self->inmsg_chunk);
+            _ofi_debug("OFI: SOFI: Got incoming message of %li bytes\n", cq_entry.len);
 
-            /* Wait for event */
-            ret = ofi_rx_poll( self->ep, &size, 250 );
-
-            /* Check state */
-            if (self->state != NN_SOFI_STATE_CONNECTED) {
-                _ofi_debug("OFI: Exiting poller thread because changed state to %i\n", self->state);
-                goto cleanup;
-            }
-
-            /* Handle return code */
-            if (nn_fast(ret == 0)) {
-                break;
-            } else if (nn_slow(ret == -FI_REMOTE_DISCONNECT)) {
-                _ofi_debug("OFI: Remotely disconnected!\n");
-                goto cleanup;
+            /* Hack to force new message size on the chunkref */
+            if (cq_entry.len <= self->recv_buffer_size) {
+                nn_sofi_DANGEROUS_hack_chunk_size( self->inmsg_chunk, cq_entry.len );
             } else {
-                goto error;
+                printf("WARNING: Silent data truncation from %lu to %d (increase your receive buffer size!)\n", cq_entry.len, self->recv_buffer_size );
+                nn_sofi_DANGEROUS_hack_chunk_size( self->inmsg_chunk, self->recv_buffer_size );
+            }
+
+            /* Handle the fact that the data are received  */
+            _ofi_debug("OFI: SOFI: Rx CQ Event\n");
+            nn_fsm_action ( &self->fsm, NN_SOFI_ACTION_RX );
+
+        } else if (nn_slow(ret != -FI_EAGAIN)) {
+            if (ret == -FI_EAVAIL) {
+
+                /* Get error details */
+                ret = fi_cq_readerr( self->ep->rx_cq, &err_entry, 0 );
+                if (err_entry.err == FI_ECANCELED) {
+
+                    /* The socket operation was cancelled, we were disconnected */
+                    _ofi_debug("OFI: SOFI: Rx CQ Error (-FI_ECANCELED) caused disconnection\n");
+                    nn_fsm_action ( &self->fsm, NN_SOFI_ACTION_DISCONNECT );
+                    break;
+
+                }
+
+                /* Handle error */
+                self->error = -err_entry.err;
+                _ofi_debug("OFI: SOFI: Rx CQ Error (%i)\n", -err_entry.err);
+                nn_fsm_action ( &self->fsm, NN_SOFI_ACTION_ERROR );
+
+            } else {
+
+                /* Unexpected CQ Read error */
+                FT_PRINTERR("fi_cq_read<rx_cq>", ret);
+                self->error = ret;
+                nn_fsm_action ( &self->fsm, NN_SOFI_ACTION_ERROR );
+
+            }
+        }
+
+        /* ========================================= */
+        /* Wait for Tx CQ event */
+        /* ========================================= */
+        ret = fi_cq_read( self->ep->tx_cq, &cq_entry, 1 );
+        if (nn_slow(ret > 0)) {
+
+            /* Handle the fact that the data are sent */
+            _ofi_debug("OFI: SOFI: Tx CQ Event\n");
+            nn_fsm_action ( &self->fsm, NN_SOFI_ACTION_TX );
+
+        } else if (nn_slow(ret != -FI_EAGAIN)) {
+
+            if (ret == -FI_EAVAIL) {
+
+                /* Get error details */
+                ret = fi_cq_readerr( self->ep->tx_cq, &err_entry, 0 );
+                if (err_entry.err == FI_ECANCELED) {
+
+                    /* The socket operation was cancelled, we were disconnected */
+                    _ofi_debug("OFI: SOFI: Tx CQ Error (-FI_ECANCELED) caused disconnection\n");
+                    nn_fsm_action ( &self->fsm, NN_SOFI_ACTION_DISCONNECT );
+                    break;
+
+                }
+
+                /* Handle error */
+                self->error = -err_entry.err;
+                _ofi_debug("OFI: SOFI: Tx CQ Error (%i)\n", -err_entry.err);
+                nn_fsm_action ( &self->fsm, NN_SOFI_ACTION_ERROR );
+
+            } else {
+
+                /* Unexpected CQ Read error */
+                FT_PRINTERR("fi_cq_read<tx_cq>", ret);
+                self->error = ret;
+                nn_fsm_action ( &self->fsm, NN_SOFI_ACTION_ERROR );
+
             }
 
         }
 
-        // /* Wait for an incoming message buffer on a single pointer */
-        // _ofi_debug("OFI: SOFI: Waiting for incoming data\n");
-        // ret = ofi_rx_data( self->ep, 
-        //     self->inmsg_chunk, self->recv_buffer_size, fi_mr_desc( self->mr_inmsg->mr ),
-        //     &size, -1 );
+        /* ========================================= */
+        /* Wait for EQ events */
+        /* ========================================= */
+        ret = fi_eq_read( self->ep->eq, &event, &eq_entry, sizeof eq_entry, 0);
+        if (nn_fast(ret != -FI_EAGAIN)) {
 
-        // /* Receive data from OFI */
-        // iov [0].iov_base = self->ptr_slab_sysptr->inhdr;
-        // iov [0].iov_len = sizeof(self->ptr_slab_sysptr->inhdr);
-        // iov_desc[0] = FI_MR_DESC_OFFSET( self->mr_slab->mr, &self->ptr_slab_sysptr->inhdr, self->ptr_slab_sysptr );
+            /* Check for socket disconnection */
+            if (event == FI_SHUTDOWN) {
+                _ofi_debug("OFI: SOFI: Got shutdown EQ event\n");
+                nn_fsm_action ( &self->fsm, NN_SOFI_ACTION_DISCONNECT );
+                break;
+            }
 
-        /* Initialize msg with MAXIMUM POSSIBLE receive size */
-        // nn_msg_term (&self->inmsg);
-        // nn_msg_init_chunk (&self->inmsg, self->inmsg_chunk);
-
-        // /* Manage this memory region */
-        // ofi_mr_manage( self->ep, self->mr_user, nn_chunkref_data(&self->inmsg.body), 
-        //     self->recv_buffer_size, NN_SOFI_MR_KEY_USER, MR_RECV );
-
-        /* Use the message body buffer for receving endpoint */
-        // iov [1].iov_base = self->inmsg_chunk;
-        // iov [1].iov_len = self->recv_buffer_size;
-        // iov_desc[1] = fi_mr_desc( self->mr_inmsg->mr );
-
-        /* Wait for incoming data */
-        // ret = ofi_rx_msg( self->ep, iov, iov_desc, 2, NULL, 0, -1 );
-        // if (ret == -FI_REMOTE_DISCONNECT) { /* Remotely disconnected */
-        //     _ofi_debug("OFI: Remotely disconnected!\n");
-        //     break;
-        // }
-
-        // /* Handle errors */
-        // if (ret) {
-        //     printf("OFI: Unable to receive header!\n");
-        //     goto error;
-        // }
-
-        // /* If exited the connected state, stop thread */
-        // if (self->state != NN_SOFI_STATE_CONNECTED) {
-        //     _ofi_debug("OFI: Exiting poller thread because changed state to %i\n", self->state);
-        //     break;
-        // }
-
-        /* Restart keepalive rx timer */
-        self->keepalive_rx_ctr = 0;
-
-        /* Check if this is a polling message */
-        //if (memcmp(self->ptr_slab_sysptr->inhdr, FT_PACKET_KEEPALIVE, sizeof(FT_PACKET_KEEPALIVE)) == 0) {
-        if ((sizeof(FT_PACKET_KEEPALIVE) == size) && (memcmp(self->inmsg_chunk, FT_PACKET_KEEPALIVE, sizeof(FT_PACKET_KEEPALIVE)) == 0)) {
-            _ofi_debug("OFI: SOFI: Received keepalive packet\n");
-            continue;
         }
 
-        /* Initialize a new message on the shared pointer */
-        nn_msg_init_chunk (&self->inmsg, self->inmsg_chunk);
-
-        /*  Message header was received. Check that message size
-            is acceptable by comparing with NN_RCVMAXSIZE;
-            if it's too large, drop the connection. */
-        // size = nn_getll ( self->ptr_slab_sysptr->inhdr );
-        _ofi_debug("OFI: SOFI: Got incoming message of %li bytes\n", size);
-
-        /* Hack to force new message size on the chunkref */
-        if (size <= self->recv_buffer_size) {
-            nn_sofi_DANGEROUS_hack_chunk_size( self->inmsg_chunk, size );
-        } else {
-            printf("WARNING: Silent data truncation from %lu to %d (increase your receive buffer size!)\n", size, self->recv_buffer_size );
-            nn_sofi_DANGEROUS_hack_chunk_size( self->inmsg_chunk, self->recv_buffer_size );
+        /* Microsleep for lessen the CPU load */
+        if (!fastpoller--) {
+            usleep(10);
+            fastpoller = 100;
         }
 
-        // /* Initialize msg with rx chunk */
-        // nn_msg_term (&self->inmsg);
-        // nn_msg_init( &self->inmsg, size );
-
-        // /* Decide how to receive the message */
-        // if (size < self->slab_size) {
-        //     _ofi_debug("OFI: SOFI: Using memcpy because size < %i\n", self->slab_size);
-
-        //     /* Use the memory slab as the receving endpoint */
-        //     iov [0].iov_base = self->mr_slab_data_in;
-        //     iov [0].iov_len = size;
-        //     iov_desc[0] = fi_mr_desc( self->mr_slab->mr );
-        
-        // } else {
-        //     _ofi_debug("OFI: SOFI: Using mr because size >= %i\n", self->slab_size);
-
-        //     /* Manage this memory region */
-        //     ofi_mr_manage( self->ep, self->mr_user, nn_chunkref_data(&self->inmsg.body), 
-        //         size, NN_SOFI_MR_KEY_USER, MR_RECV );
-
-        //     /* Use the message buffer as our new shared memory region */
-        //     iov [0].iov_base = nn_chunkref_data(&self->inmsg.body);
-        //     iov [0].iov_len = size;
-        //     iov_desc[0] = fi_mr_desc( self->mr_user->mr );
-
-        // }
-
-        // /* Receive the actual message */
-        // _ofi_debug("OFI: SOFI: Receiving data\n");
-        // ret = ofi_rx_msg( self->ep, iov, iov_desc, 1, 0, -1 );
-        // if (ret == -FI_REMOTE_DISCONNECT) { /* Remotely disconnected */
-        //     _ofi_debug("OFI: Remotely disconnected!\n");
-        //     break;
-        // }
-
-        // /* Handle errors */
-        // if (ret) {
-        //     printf("OFI: Unable to receive payload!\n");
-        //     goto error;
-        // }
-
-        // /* Final part of small slab messages */
-        // if (size < self->slab_size) {
-        //     _ofi_debug("OFI: SOFI: Final memcpy to body");
-        //     memcpy( nn_chunkref_data(&self->inmsg.body), self->mr_slab_data_in, size );
-        // }
-
-        /* Notify FSM for the fact that we have received data  */
-        nn_ctx_enter( self->fsm.ctx );
-        nn_fsm_action ( &self->fsm, NN_SOFI_ACTION_DATA );
-        nn_ctx_leave( self->fsm.ctx );
-
-        /* Wait for sent confirmation */
-        _ofi_debug("OFI: SOFI: Waiting for Rx signal\n");
-        nn_efd_wait( &self->sync, -1 );
-        nn_efd_unsignal( &self->sync );
-
     }
-
-    /* Skip error routine */
-    goto cleanup;
-
-error:
-
-    /* Just a placeholder for error handling */
-    /* TODO: Properly handle errors */
-    _ofi_debug("OFI: Error handling routine (error=%i) is missing!\n", ret);
-
-cleanup:
-
-    /* Notify FSM for the fact that we are disconnected  */
-    if (self->state == NN_SOFI_STATE_CONNECTED) {
-        _ofi_debug("OFI: Triggering discconect because poller thread exited\n");
-
-        /* We are using the disconnect timer trick in order to change threads,
-           and therfore allow a clean stop() of the fsm. */
-        self->shutdown_reason = NN_SOFI_SHUTDOWN_DISCONNECT;
-        nn_timer_start( &self->shutdown_timer, 1 );
-    }
+    _ofi_debug("OFI: SOFI: Exited poller thread\n");
 
 }
 
@@ -756,7 +660,10 @@ static void nn_sofi_handler (struct nn_fsm *self, int src, int type,
                 nn_thread_init (&sofi->thread, nn_sofi_poller_thread, sofi);
 
                 /* Start keepalive timer */
-                nn_timer_start( &sofi->keepalive_timer, NN_SOFI_KEEPALIVE_INTERVAL );
+                nn_timer_start( &sofi->keepalive_timer, NN_SOFI_KEEPALIVE_TIMEOUT );
+
+                /* Send initialization event */
+                nn_fsm_action ( &sofi->fsm, NN_SOFI_ACTION_PRE_RX );
 
                 return;
             default:
@@ -774,80 +681,143 @@ static void nn_sofi_handler (struct nn_fsm *self, int src, int type,
     case NN_SOFI_STATE_CONNECTED:
         switch (src) {
 
+        /* Local Actions */
+        case NN_FSM_ACTION:
+            switch (type) {
+
+            /* Post receive buffers to prepare for reception */
+            case NN_SOFI_ACTION_PRE_RX:
+
+                /* Post receive buffers */
+                ret = ofi_rx_post( sofi->ep, sofi->inmsg_chunk, sofi->recv_buffer_size, fi_mr_desc( sofi->mr_inmsg->mr ) );
+
+                /* Handle errors */
+                if (ret == -FI_REMOTE_DISCONNECT) { /* Remotely disconnected */
+                    nn_fsm_action ( &sofi->fsm, NN_SOFI_ACTION_DISCONNECT );
+                } else if (ret) {
+                    sofi->error = ret;
+                    nn_fsm_action ( &sofi->fsm, NN_SOFI_ACTION_ERROR );
+                }
+                return;
+
+            /* The data on the input buffer are populated */
+            case NN_SOFI_ACTION_RX:
+
+                /* Data are received, notify pipebase */
+                nn_pipebase_received (&sofi->pipebase);
+
+                /* Restart keepalive timeout */
+                nn_timer_stop( &sofi->keepalive_timer);
+
+                return;
+
+            /* The data on the output buffer are sent */
+            case NN_SOFI_ACTION_TX:
+
+                /* Data are sent, notify pipebase */
+                nn_pipebase_sent (&sofi->pipebase);
+
+                /* Restart keepalive timeout */
+                nn_timer_stop( &sofi->keepalive_timer);
+
+                return;
+
+            /* An error occured on the socket */
+            case NN_SOFI_ACTION_ERROR:
+
+                _ofi_debug("OFI: SOFI: An error occured (%i)\n", sofi->error);
+
+            /* The socket was disconnected */
+            case NN_SOFI_ACTION_DISCONNECT:
+
+                /* We are disconnected, stop timer */
+                _ofi_debug("OFI: SOFI: Disconnected\n");
+                sofi->state = NN_SOFI_STATE_DISCONNECTING;
+                nn_timer_stop(&sofi->keepalive_timer);
+                // nn_timer_stop(&sofi->shutdown_timer);
+
+                return;
+
+            default:
+                nn_fsm_bad_action (sofi->state, src, type);
+            }
+
         /* Keepalive timer */
         case NN_SOFI_SRC_KEEPALIVE_TIMER:
             switch (type) {
             case NN_TIMER_TIMEOUT:
 
-                /* Check if we RECEIVED a keepalive in time */
-                if (++sofi->keepalive_rx_ctr > NN_SOFI_KEEPALIVE_TIMEOUT_COUNTER) {
-                    printf("OFI: SOFI: Connection timed out!\n");
-                    sofi->shutdown_reason = NN_SOFI_SHUTDOWN_DISCONNECT;
-                    nn_timer_start( &sofi->shutdown_timer, 1 );
-                }
-
-                /* Check if we have to SEND keepalive */
-                else if (++sofi->keepalive_tx_ctr > NN_SOFI_KEEPALIVE_COUNTER) {
-                    sofi->keepalive_tx_ctr = 0;
-
-                    /* Send keepalive message */
-                    _ofi_debug("OFI: SOFI: Sending keepalive!\n");
-                    // iov [0].iov_base = sofi->ptr_slab_sysptr->outhdr;
-                    // iov [0].iov_len = 0;
-                    // iov_desc[0] = FI_MR_DESC_OFFSET( sofi->mr_slab->mr, &sofi->ptr_slab_sysptr->outhdr, sofi->ptr_slab_sysptr );
-                    // ret = ofi_tx_msg( sofi->ep, iov, iov_desc, 1, 0, NN_SOFI_KEEPALIVE_INTERVAL / 1000 );
-                    memcpy( sofi->ptr_slab_sysptr->outhdr, FT_PACKET_KEEPALIVE, sizeof(FT_PACKET_KEEPALIVE) );
-                    ret = ofi_tx_data( sofi->ep, sofi->ptr_slab_sysptr->outhdr, sizeof(FT_PACKET_KEEPALIVE), 
-                        FI_MR_DESC_OFFSET( sofi->mr_slab->mr, &sofi->ptr_slab_sysptr->outhdr, sofi->ptr_slab_sysptr ),
-                        NN_SOFI_KEEPALIVE_INTERVAL / 1000 );
-                    if (ret) {
-                        /* TODO: Handle errors */
-                        printf("OFI: SOFI: Error sending keepalive! Assuming disconnected remote endpoint.\n");
-                        sofi->shutdown_reason = NN_SOFI_SHUTDOWN_ERROR;
-                        nn_timer_start( &sofi->shutdown_timer, 1 );
-                        return;
-                    }
-
-                }
-
-                /* Stop timer */
+                /* Timeout reached */
+                _ofi_debug("OFI: SOFI: Connection timeout due to lack of traffic\n");
+                sofi->state = NN_SOFI_STATE_DISCONNECTING;
                 nn_timer_stop( &sofi->keepalive_timer);
+                // nn_timer_stop(&sofi->shutdown_timer);
                 return;
 
             case NN_TIMER_STOPPED:
 
                 /* Restart timer when stopped */
-                nn_timer_start( &sofi->keepalive_timer, NN_SOFI_KEEPALIVE_INTERVAL );
+                nn_timer_start( &sofi->keepalive_timer, NN_SOFI_KEEPALIVE_TIMEOUT );
                 return;
 
             default:
                 nn_fsm_bad_action (sofi->state, src, type);
             }
 
-        /* Zombie timer */
-        case NN_SOFI_SRC_SHUTDOWN_TIMER:
-            switch (type) {
-            case NN_TIMER_TIMEOUT:
+        default:
+            nn_fsm_bad_source (sofi->state, src, type);
+        }
 
-                /* We are now disconnected, stop timer */
-                sofi->state = NN_SOFI_STATE_DISCONNECTED;
-                nn_timer_stop( &sofi->keepalive_timer);
-                nn_timer_stop(&sofi->shutdown_timer);
-                return;
+/******************************************************************************/
+/*  DISCONNECTING state.                                                      */
+/******************************************************************************/
 
-            default:
-                nn_fsm_bad_action (sofi->state, src, type);
-            }
+    case NN_SOFI_STATE_DISCONNECTING:
+        switch (src) {
 
         /* Local Actions */
         case NN_FSM_ACTION:
             switch (type) {
-            case NN_SOFI_ACTION_DATA:
 
-                /* Notify pipebase that we have some data */
-                nn_pipebase_received (&sofi->pipebase);
-
+            /* Do not post Rx buffers */
+            case NN_SOFI_ACTION_PRE_RX:
                 return;
+
+            /* Do notify completion of rx data */
+            case NN_SOFI_ACTION_RX:
+                nn_pipebase_received (&sofi->pipebase);
+                return;
+
+            /* Do notify completing of tx data */
+            case NN_SOFI_ACTION_TX:
+                nn_pipebase_sent (&sofi->pipebase);
+                return;
+
+            /* Ignore errors and disconnect events when disconnecting */
+            case NN_SOFI_ACTION_ERROR:
+            case NN_SOFI_ACTION_DISCONNECT:
+                return;
+
+            default:
+                nn_fsm_bad_action (sofi->state, src, type);
+            }
+
+        /* Keepalive timer */
+        case NN_SOFI_SRC_KEEPALIVE_TIMER:
+            switch (type) {
+            case NN_TIMER_TIMEOUT:
+
+                /* Just stop timer if it kicks-in */
+                nn_timer_stop( &sofi->keepalive_timer);
+                return;
+
+            case NN_TIMER_STOPPED:
+
+                /* We are disconnected */
+                sofi->state = NN_SOFI_STATE_DISCONNECTED;
+                nn_fsm_action( &sofi->fsm, NN_SOFI_ACTION_DISCONNECT );
+                return;
+
             default:
                 nn_fsm_bad_action (sofi->state, src, type);
             }
@@ -863,20 +833,41 @@ static void nn_sofi_handler (struct nn_fsm *self, int src, int type,
     case NN_SOFI_STATE_DISCONNECTED:
         switch (src) {
 
+        /* Local Actions */
+        case NN_FSM_ACTION:
+            switch (type) {
+
+            /* Ignore local FSM actions when we are shutting down */
+            case NN_SOFI_ACTION_PRE_RX:
+            case NN_SOFI_ACTION_RX:
+            case NN_SOFI_ACTION_TX:
+            case NN_SOFI_ACTION_ERROR:
+                return;
+
+            /* Handle the disconnection confirmation */
+            case NN_SOFI_ACTION_DISCONNECT:
+
+                /* Notify parent fsm that we are disconnected */
+                nn_fsm_raise(&sofi->fsm, &sofi->disconnected, 
+                    NN_SOFI_DISCONNECTED);
+                return;
+
+            default:
+                nn_fsm_bad_action (sofi->state, src, type);
+            }
+
         /* Zombie timer */
         case NN_SOFI_SRC_KEEPALIVE_TIMER:
-        case NN_SOFI_SRC_SHUTDOWN_TIMER:
             switch (type) {
             case NN_TIMER_STOPPED:
 
                 /* Wait until both timers are idle */
                 if (!nn_timer_isidle(&sofi->keepalive_timer)) return;
-                if (!nn_timer_isidle(&sofi->shutdown_timer)) return;
                 _ofi_debug("OFI: SOFI: All timers are idle, we are safe to shutdown.\n");
 
-                /* Notify parent fsm that we are disconnected */
-                nn_fsm_raise(&sofi->fsm, &sofi->disconnected, 
-                    NN_SOFI_DISCONNECTED);
+                /* Send disconnection notification */
+                nn_fsm_action( &sofi->fsm, NN_SOFI_ACTION_DISCONNECT );
+
                 return;
 
             default:

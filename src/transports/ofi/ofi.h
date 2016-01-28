@@ -34,7 +34,7 @@
 #define NN_OFI_DEFAULT_SLABMR_SIZE 65536
 
 /* Uncomment the following to enable verose messages for debugging */
-//#define OFI_DEBUG_LOG
+#define OFI_DEBUG_LOG
 
 extern struct nn_transport *nn_ofi;
 

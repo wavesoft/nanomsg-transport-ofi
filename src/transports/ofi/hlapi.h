@@ -46,6 +46,9 @@
 /* Error flag that denotes that remote socket disconnected */
 #define FI_REMOTE_DISCONNECT	513
 
+#define FT_PRINTERR(call, retv) \
+	do { fprintf(stderr, "OFI: Error on " call "(): %s:%d, ret=%d (%s)\n", __FILE__, __LINE__, (int) retv, fi_strerror((int) -retv)); } while (0)
+
 /* Forward declarations */
 struct ofi_mr;
 

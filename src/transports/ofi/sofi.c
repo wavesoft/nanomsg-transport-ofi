@@ -32,9 +32,11 @@
 #include "../../utils/alloc.h"
 #include "../../utils/wire.h"
 
-/* Payload of the keepalive paket (having an invalid nanomsg protocol header, to distinguish) */
-const uint8_t FT_PACKET_KEEPALIVE[8] = {0xFF, 0xFF, 0xFF, 0xFF,
-                                        0xFF, 0xFF, 0xFF, 0xFF };
+/* Controlling payload headers */
+const uint8_t FT_PACKET_KEEPALIVE[8] = {0xFF, 0xFF, 0xFF, 0xFF, 
+                                        0xFF, 0xFF, 0xFF, 0xF0 };
+const uint8_t FT_PACKET_SHUTDOWN[8]  = {0xFF, 0xFF, 0xFF, 0xFF, 
+                                        0xFF, 0xFF, 0xFF, 0xF1 };
 
 #define FI_MR_DESC_OFFSET(mr,base,reference) \
         ((void*)fi_mr_desc(mr) + (((void*)reference) - ((void*)base)))
@@ -141,7 +143,8 @@ void nn_sofi_DANGEROUS_hack_chunk_size( void * ptr, size_t size )
     /* Access the internals of the chunk */
     struct nn_sofi_chunk * chunk = nn_sofi_chunk_getptr(ptr);
     /* Fake size without reallocation */
-    //printf("!!!! Hacking from %lu to %lu (ptr=%p) !!!!\n", chunk->size, size, ptr);
+    // printf("!!!! Hacking from %lu to %lu (ptr=%p) !!!!\n", 
+    //     chunk->size, size, ptr);
     chunk->size = size;
 }
 
@@ -190,7 +193,8 @@ void nn_sofi_init (struct nn_sofi *self,
         &self->slab_size, &opt_sz);
     nn_epbase_getopt (epbase, NN_SOL_SOCKET, NN_RCVBUF,
         &self->recv_buffer_size, &opt_sz);
-    _ofi_debug("OFI: SOFI: Socket options NN_OFI_SLABMR_SIZE=%i, NN_RCVBUF=%i\n", self->slab_size, self->recv_buffer_size);
+    _ofi_debug("OFI: SOFI: Socket options NN_OFI_SLABMR_SIZE=%i, NN_RCVBUF=%i\n"
+        , self->slab_size, self->recv_buffer_size);
 
     /* Allocate slab buffer */
     size_t slab_size = sizeof( struct nn_ofi_sys_ptrs ) + self->slab_size;
@@ -210,7 +214,7 @@ void nn_sofi_init (struct nn_sofi *self,
     ret = ofi_mr_alloc( self->ep, &self->mr_slab );
     if (ret) {
        /* TODO: Handle error */
-       printf("OFI: SOFI: ERROR: Unable to allocate an MR management object for slab objects!\n");
+       printf("OFI: SOFI: ERROR: Unable to alloc an MR obj for slab slab!\n");
        return;
     }
 
@@ -229,7 +233,7 @@ void nn_sofi_init (struct nn_sofi *self,
     ret = ofi_mr_alloc( self->ep, &self->mr_user );
     if (ret) {
        /* TODO: Handle error */
-       printf("OFI: SOFI: ERROR: Unable to allocate an MR management object for user objects!\n");
+       printf("OFI: SOFI: ERROR: Unable to alloc MR obj for user!\n");
        return;
     }
 
@@ -238,10 +242,10 @@ void nn_sofi_init (struct nn_sofi *self,
     /**
      * Allocate a reusable chunk for incoming messages
      */
-    ret = nn_chunk_alloc( self->recv_buffer_size, 0, (void**)&self->inmsg_chunk );
+    ret = nn_chunk_alloc(self->recv_buffer_size, 0, (void**)&self->inmsg_chunk);
     if (ret) {
        /* TODO: Handle error */
-       printf("OFI: SOFI: ERROR: Unable to allocate inmsg chunk!\n");
+       printf("OFI: SOFI: ERROR: Unable to alloc inmsg chunk!\n");
        return;
     }
 
@@ -252,7 +256,7 @@ void nn_sofi_init (struct nn_sofi *self,
     ret = ofi_mr_alloc( self->ep, &self->mr_inmsg );
     if (ret) {
        /* TODO: Handle error */
-       printf("OFI: SOFI: ERROR: Unable to allocate an MR management object for inmsg objects!\n");
+       printf("OFI: SOFI: ERROR: Unable to alloc an MR obj for inmsg!\n");
        return;
     }
 

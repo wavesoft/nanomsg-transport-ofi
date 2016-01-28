@@ -525,7 +525,9 @@ static void nn_sofi_poller_thread (void *arg)
 
             /* Handle the fact that the data are received  */
             _ofi_debug("OFI: SOFI: Rx CQ Event\n");
+            nn_ctx_enter( self->fsm.ctx );
             nn_fsm_action ( &self->fsm, NN_SOFI_ACTION_RX );
+            nn_ctx_leave( self->fsm.ctx );
 
         } else if (nn_slow(ret != -FI_EAGAIN)) {
             if (ret == -FI_EAVAIL) {
@@ -536,7 +538,9 @@ static void nn_sofi_poller_thread (void *arg)
 
                     /* The socket operation was cancelled, we were disconnected */
                     _ofi_debug("OFI: SOFI: Rx CQ Error (-FI_ECANCELED) caused disconnection\n");
+                    nn_ctx_enter( self->fsm.ctx );
                     nn_fsm_action ( &self->fsm, NN_SOFI_ACTION_DISCONNECT );
+                    nn_ctx_leave( self->fsm.ctx );
                     break;
 
                 }
@@ -544,14 +548,18 @@ static void nn_sofi_poller_thread (void *arg)
                 /* Handle error */
                 self->error = -err_entry.err;
                 _ofi_debug("OFI: SOFI: Rx CQ Error (%i)\n", -err_entry.err);
+                nn_ctx_enter( self->fsm.ctx );
                 nn_fsm_action ( &self->fsm, NN_SOFI_ACTION_ERROR );
+                nn_ctx_leave( self->fsm.ctx );
 
             } else {
 
                 /* Unexpected CQ Read error */
                 FT_PRINTERR("fi_cq_read<rx_cq>", ret);
                 self->error = ret;
+                nn_ctx_enter( self->fsm.ctx );
                 nn_fsm_action ( &self->fsm, NN_SOFI_ACTION_ERROR );
+                nn_ctx_leave( self->fsm.ctx );
 
             }
         }
@@ -564,7 +572,9 @@ static void nn_sofi_poller_thread (void *arg)
 
             /* Handle the fact that the data are sent */
             _ofi_debug("OFI: SOFI: Tx CQ Event\n");
+            nn_ctx_enter( self->fsm.ctx );
             nn_fsm_action ( &self->fsm, NN_SOFI_ACTION_TX );
+            nn_ctx_leave( self->fsm.ctx );
 
         } else if (nn_slow(ret != -FI_EAGAIN)) {
 
@@ -576,7 +586,9 @@ static void nn_sofi_poller_thread (void *arg)
 
                     /* The socket operation was cancelled, we were disconnected */
                     _ofi_debug("OFI: SOFI: Tx CQ Error (-FI_ECANCELED) caused disconnection\n");
+                    nn_ctx_enter( self->fsm.ctx );
                     nn_fsm_action ( &self->fsm, NN_SOFI_ACTION_DISCONNECT );
+                    nn_ctx_leave( self->fsm.ctx );
                     break;
 
                 }
@@ -584,14 +596,18 @@ static void nn_sofi_poller_thread (void *arg)
                 /* Handle error */
                 self->error = -err_entry.err;
                 _ofi_debug("OFI: SOFI: Tx CQ Error (%i)\n", -err_entry.err);
+                nn_ctx_enter( self->fsm.ctx );
                 nn_fsm_action ( &self->fsm, NN_SOFI_ACTION_ERROR );
+                nn_ctx_leave( self->fsm.ctx );
 
             } else {
 
                 /* Unexpected CQ Read error */
                 FT_PRINTERR("fi_cq_read<tx_cq>", ret);
                 self->error = ret;
+                nn_ctx_enter( self->fsm.ctx );
                 nn_fsm_action ( &self->fsm, NN_SOFI_ACTION_ERROR );
+                nn_ctx_leave( self->fsm.ctx );
 
             }
 
@@ -606,7 +622,9 @@ static void nn_sofi_poller_thread (void *arg)
             /* Check for socket disconnection */
             if (event == FI_SHUTDOWN) {
                 _ofi_debug("OFI: SOFI: Got shutdown EQ event\n");
+                nn_ctx_enter( self->fsm.ctx );
                 nn_fsm_action ( &self->fsm, NN_SOFI_ACTION_DISCONNECT );
+                nn_ctx_leave( self->fsm.ctx );
                 break;
             }
 

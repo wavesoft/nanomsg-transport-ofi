@@ -699,7 +699,7 @@ static void nn_sofi_handler (struct nn_fsm *self, int src, int type,
                     nn_fsm_action ( &sofi->fsm, NN_SOFI_ACTION_DISCONNECT );
                 } else if (ret) {
                     sofi->error = ret;
-                    _ofi_debug("OFI: SOFI: Could not post receive buffers, got error %i!\n", i);
+                    _ofi_debug("OFI: SOFI: Could not post receive buffers, got error %i!\n", ret);
                     nn_fsm_action ( &sofi->fsm, NN_SOFI_ACTION_ERROR );
                 }
                 return;

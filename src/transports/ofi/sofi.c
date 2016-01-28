@@ -479,6 +479,7 @@ static int nn_sofi_recv (struct nn_pipebase *self, struct nn_msg *msg)
     nn_msg_init (&sofi->inmsg, 0);
 
     /* Tell fsm to prepare send buffers */
+    _ofi_debug("OFI: SOFI: Acknowledging rx data!\n");
     nn_fsm_action ( &sofi->fsm, NN_SOFI_ACTION_PRE_RX );
 
     /* Success */
@@ -689,13 +690,16 @@ static void nn_sofi_handler (struct nn_fsm *self, int src, int type,
             case NN_SOFI_ACTION_PRE_RX:
 
                 /* Post receive buffers */
+                _ofi_debug("OFI: SOFI: Posting receive buffers (max_rx=%i)\n", sofi->recv_buffer_size);
                 ret = ofi_rx_post( sofi->ep, sofi->inmsg_chunk, sofi->recv_buffer_size, fi_mr_desc( sofi->mr_inmsg->mr ) );
 
                 /* Handle errors */
                 if (ret == -FI_REMOTE_DISCONNECT) { /* Remotely disconnected */
+                    _ofi_debug("OFI: SOFI: Could not post receive buffers because remote endpoit is in invalid state!\n");
                     nn_fsm_action ( &sofi->fsm, NN_SOFI_ACTION_DISCONNECT );
                 } else if (ret) {
                     sofi->error = ret;
+                    _ofi_debug("OFI: SOFI: Could not post receive buffers, got error %i!\n", i);
                     nn_fsm_action ( &sofi->fsm, NN_SOFI_ACTION_ERROR );
                 }
                 return;

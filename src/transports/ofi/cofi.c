@@ -137,9 +137,9 @@ int nn_cofi_create (void *hint, struct nn_epbase **epbase)
         nn_cofi_handler, 
         nn_cofi_shutdown,
         nn_epbase_getctx( &self->epbase ));
-    self->state = NN_COFI_STATE_IDLE;
 
     /* Start FSM. */
+    self->state = NN_COFI_STATE_IDLE;
     nn_fsm_start( &self->fsm );
 
     /*  Return the base class as an out parameter. */

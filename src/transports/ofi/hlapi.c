@@ -680,7 +680,7 @@ int ofi_rx_poll( struct ofi_active_endpoint * EP, size_t * rx_size, uint32_t tim
 				);
 
 				/* Return error */
-				return err_entry.err;
+				return -err_entry.err;
 
 			/* Return errors */
 			} else if (nn_slow(ret < 0)) {

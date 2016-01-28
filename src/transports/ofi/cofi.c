@@ -279,7 +279,7 @@ static void nn_cofi_handler (struct nn_fsm *self, int src, int type,
 
                 /* Disconnected from remote endpoint */
                 printf("OFI: ERROR: Disconnected from remote endpoint (not implemented)\n");
-                nn_cofi_stop( cofi );
+                nn_fsm_stop (&cofi->fsm);
 
                 return;
 

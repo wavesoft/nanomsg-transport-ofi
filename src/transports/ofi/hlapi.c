@@ -54,9 +54,6 @@
     #define _ofi_debug(...)
 #endif
 
-#define FT_PRINTERR(call, retv) \
-	do { fprintf(stderr, "OFI: Error on " call "(): %s:%d, ret=%d (%s)\n", __FILE__, __LINE__, (int) retv, fi_strerror((int) -retv)); } while (0)
-
 #define FT_ERR(fmt, ...) \
 	do { fprintf(stderr, "OFI: %s:%d: " fmt, __FILE__, __LINE__, ##__VA_ARGS__); } while (0)
 

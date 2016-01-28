@@ -53,6 +53,7 @@ struct nn_sofi {
     /*  The state machine. */
     struct nn_fsm fsm;
     int state;
+    int error;
 
     /*  Pipe connecting this inproc connection to the nanomsg core. */
     struct nn_pipebase pipebase;
@@ -76,8 +77,8 @@ struct nn_sofi {
     struct nn_list_item item;
 
     /* Timer used to notify the termination of the socket thread */
-    struct nn_timer shutdown_timer;
-    uint8_t shutdown_reason;
+    // struct nn_timer shutdown_timer;
+    // uint8_t shutdown_reason;
 
     /* Keepalive configuration */
     struct nn_timer keepalive_timer;
@@ -86,7 +87,6 @@ struct nn_sofi {
 
     /* The OFI Poller thread and sync efd */
     struct nn_thread thread;
-    struct nn_efd    sync;
 
     /* First draft of smart MM */
     int                     slab_size, recv_buffer_size;

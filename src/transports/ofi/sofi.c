@@ -43,11 +43,22 @@ const uint8_t FT_PACKET_SHUTDOWN[8]  = {0xFF, 0xFF, 0xFF, 0xFF,
 #define FI_MR_DESC_OFFSET(mr,base,reference) \
         ((void*)fi_mr_desc(mr) + (((void*)reference) - ((void*)base)))
 
+// #define NN_FSM_ACTION_GUARD(fsm,action) \
+//         nn_ctx_enter( (fsm)->ctx ); \
+//         nn_fsm_action ( fsm, action ); \
+//         nn_ctx_leave( (fsm)->ctx );
+
+#define NN_FSM_ACTION_FEED(fsm,src,event,ptr) \
+        nn_ctx_enter ( (fsm)->ctx); \
+        nn_fsm_feed ( fsm, src, event, ptr); \
+        nn_ctx_leave ( (fsm)->ctx);
+
 
 /* Helper macro to enable or disable verbose logs on console */
 #ifdef OFI_DEBUG_LOG
+    #include <pthread.h>
     /* Enable debug */
-    #define _ofi_debug(...)   printf(__VA_ARGS__)
+    #define _ofi_debug(...)   printf("[%012i] ", pthread_self()); printf(__VA_ARGS__)
 #else
     /* Disable debug */
     #define _ofi_debug(...)
@@ -70,6 +81,7 @@ const uint8_t FT_PACKET_SHUTDOWN[8]  = {0xFF, 0xFF, 0xFF, 0xFF,
 /* Private SOFI sources */
 #define NN_SOFI_SRC_SHUTDOWN_TIMER          1100
 #define NN_SOFI_SRC_KEEPALIVE_TIMER         1101
+#define NN_SOFI_SRC_POLLER_THREAD           1102
 
 /* Configurable times for keepalive */
 #define NN_SOFI_KEEPALIVE_TIMEOUT           1000
@@ -389,6 +401,29 @@ static void nn_sofi_shutdown (struct nn_fsm *self, int src, int type,
 }
 
 /**
+ * Disconnect FSM
+ *
+ * Depending on the currnet state of the FSM route 
+ * towrads shutdown.
+ */
+static void nn_sofi_disconnect ( struct nn_sofi *self )
+{
+    nn_assert( self->state != NN_SOFI_STATE_IDLE );
+    nn_assert( self->state != NN_SOFI_STATE_DISCONNECTED );
+
+    /* Clean disconnect when connected */
+    if (self->state == NN_SOFI_STATE_CONNECTED) {
+
+        /* Switch to disconnecting state */
+        self->state = NN_SOFI_STATE_DISCONNECTING;
+
+        /* Stop keepalive timer */
+        nn_timer_stop(&self->keepalive_timer);
+
+    }
+}
+
+/**
  * Helper function to either memcpy data to mark the region as shared
  */
 void nn_sofi_mr_outgoing ( struct nn_sofi *self, void * ptr, size_t len, void ** sendptr, void ** descptr )
@@ -511,6 +546,9 @@ static void nn_sofi_poller_thread (void *arg)
         ret = fi_cq_read( self->ep->rx_cq, &cq_entry, 1 );
         if (nn_slow(ret > 0)) {
 
+            /* Wrap in context */
+            nn_ctx_enter ( self->fsm.ctx );
+
             /* Initialize a new message on the shared pointer */
             nn_msg_init_chunk (&self->inmsg, self->inmsg_chunk);
             _ofi_debug("OFI: SOFI: Got incoming message of %li bytes\n", cq_entry.len);
@@ -525,9 +563,8 @@ static void nn_sofi_poller_thread (void *arg)
 
             /* Handle the fact that the data are received  */
             _ofi_debug("OFI: SOFI: Rx CQ Event\n");
-            nn_ctx_enter( self->fsm.ctx );
-            nn_fsm_action ( &self->fsm, NN_SOFI_ACTION_RX );
-            nn_ctx_leave( self->fsm.ctx );
+            nn_fsm_feed ( &self->fsm, NN_SOFI_SRC_POLLER_THREAD, NN_SOFI_ACTION_RX, NULL );
+            nn_ctx_leave ( self->fsm.ctx );
 
         } else if (nn_slow(ret != -FI_EAGAIN)) {
             if (ret == -FI_EAVAIL) {
@@ -538,9 +575,7 @@ static void nn_sofi_poller_thread (void *arg)
 
                     /* The socket operation was cancelled, we were disconnected */
                     _ofi_debug("OFI: SOFI: Rx CQ Error (-FI_ECANCELED) caused disconnection\n");
-                    nn_ctx_enter( self->fsm.ctx );
-                    nn_fsm_action ( &self->fsm, NN_SOFI_ACTION_DISCONNECT );
-                    nn_ctx_leave( self->fsm.ctx );
+                    NN_FSM_ACTION_FEED ( &self->fsm, NN_SOFI_SRC_POLLER_THREAD, NN_SOFI_ACTION_DISCONNECT, NULL );
                     break;
 
                 }
@@ -548,18 +583,14 @@ static void nn_sofi_poller_thread (void *arg)
                 /* Handle error */
                 self->error = -err_entry.err;
                 _ofi_debug("OFI: SOFI: Rx CQ Error (%i)\n", -err_entry.err);
-                nn_ctx_enter( self->fsm.ctx );
-                nn_fsm_action ( &self->fsm, NN_SOFI_ACTION_ERROR );
-                nn_ctx_leave( self->fsm.ctx );
+                NN_FSM_ACTION_FEED ( &self->fsm, NN_SOFI_SRC_POLLER_THREAD, NN_SOFI_ACTION_ERROR, NULL );
 
             } else {
 
                 /* Unexpected CQ Read error */
                 FT_PRINTERR("fi_cq_read<rx_cq>", ret);
                 self->error = ret;
-                nn_ctx_enter( self->fsm.ctx );
-                nn_fsm_action ( &self->fsm, NN_SOFI_ACTION_ERROR );
-                nn_ctx_leave( self->fsm.ctx );
+                NN_FSM_ACTION_FEED ( &self->fsm, NN_SOFI_SRC_POLLER_THREAD, NN_SOFI_ACTION_ERROR, NULL );
 
             }
         }
@@ -572,9 +603,7 @@ static void nn_sofi_poller_thread (void *arg)
 
             /* Handle the fact that the data are sent */
             _ofi_debug("OFI: SOFI: Tx CQ Event\n");
-            nn_ctx_enter( self->fsm.ctx );
-            nn_fsm_action ( &self->fsm, NN_SOFI_ACTION_TX );
-            nn_ctx_leave( self->fsm.ctx );
+            NN_FSM_ACTION_FEED ( &self->fsm, NN_SOFI_SRC_POLLER_THREAD, NN_SOFI_ACTION_TX, NULL );
 
         } else if (nn_slow(ret != -FI_EAGAIN)) {
 
@@ -586,9 +615,7 @@ static void nn_sofi_poller_thread (void *arg)
 
                     /* The socket operation was cancelled, we were disconnected */
                     _ofi_debug("OFI: SOFI: Tx CQ Error (-FI_ECANCELED) caused disconnection\n");
-                    nn_ctx_enter( self->fsm.ctx );
-                    nn_fsm_action ( &self->fsm, NN_SOFI_ACTION_DISCONNECT );
-                    nn_ctx_leave( self->fsm.ctx );
+                    NN_FSM_ACTION_FEED ( &self->fsm, NN_SOFI_SRC_POLLER_THREAD, NN_SOFI_ACTION_DISCONNECT, NULL );
                     break;
 
                 }
@@ -596,18 +623,14 @@ static void nn_sofi_poller_thread (void *arg)
                 /* Handle error */
                 self->error = -err_entry.err;
                 _ofi_debug("OFI: SOFI: Tx CQ Error (%i)\n", -err_entry.err);
-                nn_ctx_enter( self->fsm.ctx );
-                nn_fsm_action ( &self->fsm, NN_SOFI_ACTION_ERROR );
-                nn_ctx_leave( self->fsm.ctx );
+                NN_FSM_ACTION_FEED ( &self->fsm, NN_SOFI_SRC_POLLER_THREAD, NN_SOFI_ACTION_ERROR, NULL );
 
             } else {
 
                 /* Unexpected CQ Read error */
                 FT_PRINTERR("fi_cq_read<tx_cq>", ret);
                 self->error = ret;
-                nn_ctx_enter( self->fsm.ctx );
-                nn_fsm_action ( &self->fsm, NN_SOFI_ACTION_ERROR );
-                nn_ctx_leave( self->fsm.ctx );
+                NN_FSM_ACTION_FEED ( &self->fsm, NN_SOFI_SRC_POLLER_THREAD, NN_SOFI_ACTION_ERROR, NULL );
 
             }
 
@@ -622,9 +645,7 @@ static void nn_sofi_poller_thread (void *arg)
             /* Check for socket disconnection */
             if (event == FI_SHUTDOWN) {
                 _ofi_debug("OFI: SOFI: Got shutdown EQ event\n");
-                nn_ctx_enter( self->fsm.ctx );
-                nn_fsm_action ( &self->fsm, NN_SOFI_ACTION_DISCONNECT );
-                nn_ctx_leave( self->fsm.ctx );
+                NN_FSM_ACTION_FEED ( &self->fsm, NN_SOFI_SRC_POLLER_THREAD, NN_SOFI_ACTION_DISCONNECT, NULL );
                 break;
             }
 
@@ -684,6 +705,7 @@ static void nn_sofi_handler (struct nn_fsm *self, int src, int type,
                 /* Send initialization event */
                 nn_fsm_action ( &sofi->fsm, NN_SOFI_ACTION_PRE_RX );
 
+
                 return;
             default:
                 nn_fsm_bad_action (sofi->state, src, type);
@@ -704,9 +726,8 @@ static void nn_sofi_handler (struct nn_fsm *self, int src, int type,
         case NN_FSM_ACTION:
             switch (type) {
 
-            /* Post receive buffers to prepare for reception */
+            /* Do not post Rx buffers */
             case NN_SOFI_ACTION_PRE_RX:
-
                 /* Post receive buffers */
                 _ofi_debug("OFI: SOFI: Posting receive buffers (max_rx=%i)\n", sofi->recv_buffer_size);
                 ret = ofi_rx_post( sofi->ep, sofi->inmsg_chunk, sofi->recv_buffer_size, fi_mr_desc( sofi->mr_inmsg->mr ) );
@@ -714,13 +735,22 @@ static void nn_sofi_handler (struct nn_fsm *self, int src, int type,
                 /* Handle errors */
                 if (ret == -FI_REMOTE_DISCONNECT) { /* Remotely disconnected */
                     _ofi_debug("OFI: SOFI: Could not post receive buffers because remote endpoit is in invalid state!\n");
-                    nn_fsm_action ( &sofi->fsm, NN_SOFI_ACTION_DISCONNECT );
+                    nn_sofi_disconnect( sofi );
                 } else if (ret) {
                     sofi->error = ret;
                     _ofi_debug("OFI: SOFI: Could not post receive buffers, got error %i!\n", ret);
                     nn_fsm_action ( &sofi->fsm, NN_SOFI_ACTION_ERROR );
                 }
                 return;
+
+            default:
+                nn_fsm_bad_action (sofi->state, src, type);
+            }
+
+
+        /* Poller thread actions */
+        case NN_SOFI_SRC_POLLER_THREAD:
+            switch (type) {
 
             /* The data on the input buffer are populated */
             case NN_SOFI_ACTION_RX:
@@ -754,10 +784,7 @@ static void nn_sofi_handler (struct nn_fsm *self, int src, int type,
 
                 /* We are disconnected, stop timer */
                 _ofi_debug("OFI: SOFI: Disconnected\n");
-                sofi->state = NN_SOFI_STATE_DISCONNECTING;
-                nn_timer_stop(&sofi->keepalive_timer);
-                // nn_timer_stop(&sofi->shutdown_timer);
-
+                nn_sofi_disconnect( sofi );
                 return;
 
             default:
@@ -805,6 +832,18 @@ static void nn_sofi_handler (struct nn_fsm *self, int src, int type,
             case NN_SOFI_ACTION_PRE_RX:
                 return;
 
+            default:
+                nn_fsm_bad_action (sofi->state, src, type);
+            }
+
+        /* Poller thread actions */
+        case NN_SOFI_SRC_POLLER_THREAD:
+            switch (type) {
+
+            /* Do not post Rx buffers */
+            case NN_SOFI_ACTION_PRE_RX:
+                return;
+
             /* Do notify completion of rx data */
             case NN_SOFI_ACTION_RX:
                 nn_pipebase_received (&sofi->pipebase);
@@ -836,6 +875,9 @@ static void nn_sofi_handler (struct nn_fsm *self, int src, int type,
             case NN_TIMER_STOPPED:
 
                 /* We are disconnected */
+                _ofi_debug("OFI: SOFI: All timers are idle, we are safe to shutdown.\n");
+
+                /* Switch to shutdown and shutdown */
                 sofi->state = NN_SOFI_STATE_DISCONNECTED;
                 nn_fsm_action( &sofi->fsm, NN_SOFI_ACTION_DISCONNECT );
                 return;
@@ -859,36 +901,12 @@ static void nn_sofi_handler (struct nn_fsm *self, int src, int type,
         case NN_FSM_ACTION:
             switch (type) {
 
-            /* Ignore local FSM actions when we are shutting down */
-            case NN_SOFI_ACTION_PRE_RX:
-            case NN_SOFI_ACTION_RX:
-            case NN_SOFI_ACTION_TX:
-            case NN_SOFI_ACTION_ERROR:
-                return;
-
             /* Handle the disconnection confirmation */
             case NN_SOFI_ACTION_DISCONNECT:
 
                 /* Notify parent fsm that we are disconnected */
                 nn_fsm_raise(&sofi->fsm, &sofi->disconnected, 
                     NN_SOFI_DISCONNECTED);
-                return;
-
-            default:
-                nn_fsm_bad_action (sofi->state, src, type);
-            }
-
-        /* Zombie timer */
-        case NN_SOFI_SRC_KEEPALIVE_TIMER:
-            switch (type) {
-            case NN_TIMER_STOPPED:
-
-                /* Wait until both timers are idle */
-                if (!nn_timer_isidle(&sofi->keepalive_timer)) return;
-                _ofi_debug("OFI: SOFI: All timers are idle, we are safe to shutdown.\n");
-
-                /* Send disconnection notification */
-                nn_fsm_action( &sofi->fsm, NN_SOFI_ACTION_DISCONNECT );
 
                 return;
 

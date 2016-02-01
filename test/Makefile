@@ -14,7 +14,7 @@ hlapi.o: $(OFI_DIR)/hlapi.c
 
 # Core Tests
 test_dgram: hlapi.o fabric_dgram.c
-	gcc -D__STANDALONE_TESTS -I$(OFI_DIR) hlapi.o fabric_dgram.c -lfabric -g -o test_dgram
+	gcc -D__STANDALONE_TESTS -I$(OFI_DIR) hlapi.o fabric_dgram.c -lfabric -pthread -g -o test_dgram
 
 test_msg: hlapi.o fabric_msg.c
 	gcc -D__STANDALONE_TESTS -I$(OFI_DIR) hlapi.o fabric_msg.c -lfabric -g -o test_msg

@@ -151,6 +151,9 @@ static void nn_sofi_output_action(struct nn_sofi *sofi, int action);
 /* Polling function forward declaration */
 static void nn_sofi_poller_thread (void *arg);
 
+/* Helper functions */
+static void nn_sofi_disconnect ( struct nn_sofi *self );
+
 /* =============================================================== */
 /* == BEGIN HACKING ============================================== */
 /* =============================================================== */

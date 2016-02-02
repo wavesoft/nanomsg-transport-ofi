@@ -907,6 +907,12 @@ static void nn_sofi_input_action(struct nn_sofi *sofi, int action)
                     nn_fsm_action( &sofi->fsm, NN_SOFI_ACTION_IN_ERROR );
                     return;
 
+                case NN_SOFI_INACTION_RX_DATA:
+
+                    /* TODO: Be smart on duble-buffering here perhaps?? */
+                    printf("OFI: WARNING: Rx Buffer Overrun!\n");
+                    return;
+
                 default:
                     nn_fsm_bad_action( sofi->instate, sofi->state, action );
                 }

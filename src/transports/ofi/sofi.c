@@ -435,16 +435,21 @@ static void nn_sofi_shutdown (struct nn_fsm *self, int src, int type,
     sofi = nn_cont (self, struct nn_sofi, fsm);
 
     /* Switch to shutdown if this was an fsm action */
-    if (nn_slow (src == NN_FSM_ACTION && type == NN_FSM_STOP)) {
+    if (nn_slow (sofi->state == NN_SOFI_STATE_CONNECTED )) {
+        if (nn_slow (src == NN_FSM_ACTION && type == NN_FSM_STOP)) {
 
-        /* Disconnect SOFI */
-        nn_sofi_disconnect( sofi );
+            /* Disconnect & cleanup everything SOFI */
+            nn_sofi_disconnect( sofi );
 
-        // /* Abort OFI Operations */
-        // sofi->state = NN_SOFI_STATE_DISCONNECTING;
+            // /* Abort OFI Operations */
+            // sofi->state = NN_SOFI_STATE_DISCONNECTING;
 
-        // /* Stop keepalive timer */
-        // nn_timer_stop( &sofi->keepalive_timer);
+            // /* Stop keepalive timer */
+            // nn_timer_stop( &sofi->keepalive_timer);
+
+        } else {
+            nn_fsm_bad_action( sofi->state, src, type );
+        }
     }
     if (nn_slow (sofi->state == NN_SOFI_STATE_DISCONNECTING )) {
 
@@ -453,6 +458,12 @@ static void nn_sofi_shutdown (struct nn_fsm *self, int src, int type,
         if (sofi->outstate != NN_SOFI_OUTSTATE_CLOSED) return;
         if (!nn_timer_isidle(&sofi->keepalive_timer))
             return;
+
+        /* We are disconnected */
+        sofi->state = NN_SOFI_STATE_DISCONNECTED;
+
+    }
+    if (nn_slow (sofi->state == NN_SOFI_STATE_DISCONNECTED)) {
 
         /*  Unmanage memory regions. */
         _ofi_debug("OFI: Freeing memory resources\n");

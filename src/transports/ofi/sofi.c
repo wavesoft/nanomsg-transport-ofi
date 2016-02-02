@@ -475,28 +475,6 @@ static void nn_sofi_shutdown (struct nn_fsm *self, int src, int type,
  */
 static void nn_sofi_disconnect ( struct nn_sofi *self )
 {
-    // _ofi_debug("OFI: SOFI: Disconnect requested\n");
-
-    // /* Clean disconnect when connected */
-    // if (self->state == NN_SOFI_STATE_CONNECTED) {
-
-    //     /* By default we go to disconnected */
-    //     self->state = NN_SOFI_STATE_DISCONNECTED;
-
-    //     /* Wait for pending operation to complete */
-    //     if (self->instate == NN_SOFI_INSTATE_PENDING) {
-    //         _ofi_debug("OFI: SOFI: Switching to disconnecting because IN pending\n");
-    //         self->state = NN_SOFI_STATE_DISCONNECTING;
-    //     }
-    //     if (self->outstate == NN_SOFI_OUTSTATE_PENDING) {
-    //         _ofi_debug("OFI: SOFI: Switching to disconnecting because OUT pending\n");
-    //         self->state = NN_SOFI_STATE_DISCONNECTING;
-    //     }
-
-    //     /* Stop keepalive timer */
-    //     nn_timer_stop(&self->keepalive_timer);
-
-    // }
 
     nn_assert( self->state != NN_SOFI_STATE_IDLE );
     nn_assert( self->state != NN_SOFI_STATE_DISCONNECTED );
@@ -1260,84 +1238,6 @@ static void nn_sofi_handler (struct nn_fsm *self, int src, int type,
 
                 return;
 
-        // /* Poller thread actions */
-        // case NN_SOFI_TASK_RX:
-        //     switch (type) {
-        //     case NN_WORKER_TASK_EXECUTE:
-
-        //         /* Notify input FSM that we have data */
-        //         _ofi_debug("OFI: SOFI: Acknowledging rx data\n");
-        //         nn_sofi_input_action( sofi, NN_SOFI_INACTION_RX_DATA );
-
-        //         /* Restart keepalive timeout */
-        //         // nn_timer_stop( &sofi->keepalive_timer);
-
-        //         return;
-
-        //     default:
-        //         nn_fsm_bad_action (sofi->state, src, type);
-        //     }
-        // case NN_SOFI_TASK_TX:
-        //     switch (type) {
-        //     case NN_WORKER_TASK_EXECUTE:
-            
-        //         /* Data are sent, notify pipebase */
-        //         _ofi_debug("OFI: SOFI: Acknowledging tx data\n");
-        //         nn_sofi_output_action( sofi, NN_SOFI_OUTACTION_TX_ACK );
-
-        //         /* Restart keepalive timeout */
-        //         // nn_timer_stop( &sofi->keepalive_timer);
-
-        //         return;
-
-        //     default:
-        //         nn_fsm_bad_action (sofi->state, src, type);
-        //     }
-        // case NN_SOFI_TASK_ERROR:
-        //     switch (type) {
-        //     case NN_WORKER_TASK_EXECUTE:
-
-        //         /* Things went wrong */            
-        //         _ofi_debug("OFI: SOFI: An error occured (%i)\n", sofi->error);
-        //         nn_sofi_disconnect( sofi );
-
-        //         return;
-
-        //     default:
-        //         nn_fsm_bad_action (sofi->state, src, type);
-        //     }
-        // case NN_SOFI_TASK_DISCONNECT:
-        //     switch (type) {
-        //     case NN_WORKER_TASK_EXECUTE:
-
-        //         /* Things went wrong */            
-        //         _ofi_debug("OFI: SOFI: Disconnected\n");
-        //         nn_sofi_disconnect( sofi );
-
-        //         return;
-
-        //     default:
-        //         nn_fsm_bad_action (sofi->state, src, type);
-        //     }
-
-        // /* Keepalive timer */
-        // case NN_SOFI_SRC_KEEPALIVE_TIMER:
-        //     switch (type) {
-        //     case NN_TIMER_TIMEOUT:
-
-        //         /* Timeout reached */
-        //         _ofi_debug("OFI: SOFI: Connection timeout due to lack of traffic\n");
-        //         sofi->state = NN_SOFI_STATE_DISCONNECTING;
-        //         nn_timer_stop( &sofi->keepalive_timer);
-
-        //         return;
-
-        //     case NN_TIMER_STOPPED:
-
-        //         /* Restart timer when stopped */
-        //         nn_timer_start( &sofi->keepalive_timer, NN_SOFI_KEEPALIVE_TIMEOUT );
-        //         return;
-
             default:
                 nn_fsm_bad_action (sofi->state, src, type);
             }
@@ -1372,54 +1272,6 @@ static void nn_sofi_handler (struct nn_fsm *self, int src, int type,
                     NN_SOFI_DISCONNECTED);
 
                 return;
-
-        // /* Poller thread actions */
-        // case NN_SOFI_TASK_RX:
-        //     switch (type) {
-        //     case NN_WORKER_TASK_EXECUTE:
-
-        //         /* Data are received, notify pipebase */
-        //         _ofi_debug("OFI: SOFI: Acknowledging rx data (disconnecting)\n");
-        //         nn_pipebase_received (&sofi->pipebase);
-
-        //         return;
-
-        //     default:
-        //         nn_fsm_bad_action (sofi->state, src, type);
-        //     }
-        // case NN_SOFI_TASK_TX:
-        //     switch (type) {
-        //     case NN_WORKER_TASK_EXECUTE:
-            
-        //         /* Data are sent, notify pipebase */
-        //         _ofi_debug("OFI: SOFI: Acknowledging tx data (disconnecting)\n");
-        //         nn_pipebase_sent (&sofi->pipebase);
-
-        //         return;
-
-        //     default:
-        //         nn_fsm_bad_action (sofi->state, src, type);
-        //     }
-
-        // /* Keepalive timer */
-        // case NN_SOFI_SRC_KEEPALIVE_TIMER:
-        //     switch (type) {
-        //     case NN_TIMER_TIMEOUT:
-
-        //         /* Just stop timer if it kicks-in */
-        //         _ofi_debug("OFI: SOFI: Keepalive timed out while disconnecting\n");
-        //         nn_timer_stop( &sofi->keepalive_timer);
-        //         return;
-
-        //     case NN_TIMER_STOPPED:
-
-        //         /* We are disconnected */
-        //         _ofi_debug("OFI: SOFI: All timers are idle, we are safe to shutdown.\n");
-
-        //         /* Switch to shutdown and shutdown */
-        //         sofi->state = NN_SOFI_STATE_DISCONNECTED;
-        //         nn_fsm_action( &sofi->fsm, NN_SOFI_ACTION_DISCONNECT );
-        //         return;
 
             default:
                 nn_fsm_bad_action (sofi->state, src, type);

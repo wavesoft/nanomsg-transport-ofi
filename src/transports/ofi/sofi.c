@@ -58,7 +58,8 @@ const uint8_t FT_PACKET_SHUTDOWN[8]  = {0xFF, 0xFF, 0xFF, 0xFF,
 #ifdef OFI_DEBUG_LOG
     #include <pthread.h>
     /* Enable debug */
-    #define _ofi_debug(...)   printf("[%012i] ", pthread_self()); printf(__VA_ARGS__)
+    // #define _ofi_debug(...)   printf("[%012i] ", pthread_self()); printf(__VA_ARGS__)
+    #define _ofi_debug(...)     printf(__VA_ARGS__)
 #else
     /* Disable debug */
     #define _ofi_debug(...)
@@ -71,12 +72,47 @@ const uint8_t FT_PACKET_SHUTDOWN[8]  = {0xFF, 0xFF, 0xFF, 0xFF,
 #define NN_SOFI_STATE_DISCONNECTED          4
 #define NN_SOFI_STATE_DISCONNECTING         5
 
+/* Input-Specific Sub-State Machine */
+#define NN_SOFI_INSTATE_IDLE                1
+#define NN_SOFI_INSTATE_POSTED              2
+#define NN_SOFI_INSTATE_PENDING             3
+#define NN_SOFI_INSTATE_ERROR               4
+#define NN_SOFI_INSTATE_CLOSED              5
+
+#define NN_SOFI_INACTION_ENTER              1
+#define NN_SOFI_INACTION_RX_DATA            2
+#define NN_SOFI_INACTION_RX_ACK             3
+#define NN_SOFI_INACTION_ERROR              4
+#define NN_SOFI_INACTION_CLOSE              5
+
+/* Output-Specific Sub-State Machine */
+#define NN_SOFI_OUTSTATE_IDLE               1
+#define NN_SOFI_OUTSTATE_POSTED             2
+#define NN_SOFI_OUTSTATE_PENDING            3
+#define NN_SOFI_OUTSTATE_ERROR              4
+#define NN_SOFI_OUTSTATE_CLOSED             5
+
+#define NN_SOFI_OUTACTION_ENTER             1
+#define NN_SOFI_OUTACTION_TX_DATA           2
+#define NN_SOFI_OUTACTION_TX_ACK            3
+#define NN_SOFI_OUTACTION_ERROR             4
+#define NN_SOFI_OUTACTION_CLOSE             5
+
 /* Private SOFI events */
-#define NN_SOFI_ACTION_PRE_RX               2010
 #define NN_SOFI_ACTION_RX                   2011
 #define NN_SOFI_ACTION_TX                   2012
 #define NN_SOFI_ACTION_ERROR                2013
 #define NN_SOFI_ACTION_DISCONNECT           2014
+#define NN_SOFI_ACTION_IN_CLOSED            2020
+#define NN_SOFI_ACTION_IN_ERROR             2021
+#define NN_SOFI_ACTION_OUT_CLOSED           2030
+#define NN_SOFI_ACTION_OUT_ERROR            2031
+
+/* SOFI Asynchronous tasks */
+#define NN_SOFI_TASK_RX                     3000
+#define NN_SOFI_TASK_TX                     3001
+#define NN_SOFI_TASK_ERROR                  3002
+#define NN_SOFI_TASK_DISCONNECT             3003
 
 /* Private SOFI sources */
 #define NN_SOFI_SRC_SHUTDOWN_TIMER          1100
@@ -84,7 +120,7 @@ const uint8_t FT_PACKET_SHUTDOWN[8]  = {0xFF, 0xFF, 0xFF, 0xFF,
 #define NN_SOFI_SRC_POLLER_THREAD           1102
 
 /* Configurable times for keepalive */
-#define NN_SOFI_KEEPALIVE_TIMEOUT           1000
+#define NN_SOFI_KEEPALIVE_TIMEOUT           2000
 
 /* Shutdown reasons */
 #define NN_SOFI_SHUTDOWN_DISCONNECT         1
@@ -108,6 +144,10 @@ const struct nn_pipebase_vfptr nn_sofi_pipebase_vfptr = {
     nn_sofi_send,
     nn_sofi_recv
 };
+
+/* Sub-FSMs for Input and Output */
+static void nn_sofi_input_action(struct nn_sofi *sofi, int action);
+static void nn_sofi_output_action(struct nn_sofi *sofi, int action);
 
 /* Polling function forward declaration */
 static void nn_sofi_poller_thread (void *arg);
@@ -193,7 +233,8 @@ void nn_sofi_init (struct nn_sofi *self,
     nn_msg_init (&self->inmsg, 0);
 
     /* Prepare thread resources */
-    // nn_efd_init( &self->sync );
+    nn_mutex_init (&self->rx_sync);
+    nn_mutex_init (&self->tx_sync);
 
     /* ==================== */
 
@@ -291,11 +332,25 @@ void nn_sofi_init (struct nn_sofi *self,
     nn_fsm_init (&self->fsm, nn_sofi_handler, nn_sofi_shutdown,
         src, self, owner);
     self->state = NN_SOFI_STATE_IDLE;
+    self->instate = NN_SOFI_INSTATE_IDLE;
+    self->outstate = NN_SOFI_OUTSTATE_IDLE;
     self->error = 0;
 
+    /*  Choose a worker thread to handle this socket. */
+    self->worker = nn_fsm_choose_worker (&self->fsm);
+
+    /* Initialize worker tasks */
+    nn_worker_task_init (&self->task_rx, NN_SOFI_TASK_RX,
+        &self->fsm);
+    nn_worker_task_init (&self->task_tx, NN_SOFI_TASK_TX,
+        &self->fsm);
+    nn_worker_task_init (&self->task_error, NN_SOFI_TASK_ERROR,
+        &self->fsm);
+    nn_worker_task_init (&self->task_disconnect, NN_SOFI_TASK_DISCONNECT,
+        &self->fsm);
+
     /* Initialize timer */
-    // nn_timer_init(&self->shutdown_timer, NN_SOFI_SRC_SHUTDOWN_TIMER, &self->fsm);
-    // self->shutdown_reason = 0;
+    nn_timer_init(&self->shutdown_timer, NN_SOFI_SRC_SHUTDOWN_TIMER, &self->fsm);
     nn_timer_init(&self->keepalive_timer,  NN_SOFI_SRC_KEEPALIVE_TIMER, &self->fsm);
     self->keepalive_tx_ctr = 0;
     self->keepalive_rx_ctr = 0;
@@ -315,11 +370,23 @@ void nn_sofi_term (struct nn_sofi *self)
 
     /* Free memory */
     nn_chunk_free( self->inmsg_chunk );
+    nn_chunk_free( self->inmsg_chunk );
     nn_free( self->mr_slab_ptr );
+
+    /* Cleanup worker tasks */
+    nn_worker_cancel (self->worker, &self->task_disconnect);
+    nn_worker_task_term (&self->task_disconnect);
+    nn_worker_task_term (&self->task_error);
+    nn_worker_task_term (&self->task_tx);
+    nn_worker_task_term (&self->task_rx);
+
+    /* Cleanup efd */
+    nn_mutex_term( &self->rx_sync );
+    nn_mutex_term( &self->tx_sync );
 
     /* Cleanup instantiated resources */
     nn_list_item_term (&self->item);
-    // nn_timer_term (&self->shutdown_timer);
+    nn_timer_term (&self->shutdown_timer);
     nn_timer_term (&self->keepalive_timer);
     nn_fsm_event_term (&self->disconnected);
     nn_msg_term (&self->inmsg);
@@ -408,19 +475,39 @@ static void nn_sofi_shutdown (struct nn_fsm *self, int src, int type,
  */
 static void nn_sofi_disconnect ( struct nn_sofi *self )
 {
+    // _ofi_debug("OFI: SOFI: Disconnect requested\n");
+
+    // /* Clean disconnect when connected */
+    // if (self->state == NN_SOFI_STATE_CONNECTED) {
+
+    //     /* By default we go to disconnected */
+    //     self->state = NN_SOFI_STATE_DISCONNECTED;
+
+    //     /* Wait for pending operation to complete */
+    //     if (self->instate == NN_SOFI_INSTATE_PENDING) {
+    //         _ofi_debug("OFI: SOFI: Switching to disconnecting because IN pending\n");
+    //         self->state = NN_SOFI_STATE_DISCONNECTING;
+    //     }
+    //     if (self->outstate == NN_SOFI_OUTSTATE_PENDING) {
+    //         _ofi_debug("OFI: SOFI: Switching to disconnecting because OUT pending\n");
+    //         self->state = NN_SOFI_STATE_DISCONNECTING;
+    //     }
+
+    //     /* Stop keepalive timer */
+    //     nn_timer_stop(&self->keepalive_timer);
+
+    // }
+
     nn_assert( self->state != NN_SOFI_STATE_IDLE );
     nn_assert( self->state != NN_SOFI_STATE_DISCONNECTED );
 
-    /* Clean disconnect when connected */
-    if (self->state == NN_SOFI_STATE_CONNECTED) {
+    /* Switch to disconnecting */
+    self->state = NN_SOFI_STATE_DISCONNECTING;
 
-        /* Switch to disconnecting state */
-        self->state = NN_SOFI_STATE_DISCONNECTING;
+    /* Stop inner FSMs */
+    nn_sofi_output_action( self, NN_SOFI_OUTACTION_CLOSE );
+    nn_sofi_input_action( self, NN_SOFI_INACTION_CLOSE );
 
-        /* Stop keepalive timer */
-        nn_timer_stop(&self->keepalive_timer);
-
-    }
 }
 
 /**
@@ -460,39 +547,18 @@ static int nn_sofi_send (struct nn_pipebase *self, struct nn_msg *msg)
     sofi = nn_cont (self, struct nn_sofi, pipebase);
 
     /* Send only if connected */
-    if (sofi->state != NN_SOFI_STATE_CONNECTED)
+    if (sofi->state != NN_SOFI_STATE_CONNECTED) {
+        _ofi_debug("OFI: SOFI: Sending on a non-connected socket\n");
         return -EBADF;
-
-    /*  Start async sending. */
-    size_t sz_outhdr = sizeof(sofi->ptr_slab_sysptr->outhdr);
-    size_t sz_sphdr = nn_chunkref_size (&msg->sphdr);
-    size_t sz_body = nn_chunkref_size (&msg->body);
+    }
+    nn_assert( sofi->outstate == NN_SOFI_OUTSTATE_IDLE );
 
     /*  Move the message to the local storage. */
     nn_msg_term (&sofi->outmsg);
     nn_msg_mv (&sofi->outmsg, msg);
 
-    /* Manage this memory region */
-    ofi_mr_manage( sofi->ep, sofi->mr_user, 
-        nn_chunkref_data (&sofi->outmsg.body), sz_body, NN_SOFI_MR_KEY_USER, MR_SEND );
-
-    _ofi_debug("OFI: SOFI: Sending payload (len=%lu)\n", sz_body );
-    ret = fi_send( sofi->ep->ep, nn_chunkref_data (&sofi->outmsg.body), sz_body, 
-        fi_mr_desc( sofi->mr_user->mr ), sofi->ep->remote_fi_addr, &sofi->ep->tx_ctx);
-    if (ret) {
-
-        /* If we are in a bad state, we were remotely disconnected */
-        if (ret == -FI_EOPBADSTATE) {
-            _ofi_debug("OFI: SOFI: fi_send returned -FI_EOPBADSTATE, considering shutdown.\n");
-            return -EBADF;           
-        }
-
-        /* Otherwise display error */
-        FT_PRINTERR("nn_sofi_send", ret);
-        sofi->error = ret;
-        nn_fsm_action ( &sofi->fsm, NN_SOFI_ACTION_ERROR );
-        return 0;
-    }
+    /* Inform output FSM that there are data pending */
+    nn_sofi_output_action( sofi, NN_SOFI_OUTACTION_TX_DATA );
 
     /* Success */
     return 0;
@@ -508,14 +574,16 @@ static int nn_sofi_recv (struct nn_pipebase *self, struct nn_msg *msg)
     struct nn_sofi *sofi;
     sofi = nn_cont (self, struct nn_sofi, pipebase);
 
+    _ofi_debug("OFI: SOFI: Handling reception of data\n");
+
     /* Move received message to the user. */
+    // nn_mutex_lock (&sofi->rx_sync);
     nn_chunk_addref( sofi->inmsg_chunk, 1 );
     nn_msg_mv (msg, &sofi->inmsg);
     nn_msg_init (&sofi->inmsg, 0);
 
-    /* Tell fsm to prepare send buffers */
-    _ofi_debug("OFI: SOFI: Acknowledging rx data!\n");
-    nn_fsm_action ( &sofi->fsm, NN_SOFI_ACTION_PRE_RX );
+    /* Continue input FSM */
+    nn_sofi_input_action( sofi, NN_SOFI_INACTION_RX_ACK );
 
     /* Success */
     return 0;
@@ -546,8 +614,8 @@ static void nn_sofi_poller_thread (void *arg)
         ret = fi_cq_read( self->ep->rx_cq, &cq_entry, 1 );
         if (nn_slow(ret > 0)) {
 
-            /* Wrap in context */
-            nn_ctx_enter ( self->fsm.ctx );
+            /* Make sure we have posted a message */
+            // nn_mutex_lock (&self->rx_sync);
 
             /* Initialize a new message on the shared pointer */
             nn_msg_init_chunk (&self->inmsg, self->inmsg_chunk);
@@ -563,8 +631,16 @@ static void nn_sofi_poller_thread (void *arg)
 
             /* Handle the fact that the data are received  */
             _ofi_debug("OFI: SOFI: Rx CQ Event\n");
-            nn_fsm_feed ( &self->fsm, NN_SOFI_SRC_POLLER_THREAD, NN_SOFI_ACTION_RX, NULL );
-            nn_ctx_leave ( self->fsm.ctx );
+            nn_worker_execute (self->worker, &self->task_rx);
+            // nn_sofi_input_action( self, NN_SOFI_INACTION_RX_DATA );
+
+            // nn_mutex_unlock (&self->rx_sync);
+
+            // nn_fsm_feed ( &self->fsm, NN_SOFI_SRC_POLLER_THREAD, NN_SOFI_ACTION_RX, NULL );
+
+            /* Wait for Rx Ack */
+            // nn_efd_wait( &self->rx_sync, -1 );
+            // nn_efd_unsignal( &self->rx_sync );
 
         } else if (nn_slow(ret != -FI_EAGAIN)) {
             if (ret == -FI_EAVAIL) {
@@ -575,22 +651,29 @@ static void nn_sofi_poller_thread (void *arg)
 
                     /* The socket operation was cancelled, we were disconnected */
                     _ofi_debug("OFI: SOFI: Rx CQ Error (-FI_ECANCELED) caused disconnection\n");
-                    NN_FSM_ACTION_FEED ( &self->fsm, NN_SOFI_SRC_POLLER_THREAD, NN_SOFI_ACTION_DISCONNECT, NULL );
+                    nn_worker_execute (self->worker, &self->task_disconnect);
+                    // nn_sofi_input_action( self, NN_SOFI_INACTION_CLOSE );
+
+                    // NN_FSM_ACTION_FEED ( &self->fsm, NN_SOFI_SRC_POLLER_THREAD, NN_SOFI_ACTION_DISCONNECT, NULL );
                     break;
 
                 }
 
                 /* Handle error */
-                self->error = -err_entry.err;
                 _ofi_debug("OFI: SOFI: Rx CQ Error (%i)\n", -err_entry.err);
-                NN_FSM_ACTION_FEED ( &self->fsm, NN_SOFI_SRC_POLLER_THREAD, NN_SOFI_ACTION_ERROR, NULL );
+                self->error = -err_entry.err;
+                // nn_sofi_input_action( self, NN_SOFI_INACTION_ERROR );
+                nn_worker_execute (self->worker, &self->task_error);
+                // NN_FSM_ACTION_FEED ( &self->fsm, NN_SOFI_SRC_POLLER_THREAD, NN_SOFI_ACTION_ERROR, NULL );
 
             } else {
 
                 /* Unexpected CQ Read error */
                 FT_PRINTERR("fi_cq_read<rx_cq>", ret);
                 self->error = ret;
-                NN_FSM_ACTION_FEED ( &self->fsm, NN_SOFI_SRC_POLLER_THREAD, NN_SOFI_ACTION_ERROR, NULL );
+                nn_worker_execute (self->worker, &self->task_error);
+                // nn_sofi_input_action( self, NN_SOFI_INACTION_ERROR );
+                // NN_FSM_ACTION_FEED ( &self->fsm, NN_SOFI_SRC_POLLER_THREAD, NN_SOFI_ACTION_ERROR, NULL );
 
             }
         }
@@ -601,9 +684,15 @@ static void nn_sofi_poller_thread (void *arg)
         ret = fi_cq_read( self->ep->tx_cq, &cq_entry, 1 );
         if (nn_slow(ret > 0)) {
 
+            /* Make sure we have posted a message */
+            // nn_assert( self->outstate == NN_SOFI_OUTSTATE_POSTED );
+            // self->outstate = NN_SOFI_OUTSTATE_PENDING;
+
             /* Handle the fact that the data are sent */
             _ofi_debug("OFI: SOFI: Tx CQ Event\n");
-            NN_FSM_ACTION_FEED ( &self->fsm, NN_SOFI_SRC_POLLER_THREAD, NN_SOFI_ACTION_TX, NULL );
+            nn_worker_execute (self->worker, &self->task_tx);
+            // nn_sofi_output_action( self, NN_SOFI_OUTACTION_TX_ACK );
+            // NN_FSM_ACTION_FEED ( &self->fsm, NN_SOFI_SRC_POLLER_THREAD, NN_SOFI_ACTION_TX, NULL );
 
         } else if (nn_slow(ret != -FI_EAGAIN)) {
 
@@ -615,22 +704,28 @@ static void nn_sofi_poller_thread (void *arg)
 
                     /* The socket operation was cancelled, we were disconnected */
                     _ofi_debug("OFI: SOFI: Tx CQ Error (-FI_ECANCELED) caused disconnection\n");
-                    NN_FSM_ACTION_FEED ( &self->fsm, NN_SOFI_SRC_POLLER_THREAD, NN_SOFI_ACTION_DISCONNECT, NULL );
+                    nn_worker_execute (self->worker, &self->task_disconnect);
+                    // nn_sofi_output_action( self, NN_SOFI_OUTACTION_CLOSE );
+                    // NN_FSM_ACTION_FEED ( &self->fsm, NN_SOFI_SRC_POLLER_THREAD, NN_SOFI_ACTION_DISCONNECT, NULL );
                     break;
 
                 }
 
                 /* Handle error */
-                self->error = -err_entry.err;
                 _ofi_debug("OFI: SOFI: Tx CQ Error (%i)\n", -err_entry.err);
-                NN_FSM_ACTION_FEED ( &self->fsm, NN_SOFI_SRC_POLLER_THREAD, NN_SOFI_ACTION_ERROR, NULL );
+                self->error = -err_entry.err;
+                nn_worker_execute (self->worker, &self->task_error);
+                // nn_sofi_output_action( self, NN_SOFI_OUTACTION_ERROR );
+                // NN_FSM_ACTION_FEED ( &self->fsm, NN_SOFI_SRC_POLLER_THREAD, NN_SOFI_ACTION_ERROR, NULL );
 
             } else {
 
                 /* Unexpected CQ Read error */
                 FT_PRINTERR("fi_cq_read<tx_cq>", ret);
                 self->error = ret;
-                NN_FSM_ACTION_FEED ( &self->fsm, NN_SOFI_SRC_POLLER_THREAD, NN_SOFI_ACTION_ERROR, NULL );
+                nn_worker_execute (self->worker, &self->task_error);
+                // nn_sofi_output_action( self, NN_SOFI_OUTACTION_ERROR );
+                // NN_FSM_ACTION_FEED ( &self->fsm, NN_SOFI_SRC_POLLER_THREAD, NN_SOFI_ACTION_ERROR, NULL );
 
             }
 
@@ -645,7 +740,11 @@ static void nn_sofi_poller_thread (void *arg)
             /* Check for socket disconnection */
             if (event == FI_SHUTDOWN) {
                 _ofi_debug("OFI: SOFI: Got shutdown EQ event\n");
-                NN_FSM_ACTION_FEED ( &self->fsm, NN_SOFI_SRC_POLLER_THREAD, NN_SOFI_ACTION_DISCONNECT, NULL );
+                nn_worker_execute (self->worker, &self->task_disconnect);
+                // nn_sofi_disconnect( self );
+                // nn_sofi_output_action( self, NN_SOFI_OUTACTION_CLOSE );
+                // nn_sofi_input_action( self, NN_SOFI_INACTION_CLOSE );
+                // NN_FSM_ACTION_FEED ( &self->fsm, NN_SOFI_SRC_POLLER_THREAD, NN_SOFI_ACTION_DISCONNECT, NULL );
                 break;
             }
 
@@ -663,6 +762,392 @@ static void nn_sofi_poller_thread (void *arg)
 }
 
 /**
+ * Streaming OFI [INPUT] FSM Handler
+ */
+static void nn_sofi_input_action(struct nn_sofi *sofi, int action)
+{
+    int ret;
+
+    switch (sofi->instate) {
+/******************************************************************************/
+/*  INPUT - IDLE state.                                                       */
+/******************************************************************************/
+        case NN_SOFI_INSTATE_IDLE:
+        switch (sofi->state) {
+
+            /* FSM Branch on [CONNECTED] state */
+            case NN_SOFI_STATE_CONNECTED:
+            switch (action) {
+                case NN_SOFI_INACTION_ENTER:
+
+                    /* Post receive buffers */
+                    _ofi_debug("OFI: SOFI: Posting receive buffers (max_rx=%i)\n", sofi->recv_buffer_size);
+                    ret = ofi_rx_post( sofi->ep, sofi->inmsg_chunk, sofi->recv_buffer_size, fi_mr_desc( sofi->mr_inmsg->mr ) );
+
+                    /* Handle errors */
+                    if (ret == -FI_REMOTE_DISCONNECT) { /* Remotely disconnected */
+
+                        /* Update state and release mutex */
+                        _ofi_debug("OFI: SOFI: Could not post receive buffers because remote endpoit is in invalid state!\n");
+
+                        /* Switch directly to closed */
+                        sofi->instate = NN_SOFI_INSTATE_CLOSED;
+                        /* Notify core fsm for the fact that IN-FSM is closed */
+                        nn_fsm_action( &sofi->fsm, NN_SOFI_ACTION_IN_CLOSED );
+                        return;
+
+                    } else if (ret) {
+
+                        /* Update state and release mutex */
+                        _ofi_debug("OFI: SOFI: Could not post receive buffers, got error %i!\n", ret);
+
+                        /* Trigger error */
+                        sofi->error = ret;
+                        sofi->instate = NN_SOFI_INSTATE_ERROR;
+                        nn_fsm_action( &sofi->fsm, NN_SOFI_ACTION_IN_ERROR );
+                        return;
+
+                    }
+
+                    /* Switch to posted state */
+                    sofi->instate = NN_SOFI_INSTATE_POSTED;
+
+                    return;
+
+
+                default:
+                    nn_fsm_bad_action( sofi->instate, sofi->state, action );
+                }
+
+            /* FSM Branch on [DISCONNECTING] state */
+            case NN_SOFI_STATE_DISCONNECTING:
+            switch (action) {
+                case NN_SOFI_INACTION_ENTER:
+                case NN_SOFI_INACTION_CLOSE:
+
+                    /* Switch directly to closed */
+                    sofi->instate = NN_SOFI_INSTATE_CLOSED;
+                    /* Notify core fsm for the fact that IN-FSM is closed */
+                    nn_fsm_action( &sofi->fsm, NN_SOFI_ACTION_IN_CLOSED );
+                    return;
+
+                default:
+                    nn_fsm_bad_action( sofi->instate, sofi->state, action );
+                }
+
+            default:
+                nn_fsm_bad_source( sofi->instate, sofi->state, action );
+
+        }
+
+
+/******************************************************************************/
+/*  INPUT - POSTED state.                                                     */
+/******************************************************************************/
+        case NN_SOFI_INSTATE_POSTED:
+        switch (sofi->state) {
+
+            /* Both [CONNECTED] and [DISCONNECTED] branches are the same */
+            case NN_SOFI_STATE_CONNECTED:
+            case NN_SOFI_STATE_DISCONNECTING:
+            switch (action) {
+                case NN_SOFI_INACTION_RX_DATA:
+
+                    /* Handle data and switch to pending */
+                    sofi->instate = NN_SOFI_INSTATE_PENDING;
+                    nn_pipebase_received (&sofi->pipebase);
+                    return;
+
+                case NN_SOFI_INACTION_ERROR:
+
+                    /* If an error occured */
+                    sofi->instate = NN_SOFI_INSTATE_ERROR;
+                    /* Notify core fsm for the fact that IN-FSM has error */
+                    nn_fsm_action( &sofi->fsm, NN_SOFI_ACTION_IN_ERROR );
+                    return;
+
+                case NN_SOFI_INACTION_CLOSE:
+
+                    /* Switch directly to closed */
+                    sofi->instate = NN_SOFI_INSTATE_CLOSED;
+                    /* Notify core fsm for the fact that IN-FSM is closed */
+                    nn_fsm_action( &sofi->fsm, NN_SOFI_ACTION_IN_CLOSED );
+                    return;
+
+                default:
+                    nn_fsm_bad_action( sofi->instate, sofi->state, action );
+                }
+
+            default:
+                nn_fsm_bad_source( sofi->instate, sofi->state, action );
+
+        }
+
+/******************************************************************************/
+/*  INPUT - PENDING state.                                                    */
+/******************************************************************************/
+        case NN_SOFI_INSTATE_PENDING:
+        switch (sofi->state) {
+
+            /* FSM Branch on [CONNECTED] state */
+            case NN_SOFI_STATE_CONNECTED:
+            switch (action) {
+                case NN_SOFI_INACTION_RX_ACK:
+
+                    /* After acknowledgement of input action, switch back to input */
+                    sofi->instate = NN_SOFI_STATE_IDLE;
+                    nn_sofi_input_action( sofi, NN_SOFI_INACTION_ENTER );
+                    return;
+
+                case NN_SOFI_INACTION_ERROR:
+
+                    /* If an error occured */
+                    sofi->instate = NN_SOFI_INSTATE_ERROR;
+                    /* Notify core fsm for the fact that IN-FSM has error */
+                    nn_fsm_action( &sofi->fsm, NN_SOFI_ACTION_IN_ERROR );
+                    return;
+
+                default:
+                    nn_fsm_bad_action( sofi->instate, sofi->state, action );
+                }
+
+            /* FSM Branch on [DISCONNECTING] state */
+            case NN_SOFI_STATE_DISCONNECTING:
+            switch (action) {
+                case NN_SOFI_INACTION_RX_ACK:
+                case NN_SOFI_INACTION_ERROR:
+
+                    /* When disconnecting, both these events are an opportuninty to close */
+                    sofi->instate = NN_SOFI_INSTATE_CLOSED;
+                    /* Notify core fsm for the fact that IN-FSM is closed */
+                    nn_fsm_action( &sofi->fsm, NN_SOFI_ACTION_IN_CLOSED );
+
+                    return;
+
+                case NN_SOFI_INACTION_CLOSE:
+
+                    /* Ignore closed event, since the socket will be closed
+                       one way or another when Rx is acknowledged (assuming that
+                       the CLOSE event is triggered when core is in DISCONNECTING state) */
+
+                    return;
+
+                default:
+                    nn_fsm_bad_action( sofi->instate, sofi->state, action );
+                }
+
+            default:
+                nn_fsm_bad_source( sofi->instate, sofi->state, action );
+
+        }
+
+
+/******************************************************************************/
+/*  INPUT - ERROR state.                                                      */
+/******************************************************************************/
+        case NN_SOFI_INSTATE_ERROR:
+        switch (action) {
+            case NN_SOFI_INACTION_CLOSE:
+
+                /* When disconnecting, both these events are an opportuninty to close */
+                sofi->instate = NN_SOFI_INSTATE_CLOSED;
+                /* Notify core fsm for the fact that IN-FSM is closed */
+                nn_fsm_action( &sofi->fsm, NN_SOFI_ACTION_IN_CLOSED );
+                return;
+
+            default:
+                nn_fsm_bad_action( sofi->instate, sofi->state, action );
+        }
+
+/******************************************************************************/
+/*  INPUT - CLOSED state.                                                     */
+/******************************************************************************/
+        case NN_SOFI_INSTATE_CLOSED:
+        switch (action) {
+            case NN_SOFI_INACTION_CLOSE:
+                /* Ignore other close events (we are expecting 1 extra) */
+                return;
+
+            default:
+                nn_fsm_bad_action( sofi->instate, sofi->state, action );
+        }
+
+    }
+}
+
+
+/**
+ * Streaming OFI [OUTPUT] FSM Handler
+ */
+static void nn_sofi_output_action(struct nn_sofi *sofi, int action)
+{
+    int ret;
+    size_t sz_outhdr, sz_sphdr, sz_body;
+
+    switch (sofi->outstate) {
+/******************************************************************************/
+/*  OUTPUT - IDLE state.                                                      */
+/******************************************************************************/
+        case NN_SOFI_OUTSTATE_IDLE:
+        switch (sofi->state) {
+
+            /* FSM Branch on [CONNECTED] state */
+            case NN_SOFI_STATE_CONNECTED:
+            switch (action) {
+                case NN_SOFI_OUTACTION_ENTER:
+
+                    /* We stay idle */
+                    return;
+
+                case NN_SOFI_OUTACTION_TX_DATA:
+
+                    /*  Start async sending. */
+                    sz_outhdr = sizeof(sofi->ptr_slab_sysptr->outhdr);
+                    sz_sphdr = nn_chunkref_size (&sofi->outmsg.sphdr);
+                    sz_body = nn_chunkref_size (&sofi->outmsg.body);
+
+                    /* Manage this memory region */
+                    ofi_mr_manage( sofi->ep, sofi->mr_user, 
+                        nn_chunkref_data (&sofi->outmsg.body), sz_body, NN_SOFI_MR_KEY_USER, MR_SEND );
+
+                    _ofi_debug("OFI: SOFI: Sending payload (len=%lu)\n", sz_body );
+                    ret = fi_send( sofi->ep->ep, nn_chunkref_data (&sofi->outmsg.body), sz_body, 
+                        fi_mr_desc( sofi->mr_user->mr ), sofi->ep->remote_fi_addr, &sofi->ep->tx_ctx);
+                    if (ret) {
+
+                        /* Otherwise display error */
+                        FT_PRINTERR("nn_sofi_send", ret);
+
+                        /* If we are in a bad state, we were remotely disconnected */
+                        if (ret == -FI_EOPBADSTATE) {
+                            _ofi_debug("OFI: SOFI: fi_send returned -FI_EOPBADSTATE, considering shutdown.\n");
+
+                            /* Swtich to closed state */
+                            sofi->outstate = NN_SOFI_OUTSTATE_CLOSED;
+                            /* Notify core fsm for the fact that IN-FSM has error */
+                            nn_fsm_action( &sofi->fsm, NN_SOFI_ACTION_OUT_CLOSED );
+
+                        } else {
+
+                            /* Swtich to error state */
+                            sofi->outstate = NN_SOFI_OUTSTATE_ERROR;
+                            /* Notify core fsm for the fact that IN-FSM has error */
+                            nn_fsm_action( &sofi->fsm, NN_SOFI_ACTION_OUT_ERROR );
+
+                        }
+
+                    } else {
+
+                        /* We have posted the output buffers */
+                        sofi->outstate = NN_SOFI_OUTSTATE_POSTED;
+
+                    }
+
+                    return;
+
+                default:
+                    nn_fsm_bad_action( sofi->outstate, sofi->state, action );
+                }
+
+            /* FSM Branch on [DISCONNECTING] state */
+            case NN_SOFI_STATE_DISCONNECTING:
+            switch (action) {
+                case NN_SOFI_OUTACTION_ENTER:
+                case NN_SOFI_OUTACTION_TX_DATA:
+                case NN_SOFI_OUTACTION_CLOSE:
+
+                    /* Switch directly to closed */
+                    sofi->outstate = NN_SOFI_OUTSTATE_CLOSED;
+                    /* Notify core fsm for the fact that IN-FSM is closed */
+                    nn_fsm_action( &sofi->fsm, NN_SOFI_ACTION_OUT_CLOSED );
+                    return;
+
+                default:
+                    nn_fsm_bad_action( sofi->outstate, sofi->state, action );
+                }
+
+            default:
+                nn_fsm_bad_source( sofi->outstate, sofi->state, action );
+
+        }
+
+
+/******************************************************************************/
+/*  OUTPUT - POSTED state.                                                    */
+/******************************************************************************/
+        case NN_SOFI_OUTSTATE_POSTED:
+        switch (sofi->state) {
+
+            /* FSM Branch on [CONNECTED] state */
+            case NN_SOFI_STATE_CONNECTED:
+            switch (action) {
+                case NN_SOFI_OUTACTION_TX_ACK:
+
+                    /* Notify pipebase for the fact that the data ere sent */
+                    sofi->outstate = NN_SOFI_OUTSTATE_IDLE;
+                    nn_pipebase_sent(&sofi->pipebase);
+                    return;
+
+                default:
+                    nn_fsm_bad_action( sofi->outstate, sofi->state, action );
+                }
+
+            /* FSM Branch on [DISCONNECTING] state */
+            case NN_SOFI_STATE_DISCONNECTING:
+            switch (action) {
+                case NN_SOFI_OUTACTION_TX_ACK:
+                case NN_SOFI_OUTACTION_CLOSE:
+
+                    /* Don't notify anything, go straight to shutdown */
+                    sofi->outstate = NN_SOFI_OUTSTATE_CLOSED;
+                    /* Notify core fsm for the fact that IN-FSM is closed */
+                    nn_fsm_action( &sofi->fsm, NN_SOFI_ACTION_OUT_CLOSED );
+                    return;
+
+                default:
+                    nn_fsm_bad_action( sofi->outstate, sofi->state, action );
+                }
+
+            default:
+                nn_fsm_bad_source( sofi->outstate, sofi->state, action );
+
+        }
+
+/******************************************************************************/
+/*  OUTPUT - ERROR state.                                                     */
+/******************************************************************************/
+        case NN_SOFI_OUTSTATE_ERROR:
+        switch (action) {
+            case NN_SOFI_OUTACTION_CLOSE:
+
+                /* Go straight to shutdown */
+                sofi->outstate = NN_SOFI_OUTSTATE_CLOSED;
+                /* Notify core fsm for the fact that IN-FSM is closed */
+                nn_fsm_action( &sofi->fsm, NN_SOFI_ACTION_OUT_CLOSED );
+
+                return;
+
+            default:
+                nn_fsm_bad_action( sofi->outstate, sofi->state, action );
+        }
+
+/******************************************************************************/
+/*  OUTPUT - CLOSED state.                                                    */
+/******************************************************************************/
+        case NN_SOFI_OUTSTATE_CLOSED:
+        switch (action) {
+            case NN_SOFI_OUTACTION_CLOSE:
+                /* Ignore other close events (we are expecting 1 extra) */
+                return;
+
+            default:
+                nn_fsm_bad_action( sofi->outstate, sofi->state, action );
+        }
+
+    }
+}
+
+/**
  * Streaming OFI FSM Handler
  */
 static void nn_sofi_handler (struct nn_fsm *self, int src, int type,
@@ -677,6 +1162,34 @@ static void nn_sofi_handler (struct nn_fsm *self, int src, int type,
     sofi = nn_cont (self, struct nn_sofi, fsm);
     _ofi_debug("OFI: nn_sofi_handler state=%i, src=%i, type=%i\n", sofi->state, src, 
         type);
+
+
+    /* Forward worker events no matter the FSM state */
+    if (type == NN_WORKER_TASK_EXECUTE) {
+        switch (src) {
+
+            case NN_SOFI_TASK_RX:
+                _ofi_debug("OFI: SOFI: Acknowledging rx data event\n");
+                nn_sofi_input_action( sofi, NN_SOFI_INACTION_RX_DATA );
+                return;
+
+            case NN_SOFI_TASK_TX:
+                _ofi_debug("OFI: SOFI: Acknowledging tx data event\n");
+                nn_sofi_output_action( sofi, NN_SOFI_OUTACTION_TX_ACK );
+                return;
+
+            case NN_SOFI_TASK_ERROR:
+                _ofi_debug("OFI: SOFI: Tx/Rx error event\n");
+                nn_sofi_disconnect( sofi );
+                return;
+
+            case NN_SOFI_TASK_DISCONNECT:
+                _ofi_debug("OFI: SOFI: Tx/Rx disconnection event\n");
+                nn_sofi_disconnect( sofi );
+                return;
+
+        }
+    }
 
     /* Handle new state */
     switch (sofi->state) {
@@ -700,13 +1213,15 @@ static void nn_sofi_handler (struct nn_fsm *self, int src, int type,
                 nn_thread_init (&sofi->thread, nn_sofi_poller_thread, sofi);
 
                 /* Start keepalive timer */
-                nn_timer_start( &sofi->keepalive_timer, NN_SOFI_KEEPALIVE_TIMEOUT );
+                // nn_timer_start( &sofi->keepalive_timer, NN_SOFI_KEEPALIVE_TIMEOUT );
 
-                /* Send initialization event */
-                nn_fsm_action ( &sofi->fsm, NN_SOFI_ACTION_PRE_RX );
-
-
+                /* Initialize In/Out Sub-FSMs */
+                sofi->instate = NN_SOFI_INSTATE_IDLE;
+                sofi->outstate = NN_SOFI_OUTSTATE_IDLE;
+                nn_sofi_input_action( sofi, NN_SOFI_INACTION_ENTER );
+                nn_sofi_output_action( sofi, NN_SOFI_OUTACTION_ENTER );
                 return;
+
             default:
                 nn_fsm_bad_action (sofi->state, src, type);
             }
@@ -722,92 +1237,100 @@ static void nn_sofi_handler (struct nn_fsm *self, int src, int type,
     case NN_SOFI_STATE_CONNECTED:
         switch (src) {
 
-        /* Local Actions */
+        /* Sub-FSM Actions */
         case NN_FSM_ACTION:
             switch (type) {
+            case NN_SOFI_ACTION_IN_ERROR:
+            case NN_SOFI_ACTION_IN_CLOSED:
+            case NN_SOFI_ACTION_OUT_ERROR:
+            case NN_SOFI_ACTION_OUT_CLOSED:
 
-            /* Do not post Rx buffers */
-            case NN_SOFI_ACTION_PRE_RX:
-                /* Post receive buffers */
-                _ofi_debug("OFI: SOFI: Posting receive buffers (max_rx=%i)\n", sofi->recv_buffer_size);
-                ret = ofi_rx_post( sofi->ep, sofi->inmsg_chunk, sofi->recv_buffer_size, fi_mr_desc( sofi->mr_inmsg->mr ) );
-
-                /* Handle errors */
-                if (ret == -FI_REMOTE_DISCONNECT) { /* Remotely disconnected */
-                    _ofi_debug("OFI: SOFI: Could not post receive buffers because remote endpoit is in invalid state!\n");
-                    nn_sofi_disconnect( sofi );
-                } else if (ret) {
-                    sofi->error = ret;
-                    _ofi_debug("OFI: SOFI: Could not post receive buffers, got error %i!\n", ret);
-                    nn_fsm_action ( &sofi->fsm, NN_SOFI_ACTION_ERROR );
-                }
-                return;
-
-            default:
-                nn_fsm_bad_action (sofi->state, src, type);
-            }
-
-
-        /* Poller thread actions */
-        case NN_SOFI_SRC_POLLER_THREAD:
-            switch (type) {
-
-            /* The data on the input buffer are populated */
-            case NN_SOFI_ACTION_RX:
-
-                /* Data are received, notify pipebase */
-                nn_pipebase_received (&sofi->pipebase);
-
-                /* Restart keepalive timeout */
-                nn_timer_stop( &sofi->keepalive_timer);
-
-                return;
-
-            /* The data on the output buffer are sent */
-            case NN_SOFI_ACTION_TX:
-
-                /* Data are sent, notify pipebase */
-                nn_pipebase_sent (&sofi->pipebase);
-
-                /* Restart keepalive timeout */
-                nn_timer_stop( &sofi->keepalive_timer);
-
-                return;
-
-            /* An error occured on the socket */
-            case NN_SOFI_ACTION_ERROR:
-
-                _ofi_debug("OFI: SOFI: An error occured (%i)\n", sofi->error);
-
-            /* The socket was disconnected */
-            case NN_SOFI_ACTION_DISCONNECT:
-
-                /* We are disconnected, stop timer */
-                _ofi_debug("OFI: SOFI: Disconnected\n");
-                nn_sofi_disconnect( sofi );
-                return;
-
-            default:
-                nn_fsm_bad_action (sofi->state, src, type);
-            }
-
-        /* Keepalive timer */
-        case NN_SOFI_SRC_KEEPALIVE_TIMER:
-            switch (type) {
-            case NN_TIMER_TIMEOUT:
-
-                /* Timeout reached */
-                _ofi_debug("OFI: SOFI: Connection timeout due to lack of traffic\n");
+                /* Switch to disconnecting */
                 sofi->state = NN_SOFI_STATE_DISCONNECTING;
-                nn_timer_stop( &sofi->keepalive_timer);
-                // nn_timer_stop(&sofi->shutdown_timer);
+
+                /* Close sockets */
+                nn_sofi_output_action( sofi, NN_SOFI_OUTACTION_CLOSE );
+                nn_sofi_input_action( sofi, NN_SOFI_INACTION_CLOSE );
+
                 return;
 
-            case NN_TIMER_STOPPED:
+        // /* Poller thread actions */
+        // case NN_SOFI_TASK_RX:
+        //     switch (type) {
+        //     case NN_WORKER_TASK_EXECUTE:
 
-                /* Restart timer when stopped */
-                nn_timer_start( &sofi->keepalive_timer, NN_SOFI_KEEPALIVE_TIMEOUT );
-                return;
+        //         /* Notify input FSM that we have data */
+        //         _ofi_debug("OFI: SOFI: Acknowledging rx data\n");
+        //         nn_sofi_input_action( sofi, NN_SOFI_INACTION_RX_DATA );
+
+        //         /* Restart keepalive timeout */
+        //         // nn_timer_stop( &sofi->keepalive_timer);
+
+        //         return;
+
+        //     default:
+        //         nn_fsm_bad_action (sofi->state, src, type);
+        //     }
+        // case NN_SOFI_TASK_TX:
+        //     switch (type) {
+        //     case NN_WORKER_TASK_EXECUTE:
+            
+        //         /* Data are sent, notify pipebase */
+        //         _ofi_debug("OFI: SOFI: Acknowledging tx data\n");
+        //         nn_sofi_output_action( sofi, NN_SOFI_OUTACTION_TX_ACK );
+
+        //         /* Restart keepalive timeout */
+        //         // nn_timer_stop( &sofi->keepalive_timer);
+
+        //         return;
+
+        //     default:
+        //         nn_fsm_bad_action (sofi->state, src, type);
+        //     }
+        // case NN_SOFI_TASK_ERROR:
+        //     switch (type) {
+        //     case NN_WORKER_TASK_EXECUTE:
+
+        //         /* Things went wrong */            
+        //         _ofi_debug("OFI: SOFI: An error occured (%i)\n", sofi->error);
+        //         nn_sofi_disconnect( sofi );
+
+        //         return;
+
+        //     default:
+        //         nn_fsm_bad_action (sofi->state, src, type);
+        //     }
+        // case NN_SOFI_TASK_DISCONNECT:
+        //     switch (type) {
+        //     case NN_WORKER_TASK_EXECUTE:
+
+        //         /* Things went wrong */            
+        //         _ofi_debug("OFI: SOFI: Disconnected\n");
+        //         nn_sofi_disconnect( sofi );
+
+        //         return;
+
+        //     default:
+        //         nn_fsm_bad_action (sofi->state, src, type);
+        //     }
+
+        // /* Keepalive timer */
+        // case NN_SOFI_SRC_KEEPALIVE_TIMER:
+        //     switch (type) {
+        //     case NN_TIMER_TIMEOUT:
+
+        //         /* Timeout reached */
+        //         _ofi_debug("OFI: SOFI: Connection timeout due to lack of traffic\n");
+        //         sofi->state = NN_SOFI_STATE_DISCONNECTING;
+        //         nn_timer_stop( &sofi->keepalive_timer);
+
+        //         return;
+
+        //     case NN_TIMER_STOPPED:
+
+        //         /* Restart timer when stopped */
+        //         nn_timer_start( &sofi->keepalive_timer, NN_SOFI_KEEPALIVE_TIMEOUT );
+        //         return;
 
             default:
                 nn_fsm_bad_action (sofi->state, src, type);
@@ -824,63 +1347,73 @@ static void nn_sofi_handler (struct nn_fsm *self, int src, int type,
     case NN_SOFI_STATE_DISCONNECTING:
         switch (src) {
 
-        /* Local Actions */
+        /* Sub-FSM Actions */
         case NN_FSM_ACTION:
             switch (type) {
+            case NN_SOFI_ACTION_IN_CLOSED:
+            case NN_SOFI_ACTION_OUT_CLOSED:
 
-            /* Do not post Rx buffers */
-            case NN_SOFI_ACTION_PRE_RX:
-                return;
+                /* Check if we have closed everything */
+                if (sofi->instate != NN_SOFI_INSTATE_CLOSED) return;
+                if (sofi->outstate != NN_SOFI_OUTSTATE_CLOSED) return;
+                _ofi_debug("OFI: Both input and output channels are closed!\n");
 
-            default:
-                nn_fsm_bad_action (sofi->state, src, type);
-            }
-
-        /* Poller thread actions */
-        case NN_SOFI_SRC_POLLER_THREAD:
-            switch (type) {
-
-            /* Do not post Rx buffers */
-            case NN_SOFI_ACTION_PRE_RX:
-                return;
-
-            /* Do notify completion of rx data */
-            case NN_SOFI_ACTION_RX:
-                nn_pipebase_received (&sofi->pipebase);
-                return;
-
-            /* Do notify completing of tx data */
-            case NN_SOFI_ACTION_TX:
-                nn_pipebase_sent (&sofi->pipebase);
-                return;
-
-            /* Ignore errors and disconnect events when disconnecting */
-            case NN_SOFI_ACTION_ERROR:
-            case NN_SOFI_ACTION_DISCONNECT:
-                return;
-
-            default:
-                nn_fsm_bad_action (sofi->state, src, type);
-            }
-
-        /* Keepalive timer */
-        case NN_SOFI_SRC_KEEPALIVE_TIMER:
-            switch (type) {
-            case NN_TIMER_TIMEOUT:
-
-                /* Just stop timer if it kicks-in */
-                nn_timer_stop( &sofi->keepalive_timer);
-                return;
-
-            case NN_TIMER_STOPPED:
-
-                /* We are disconnected */
-                _ofi_debug("OFI: SOFI: All timers are idle, we are safe to shutdown.\n");
-
-                /* Switch to shutdown and shutdown */
+                /* Switch to disconnected */
                 sofi->state = NN_SOFI_STATE_DISCONNECTED;
-                nn_fsm_action( &sofi->fsm, NN_SOFI_ACTION_DISCONNECT );
+
+                /* Notify parent fsm that we are disconnected */
+                nn_fsm_raise(&sofi->fsm, &sofi->disconnected, 
+                    NN_SOFI_DISCONNECTED);
+
                 return;
+
+        // /* Poller thread actions */
+        // case NN_SOFI_TASK_RX:
+        //     switch (type) {
+        //     case NN_WORKER_TASK_EXECUTE:
+
+        //         /* Data are received, notify pipebase */
+        //         _ofi_debug("OFI: SOFI: Acknowledging rx data (disconnecting)\n");
+        //         nn_pipebase_received (&sofi->pipebase);
+
+        //         return;
+
+        //     default:
+        //         nn_fsm_bad_action (sofi->state, src, type);
+        //     }
+        // case NN_SOFI_TASK_TX:
+        //     switch (type) {
+        //     case NN_WORKER_TASK_EXECUTE:
+            
+        //         /* Data are sent, notify pipebase */
+        //         _ofi_debug("OFI: SOFI: Acknowledging tx data (disconnecting)\n");
+        //         nn_pipebase_sent (&sofi->pipebase);
+
+        //         return;
+
+        //     default:
+        //         nn_fsm_bad_action (sofi->state, src, type);
+        //     }
+
+        // /* Keepalive timer */
+        // case NN_SOFI_SRC_KEEPALIVE_TIMER:
+        //     switch (type) {
+        //     case NN_TIMER_TIMEOUT:
+
+        //         /* Just stop timer if it kicks-in */
+        //         _ofi_debug("OFI: SOFI: Keepalive timed out while disconnecting\n");
+        //         nn_timer_stop( &sofi->keepalive_timer);
+        //         return;
+
+        //     case NN_TIMER_STOPPED:
+
+        //         /* We are disconnected */
+        //         _ofi_debug("OFI: SOFI: All timers are idle, we are safe to shutdown.\n");
+
+        //         /* Switch to shutdown and shutdown */
+        //         sofi->state = NN_SOFI_STATE_DISCONNECTED;
+        //         nn_fsm_action( &sofi->fsm, NN_SOFI_ACTION_DISCONNECT );
+        //         return;
 
             default:
                 nn_fsm_bad_action (sofi->state, src, type);
@@ -897,12 +1430,10 @@ static void nn_sofi_handler (struct nn_fsm *self, int src, int type,
     case NN_SOFI_STATE_DISCONNECTED:
         switch (src) {
 
-        /* Local Actions */
-        case NN_FSM_ACTION:
+        /* Keepalive timer */
+        case NN_SOFI_SRC_KEEPALIVE_TIMER:
             switch (type) {
-
-            /* Handle the disconnection confirmation */
-            case NN_SOFI_ACTION_DISCONNECT:
+            case NN_TIMER_STOPPED:
 
                 /* Notify parent fsm that we are disconnected */
                 nn_fsm_raise(&sofi->fsm, &sofi->disconnected, 

@@ -28,8 +28,9 @@
 #include "../../transport.h"
 #include "../../aio/fsm.h"
 #include "../../aio/timer.h"
-#include "../../utils/efd.h"
+#include "../../aio/worker.h"
 #include "../../utils/thread.h"
+#include "../../utils/mutex.h"
 
 /* SOFI Source */
 #define NN_BTCP_SRC_SOFI     1000
@@ -52,7 +53,7 @@ struct nn_sofi {
 
     /*  The state machine. */
     struct nn_fsm fsm;
-    int state;
+    int state, instate, outstate;
     int error;
 
     /*  Pipe connecting this inproc connection to the nanomsg core. */
@@ -76,9 +77,15 @@ struct nn_sofi {
     /* This member can be used by owner to keep individual atcps in a list. */
     struct nn_list_item item;
 
-    /* Timer used to notify the termination of the socket thread */
-    // struct nn_timer shutdown_timer;
-    // uint8_t shutdown_reason;
+    /* Asynchronous communication with the worker thread */
+    struct nn_worker *worker;
+    struct nn_worker_task task_rx;
+    struct nn_worker_task task_tx;
+    struct nn_worker_task task_error;
+    struct nn_worker_task task_disconnect;
+
+    /* Shutdown timer */
+    struct nn_timer shutdown_timer;
 
     /* Keepalive configuration */
     struct nn_timer keepalive_timer;
@@ -87,6 +94,8 @@ struct nn_sofi {
 
     /* The OFI Poller thread and sync efd */
     struct nn_thread thread;
+    struct nn_mutex rx_sync;
+    struct nn_mutex tx_sync;
 
     /* First draft of smart MM */
     int                     slab_size, recv_buffer_size;

@@ -375,6 +375,9 @@ void nn_sofi_term (struct nn_sofi *self)
 
     /* Cleanup worker tasks */
     nn_worker_cancel (self->worker, &self->task_disconnect);
+    nn_worker_cancel (self->worker, &self->task_error);
+    nn_worker_cancel (self->worker, &self->task_tx);
+    nn_worker_cancel (self->worker, &self->task_rx);
     nn_worker_task_term (&self->task_disconnect);
     nn_worker_task_term (&self->task_error);
     nn_worker_task_term (&self->task_tx);

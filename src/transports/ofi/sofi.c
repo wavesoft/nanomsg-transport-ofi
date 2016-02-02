@@ -579,7 +579,7 @@ static void nn_sofi_poller_thread (void *arg)
     struct fi_eq_cm_entry eq_entry;
     struct fi_cq_err_entry err_entry;
     struct fi_cq_data_entry cq_entry;
-    uint8_t fastpoller = 100;
+    uint8_t fastpoller = 200;
     uint32_t event;
 
     /* Keep thread alive while  */
@@ -643,6 +643,7 @@ static void nn_sofi_poller_thread (void *arg)
                 // nn_sofi_input_action( self, NN_SOFI_INACTION_ERROR );
                 nn_worker_execute (self->worker, &self->task_error);
                 // NN_FSM_ACTION_FEED ( &self->fsm, NN_SOFI_SRC_POLLER_THREAD, NN_SOFI_ACTION_ERROR, NULL );
+                break;
 
             } else {
 
@@ -652,6 +653,7 @@ static void nn_sofi_poller_thread (void *arg)
                 nn_worker_execute (self->worker, &self->task_error);
                 // nn_sofi_input_action( self, NN_SOFI_INACTION_ERROR );
                 // NN_FSM_ACTION_FEED ( &self->fsm, NN_SOFI_SRC_POLLER_THREAD, NN_SOFI_ACTION_ERROR, NULL );
+                break;
 
             }
         }
@@ -695,6 +697,7 @@ static void nn_sofi_poller_thread (void *arg)
                 nn_worker_execute (self->worker, &self->task_error);
                 // nn_sofi_output_action( self, NN_SOFI_OUTACTION_ERROR );
                 // NN_FSM_ACTION_FEED ( &self->fsm, NN_SOFI_SRC_POLLER_THREAD, NN_SOFI_ACTION_ERROR, NULL );
+                break;
 
             } else {
 
@@ -704,6 +707,7 @@ static void nn_sofi_poller_thread (void *arg)
                 nn_worker_execute (self->worker, &self->task_error);
                 // nn_sofi_output_action( self, NN_SOFI_OUTACTION_ERROR );
                 // NN_FSM_ACTION_FEED ( &self->fsm, NN_SOFI_SRC_POLLER_THREAD, NN_SOFI_ACTION_ERROR, NULL );
+                break;
 
             }
 
@@ -731,7 +735,7 @@ static void nn_sofi_poller_thread (void *arg)
         /* Microsleep for lessen the CPU load */
         if (!fastpoller--) {
             usleep(10);
-            fastpoller = 100;
+            fastpoller = 200;
         }
 
     }

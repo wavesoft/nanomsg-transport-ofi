@@ -68,7 +68,6 @@ const uint8_t FT_PACKET_SHUTDOWN[8]  = {0xFF, 0xFF, 0xFF, 0xFF,
 /* State machine states */
 #define NN_SOFI_STATE_IDLE                  1
 #define NN_SOFI_STATE_CONNECTED             2
-#define NN_SOFI_STATE_STOPPING              3
 #define NN_SOFI_STATE_DISCONNECTED          4
 #define NN_SOFI_STATE_DISCONNECTING         5
 
@@ -435,15 +434,20 @@ static void nn_sofi_shutdown (struct nn_fsm *self, int src, int type,
     /* Switch to shutdown if this was an fsm action */
     if (nn_slow (src == NN_FSM_ACTION && type == NN_FSM_STOP)) {
 
-        /* Abort OFI Operations */
-        sofi->state = NN_SOFI_STATE_STOPPING;
+        /* Disconnect SOFI */
+        nn_sofi_disconnect( sofi );
 
-        /* Stop keepalive timer */
-        nn_timer_stop( &sofi->keepalive_timer);
+        // /* Abort OFI Operations */
+        // sofi->state = NN_SOFI_STATE_DISCONNECTING;
+
+        // /* Stop keepalive timer */
+        // nn_timer_stop( &sofi->keepalive_timer);
     }
-    if (nn_slow (sofi->state == NN_SOFI_STATE_STOPPING )) {
+    if (nn_slow (sofi->state == NN_SOFI_STATE_DISCONNECTING )) {
 
-        /* Wait for keepalive timer to stop */
+        /* Wait until everything is closed */
+        if (sofi->instate != NN_SOFI_INSTATE_CLOSED) return;
+        if (sofi->outstate != NN_SOFI_OUTSTATE_CLOSED) return;
         if (!nn_timer_isidle(&sofi->keepalive_timer))
             return;
 

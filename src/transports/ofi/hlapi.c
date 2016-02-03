@@ -298,15 +298,20 @@ int ft_wait_shutdown_aware(struct fid_cq *cq, struct fid_eq *eq, int timeout, st
 
 		/* Then check for shutdown event */
 		if (nn_fast(shutdown_interval == 0)) {
-			ret = fi_eq_read(eq, &event, &eq_entry, sizeof eq_entry, 0);
-			if (nn_fast(ret != -FI_EAGAIN)) {
-				if (event == FI_SHUTDOWN) {
-					/* If no CQ is arrived within 255 cycles, consider it lost */
-					shutdown_interval = 255;
-				} else {
-					FT_ERR("Unexpected CM event %d\n", event);
+
+			/* Event Queue is only initialized on EP_MSG */
+			if (eq != NULL) {
+				ret = fi_eq_read(eq, &event, &eq_entry, sizeof eq_entry, 0);
+				if (nn_fast(ret != -FI_EAGAIN)) {
+					if (event == FI_SHUTDOWN) {
+						/* If no CQ is arrived within 255 cycles, consider it lost */
+						shutdown_interval = 255;
+					} else {
+						FT_ERR("Unexpected CM event %d\n", event);
+					}
 				}
 			}
+			
 		}
 
 		// /* Let some other CPU work to be done */

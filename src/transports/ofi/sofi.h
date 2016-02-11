@@ -48,6 +48,17 @@ struct nn_ofi_sys_ptrs {
     uint8_t sphdr  [64]; /* Protocol header for various uses */
 };
 
+/**
+ * Negotiated information between the endpoints.
+ * This is useful 
+ */
+struct nn_sofi_negotiation {
+
+    /* Placeholder for 32 bytes */
+    uint64_t    unused[4];
+
+};
+
 /* Shared, Connected OFI FSM */
 struct nn_sofi {
 
@@ -67,12 +78,15 @@ struct nn_sofi {
     struct ofi_active_endpoint  * ep;
 
     /* Input buffers */
-    struct nn_msg inmsg;
-    struct nn_chunk * inmsg_chunk;
-    struct ofi_mr * mr_inmsg;
+    struct nn_msg       inmsg;
+    struct nn_chunk *   inmsg_chunk;
+    struct ofi_mr       mr_inmsg;
 
     /* Output buffers */
     struct nn_msg outmsg;
+
+    /* The negotiated information of the remote endpoint */
+    struct nn_sofi_negotiation  ng_remote;
 
     /* This member can be used by owner to keep individual atcps in a list. */
     struct nn_list_item item;
@@ -99,7 +113,7 @@ struct nn_sofi {
 
     /* First draft of smart MM */
     int                     slab_size, recv_buffer_size;
-    struct ofi_mr           *mr_slab, *mr_user;
+    struct ofi_mr           mr_slab, mr_user;
     void                    *mr_slab_ptr, /* *mr_slab_data_in, */ *ptr_slab_out, *mr_slab_inmsg;
     struct nn_ofi_sys_ptrs  *ptr_slab_sysptr;
 

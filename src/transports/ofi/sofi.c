@@ -67,7 +67,8 @@ const uint8_t FT_PACKET_SHUTDOWN[8]  = {0xFF, 0xFF, 0xFF, 0xFF,
 
 /* State machine states */
 #define NN_SOFI_STATE_IDLE                  1
-#define NN_SOFI_STATE_CONNECTED             2
+#define NN_SOFI_STATE_NEGOTIATING           2
+#define NN_SOFI_STATE_CONNECTED             3
 #define NN_SOFI_STATE_DISCONNECTED          4
 #define NN_SOFI_STATE_DISCONNECTING         5
 
@@ -102,6 +103,8 @@ const uint8_t FT_PACKET_SHUTDOWN[8]  = {0xFF, 0xFF, 0xFF, 0xFF,
 #define NN_SOFI_ACTION_TX                   2012
 #define NN_SOFI_ACTION_ERROR                2013
 #define NN_SOFI_ACTION_DISCONNECT           2014
+#define NN_SOFI_ACTION_NEGOTIATE            2015
+#define NN_SOFI_ACTION_NEGOTIATE_DONE       2016
 #define NN_SOFI_ACTION_IN_CLOSED            2020
 #define NN_SOFI_ACTION_IN_ERROR             2021
 #define NN_SOFI_ACTION_OUT_CLOSED           2030
@@ -120,6 +123,7 @@ const uint8_t FT_PACKET_SHUTDOWN[8]  = {0xFF, 0xFF, 0xFF, 0xFF,
 
 /* Configurable times for keepalive */
 #define NN_SOFI_KEEPALIVE_TIMEOUT           2000
+#define NN_SOFI_IO_TIMEOUT                  1
 
 /* Shutdown reasons */
 #define NN_SOFI_SHUTDOWN_DISCONNECT         1
@@ -270,7 +274,7 @@ void nn_sofi_init (struct nn_sofi *self,
     self->ptr_slab_out = self->mr_slab_ptr + sizeof( struct nn_ofi_sys_ptrs );
 
     /* [1] MR Helper : For SLAB */
-    ret = ofi_mr_alloc( self->ep, &self->mr_slab );
+    ret = ofi_mr_init( self->ep, &self->mr_slab );
     if (ret) {
        /* TODO: Handle error */
        printf("OFI: SOFI: ERROR: Unable to alloc an MR obj for slab slab!\n");
@@ -278,7 +282,7 @@ void nn_sofi_init (struct nn_sofi *self,
     }
 
     /* Mark the memory region */
-    ret = ofi_mr_manage( self->ep, self->mr_slab, self->mr_slab_ptr, 
+    ret = ofi_mr_manage( self->ep, &self->mr_slab, self->mr_slab_ptr, 
         slab_size, NN_SOFI_MR_KEY_SLAB, MR_SEND | MR_RECV );
     if (ret) {
        /* TODO: Handle error */
@@ -289,7 +293,7 @@ void nn_sofi_init (struct nn_sofi *self,
     /* ==================== */
 
     /* [2] MR Helper : For USER DATA */
-    ret = ofi_mr_alloc( self->ep, &self->mr_user );
+    ret = ofi_mr_init( self->ep, &self->mr_user );
     if (ret) {
        /* TODO: Handle error */
        printf("OFI: SOFI: ERROR: Unable to alloc MR obj for user!\n");
@@ -312,7 +316,7 @@ void nn_sofi_init (struct nn_sofi *self,
     nn_chunk_addref( self->inmsg_chunk, 1 );
 
     /* [3] MR Helper : For INPTR */
-    ret = ofi_mr_alloc( self->ep, &self->mr_inmsg );
+    ret = ofi_mr_init( self->ep, &self->mr_inmsg );
     if (ret) {
        /* TODO: Handle error */
        printf("OFI: SOFI: ERROR: Unable to alloc an MR obj for inmsg!\n");
@@ -320,7 +324,7 @@ void nn_sofi_init (struct nn_sofi *self,
     }
 
     /* Mark the memory region */
-    ret = ofi_mr_manage( self->ep, self->mr_inmsg, self->inmsg_chunk, 
+    ret = ofi_mr_manage( self->ep, &self->mr_inmsg, self->inmsg_chunk, 
         self->recv_buffer_size, NN_SOFI_MR_KEY_INMSG, MR_RECV );
     if (ret) {
        /* TODO: Handle error */
@@ -507,29 +511,6 @@ static void nn_sofi_disconnect ( struct nn_sofi *self )
     nn_sofi_output_action( self, NN_SOFI_OUTACTION_CLOSE );
     nn_sofi_input_action( self, NN_SOFI_INACTION_CLOSE );
 
-}
-
-/**
- * Helper function to either memcpy data to mark the region as shared
- */
-void nn_sofi_mr_outgoing ( struct nn_sofi *self, void * ptr, size_t len, void ** sendptr, void ** descptr )
-{
-    if (len < self->slab_size)
-    {
-        /* Copy to already allocated user-region of shared MR */
-        memcpy( self->ptr_slab_out, ptr, len );
-        /* Update pointer */
-        *sendptr = self->ptr_slab_out;
-        *descptr = FI_MR_DESC_OFFSET( self->mr_slab->mr, self->ptr_slab_out, self->mr_slab_ptr );
-    }
-    else
-    {
-        /* Manage this memory region */
-        ofi_mr_manage( self->ep, self->mr_user, ptr, len, NN_SOFI_MR_KEY_USER, MR_SEND );
-        /* Update pointer */
-        *sendptr = ptr;
-        *descptr = fi_mr_desc( self->mr_user->mr );
-    }
 }
 
 /**
@@ -765,6 +746,21 @@ static void nn_sofi_poller_thread (void *arg)
 }
 
 /**
+ * Helper function to send some small data using local mr and wait
+ * until the data are sent.
+ */
+static int nn_sofi_send_local( struct nn_sofi *sofi, void * buffer, size_t len )
+{
+    /* Copy memory region to core memory region */
+    nn_assert( len <= sofi->slab_size );
+    memcpy( sofi->ptr_slab_out, buffer, len );
+
+    /* Send */
+    return ofi_tx_data( sofi->ep, sofi->ptr_slab_out, len, 
+        OFI_MR_DESC( sofi->mr_slab ), NN_SOFI_IO_TIMEOUT );
+}
+
+/**
  * Streaming OFI [INPUT] FSM Handler
  */
 static void nn_sofi_input_action(struct nn_sofi *sofi, int action)
@@ -785,7 +781,7 @@ static void nn_sofi_input_action(struct nn_sofi *sofi, int action)
 
                     /* Post receive buffers */
                     _ofi_debug("OFI: SOFI: Posting receive buffers (max_rx=%i)\n", sofi->recv_buffer_size);
-                    ret = ofi_rx_post( sofi->ep, sofi->inmsg_chunk, sofi->recv_buffer_size, fi_mr_desc( sofi->mr_inmsg->mr ) );
+                    ret = ofi_rx_post( sofi->ep, sofi->inmsg_chunk, sofi->recv_buffer_size, OFI_MR_DESC( sofi->mr_inmsg ) );
 
                     /* Handle errors */
                     if (ret == -FI_REMOTE_DISCONNECT) { /* Remotely disconnected */
@@ -1016,12 +1012,12 @@ static void nn_sofi_output_action(struct nn_sofi *sofi, int action)
                     sz_body = nn_chunkref_size (&sofi->outmsg.body);
 
                     /* Manage this memory region */
-                    ofi_mr_manage( sofi->ep, sofi->mr_user, 
+                    ofi_mr_manage( sofi->ep, &sofi->mr_user, 
                         nn_chunkref_data (&sofi->outmsg.body), sz_body, NN_SOFI_MR_KEY_USER, MR_SEND );
 
                     _ofi_debug("OFI: SOFI: Sending payload (len=%lu)\n", sz_body );
                     ret = fi_send( sofi->ep->ep, nn_chunkref_data (&sofi->outmsg.body), sz_body, 
-                        fi_mr_desc( sofi->mr_user->mr ), sofi->ep->remote_fi_addr, &sofi->ep->tx_ctx);
+                        OFI_MR_DESC( sofi->mr_user ), sofi->ep->remote_fi_addr, &sofi->ep->tx_ctx);
                     if (ret) {
 
                         /* Otherwise display error */
@@ -1162,8 +1158,7 @@ static void nn_sofi_output_action(struct nn_sofi *sofi, int action)
 static void nn_sofi_handler (struct nn_fsm *self, int src, int type,
     void *srcptr)
 {
-    struct iovec iov [1];
-    void * iov_desc  [1];
+    struct nn_sofi_negotiation ng_local;
     struct nn_sofi *sofi;
     int ret;
 
@@ -1172,8 +1167,7 @@ static void nn_sofi_handler (struct nn_fsm *self, int src, int type,
     _ofi_debug("OFI: nn_sofi_handler state=%i, src=%i, type=%i\n", sofi->state, src, 
         type);
 
-
-    /* Forward worker events no matter the FSM state */
+    /* Forward worker events no matter what's the FSM state */
     if (type == NN_WORKER_TASK_EXECUTE) {
         switch (src) {
 
@@ -1217,8 +1211,66 @@ static void nn_sofi_handler (struct nn_fsm *self, int src, int type,
                 _ofi_debug("OFI: SOFI: Started!\n");
                 nn_pipebase_start( &sofi->pipebase );
 
-                /* Start poller thread */
+                /* We are negotiating */
+                sofi->state = NN_SOFI_STATE_NEGOTIATING;
+                nn_fsm_action( &sofi->fsm, NN_SOFI_ACTION_NEGOTIATE );
+
+                return;
+
+            default:
+                nn_fsm_bad_action (sofi->state, src, type);
+            }
+
+        default:
+            nn_fsm_bad_source (sofi->state, src, type);
+        }
+
+/******************************************************************************/
+/*  NEGOTIATING state.                                                        */
+/******************************************************************************/
+
+    case NN_SOFI_STATE_NEGOTIATING:
+        switch (src) {
+
+        /* Sub-FSM Actions */
+        case NN_FSM_ACTION:
+            switch (type) {
+            case NN_SOFI_ACTION_NEGOTIATE:
+
+                /* Prepare local negotiation information */
+                ng_local.unused[0] = 0;
+                ng_local.unused[1] = 0;
+                ng_local.unused[2] = 0;
+                ng_local.unused[3] = 0;
+
+                /* Send local negotiation information (returns when sent, NOT when acknowledged) */
+                ret = nn_sofi_send_local( sofi, &ng_local, sizeof(ng_local) );
+                if (ret) {
+                    /* An error occured */
+                    _ofi_debug("OFI: SOFI: Unable to handshake\n");
+                    sofi->state = NN_SOFI_STATE_DISCONNECTING;
+                    /* Notify parent fsm that we are disconnected */
+                    nn_fsm_raise(&sofi->fsm, &sofi->disconnected, 
+                        NN_SOFI_DISCONNECTED);
+                    /* Do not continue */
+                    return;
+                }
+
+                /* Receive remote negotiation information */
+                ret = ofi_tx_data( sofi->ep, sofi->ptr_slab_out, sizeof(ng_local), 
+                    OFI_MR_DESC( sofi->mr_slab ), NN_SOFI_IO_TIMEOUT );
+
+                /* Copy memory region to core memory region */
+                memcpy( &sofi->ng_remote, sofi->ptr_slab_out, sizeof(ng_local) );
+                nn_fsm_action( &sofi->fsm, NN_SOFI_ACTION_NEGOTIATE_DONE );
+                return;
+
+            case NN_SOFI_ACTION_NEGOTIATE_DONE:
+
+                /* We are connected */
                 sofi->state = NN_SOFI_STATE_CONNECTED;
+
+                /* Start poller thread */
                 nn_thread_init (&sofi->thread, nn_sofi_poller_thread, sofi);
 
                 /* Start keepalive timer */

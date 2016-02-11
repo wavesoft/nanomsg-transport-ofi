@@ -109,6 +109,20 @@ struct ofi_resources
 };
 
 /**
+ * OFI Ring Buffers
+ */
+struct ofi_ringbuffers
+{
+	/* Base pointer to the data structure */
+	void * 				buffer;
+
+	/* Total buffer size and chunk size */
+	size_t 				total_size;
+	size_t 				chunk_size;
+	
+};
+
+/**
  * Precision of the get_elapsed function
  */
 enum ofi_time_precision {
@@ -126,15 +140,23 @@ enum ofi_mr_flags {
 };
 
 /**
- * High-level shared memory regions
+ * A memory region managed by HLAPI MR
  */
 struct ofi_mr {
-
-	/* Hinting information */
 	void * 				ptr;
-
-	/* Pointer objects */
 	struct fid_mr 		*mr;
+};
+
+/**
+ * High-level shared memory region management
+ */
+struct ofi_mr_block {
+
+	/* Maximum number of memory regions allowed */
+	uint32_t				max_regions;
+
+	/* Already allocated memory regions */
+	struct ofi_mr_region * 	regions;
 
 };
 
@@ -253,9 +275,10 @@ int64_t ofi_get_elapsed(const struct timespec *b, const struct timespec *a,
 /**
  * Shared region managements
  */
-int ofi_mr_alloc( struct ofi_active_endpoint * ep, struct ofi_mr ** mr );
+int ofi_mr_init( struct ofi_active_endpoint * ep, struct ofi_mr * mr );
 int ofi_mr_manage( struct ofi_active_endpoint * EP, struct ofi_mr * mr, void * buf, size_t len, int requested_key, enum ofi_mr_flags flags );
 int ofi_mr_unmanage( struct ofi_active_endpoint * ep, struct ofi_mr * mr );
-int ofi_mr_free( struct ofi_active_endpoint * ep, struct ofi_mr ** mr );
+int ofi_mr_free( struct ofi_active_endpoint * ep, struct ofi_mr * mr );
+#define OFI_MR_DESC(x) fi_mr_desc( x.mr )
 
 #endif /* NN_OFI_SHARED_INCLUDED */

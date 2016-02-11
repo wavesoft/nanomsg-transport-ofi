@@ -479,10 +479,25 @@ ssize_t ofi_tx_data( struct ofi_active_endpoint * EP, void * buf, const size_t t
 		void *desc, int timeout )
 {
 	ssize_t ret;
+    struct iovec iov [1];
 
-	/* Send data */
-	// ret = fi_sendmsg(EP->ep, msg_iov, msg_iov_desc, iov_count, EP->remote_fi_addr, &EP->tx_ctx );
-	ret = fi_send(EP->ep, buf, tx_size, desc, EP->remote_fi_addr, &EP->tx_ctx);
+	/* Setup the single IOV */
+	iov[0].iov_base = buf;
+	iov[0].iov_len = tx_size;
+
+	/* Prepare fi_msg */
+	struct fi_msg msg = {
+		.msg_iov = iov,
+		.iov_count = 1,
+		.desc = &desc,
+		.addr = EP->remote_fi_addr,
+		.context = &EP->tx_ctx,
+		.data = 0
+	};
+
+	/* Send data and return when buffer can be reused */
+	// ret = fi_send(EP->ep, buf, tx_size, desc, EP->remote_fi_addr, &EP->tx_ctx);
+	ret = fi_sendmsg(EP->ep, &msg, FI_INJECT_COMPLETE);
 	if (ret) {
 
 		/* If we are in a bad state, we were remotely disconnected */
@@ -1212,20 +1227,11 @@ int ofi_init_client( struct ofi_resources * R, struct ofi_active_endpoint * EP, 
 /**
  * Allocate a new memory region object
  */
-int ofi_mr_alloc( struct ofi_active_endpoint * ep, struct ofi_mr ** mmr )
+int ofi_mr_init( struct ofi_active_endpoint * ep, struct ofi_mr * mmr )
 {
-	int ret;
-
-	/* Allocate desccriptor structure */
-	*mmr = nn_alloc( sizeof(struct ofi_mr), "ofi_mr" );
-	if (!*mmr) {
-		FT_ERR("OFI: Memory region tag allocation failed\n");
-		return EAI_MEMORY;
-	}
-
 	/* Init properties */
-	(*mmr)->ptr = NULL;
-	(*mmr)->mr = NULL;
+	mmr->ptr = NULL;
+	mmr->mr = NULL;
 
 	/* Success */
 	return 0;
@@ -1297,17 +1303,12 @@ int ofi_mr_unmanage( struct ofi_active_endpoint * EP, struct ofi_mr * mr )
 /**
  * Unmanage and free memory regions
  */
-int ofi_mr_free( struct ofi_active_endpoint * ep, struct ofi_mr ** mmr )
+int ofi_mr_free( struct ofi_active_endpoint * ep, struct ofi_mr * mmr )
 {
-	int ret;
-
 	/* Unmanage previous reservations */
-	if ((*mmr)->mr) {
-		ofi_mr_unmanage( ep, *mmr );
+	if (mmr->mr) {
+		ofi_mr_unmanage( ep, mmr );
 	}
-
-	/* Free structure */
-	nn_free( *mmr );
 
 	/* Success */
 	return 0;

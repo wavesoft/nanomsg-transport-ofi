@@ -90,7 +90,7 @@ int nn_cofi_create (void *hint, struct nn_epbase **epbase)
     const char * domain;
     const char * service;
 
-    _ofi_debug("OFI: Creating connected OFI socket\n");
+    _ofi_debug("OFI[C]: Creating connected OFI socket\n");
 
     /*  Allocate the new endpoint object. */
     self = nn_alloc (sizeof (struct nn_cofi), "cofi");
@@ -110,13 +110,13 @@ int nn_cofi_create (void *hint, struct nn_epbase **epbase)
     service++;
 
     /* Debug */
-    _ofi_debug("OFI: COFI: Createing socket for (domain=%s, service=%s)\n", domain, 
+    _ofi_debug("OFI[C]: Createing socket for (domain=%s, service=%s)\n", domain, 
         service );
 
     /* Initialize ofi */
     ret = ofi_alloc( &self->ofi, FI_EP_MSG );
     if (ret) {
-        _ofi_debug("OFI: COFI: Failed to ofi_alloc!\n");
+        _ofi_debug("OFI[C]: Failed to ofi_alloc!\n");
         nn_epbase_term (&self->epbase);
         nn_free(self);
         return ret;
@@ -126,7 +126,7 @@ int nn_cofi_create (void *hint, struct nn_epbase **epbase)
     ret = ofi_init_client( &self->ofi, &self->ep, 
         FI_SOCKADDR, domain, service );
     if (ret) {
-        _ofi_debug("OFI: COFI: Failed to ofi_init_client!\n");
+        _ofi_debug("OFI[C]: Failed to ofi_init_client!\n");
         nn_epbase_term (&self->epbase);
         nn_free(self);
         return ret;
@@ -154,7 +154,7 @@ int nn_cofi_create (void *hint, struct nn_epbase **epbase)
  */
 static void nn_cofi_stop (struct nn_epbase *self)
 {
-    _ofi_debug("OFI: Stopping COFI\n");
+    _ofi_debug("OFI[C]: Stopping COFI\n");
 
     struct nn_cofi *cofi;
     cofi = nn_cont(self, struct nn_cofi, epbase);
@@ -168,7 +168,7 @@ static void nn_cofi_stop (struct nn_epbase *self)
  */
 static void nn_cofi_destroy (struct nn_epbase *self)
 {
-    _ofi_debug("OFI: Destroying COFI\n");
+    _ofi_debug("OFI[C]: Destroying COFI\n");
 
     /* Get reference to the cofi structure */
     struct nn_cofi *cofi;
@@ -193,7 +193,7 @@ static void nn_cofi_destroy (struct nn_epbase *self)
 static void nn_cofi_shutdown (struct nn_fsm *self, int src, int type,
     void *srcptr)
 {
-    _ofi_debug("OFI: Shutting down COFI\n");
+    _ofi_debug("OFI[C]: Shutting down COFI\n");
 
     /* Get reference to the cofi structure */
     struct nn_cofi *cofi;
@@ -235,7 +235,7 @@ static void nn_cofi_handler (struct nn_fsm *self, int src, int type,
 
     /* Continue with the next OFI Event */
     cofi = nn_cont (self, struct nn_cofi, fsm);
-    _ofi_debug("OFI: nn_cofi_handler state=%i, src=%i, type=%i\n", 
+    _ofi_debug("OFI[C]: nn_cofi_handler state=%i, src=%i, type=%i\n", 
         cofi->state, src, type);
 
     /* Handle new state */
@@ -252,10 +252,10 @@ static void nn_cofi_handler (struct nn_fsm *self, int src, int type,
             case NN_FSM_START:
 
                 /* Create new connected OFI */
-                _ofi_debug("OFI: COFI: Creating new SOFI\n");
+                _ofi_debug("OFI[C]: Creating new SOFI\n");
                 cofi->state = NN_COFI_STATE_CONNECTED;
-                nn_sofi_init (&cofi->sofi, &cofi->ofi, &cofi->ep, &cofi->epbase, 
-                    NN_COFI_SRC_SOFI, &cofi->fsm);
+                nn_sofi_init (&cofi->sofi, &cofi->ofi, &cofi->ep, NN_SOFI_NG_SEND, 
+                    &cofi->epbase, NN_COFI_SRC_SOFI, &cofi->fsm);
 
                 return;
             default:
@@ -278,7 +278,7 @@ static void nn_cofi_handler (struct nn_fsm *self, int src, int type,
             case NN_SOFI_DISCONNECTED:
 
                 /* Disconnected from remote endpoint */
-                _ofi_debug("OFI: COFI: Remotely disconnected\n");
+                _ofi_debug("OFI[C]: Remotely disconnected\n");
                 nn_fsm_stop (&cofi->fsm);
 
                 return;

@@ -120,7 +120,7 @@ int nn_bofi_create (void *hint, struct nn_epbase **epbase)
     service++;
 
     /* Debug */
-    _ofi_debug("OFI: Creating bound OFI socket (domain=%s, service=%s)\n", domain, 
+    _ofi_debug("OFI[B]: Creating bound OFI socket (domain=%s, service=%s)\n", domain, 
         service );
 
     /* Initialize ofi */
@@ -168,7 +168,7 @@ int nn_bofi_create (void *hint, struct nn_epbase **epbase)
  */
 static void nn_bofi_stop (struct nn_epbase *self)
 {
-    _ofi_debug("OFI: Stopping OFI\n");
+    _ofi_debug("OFI[B]: Stopping OFI\n");
 
     /* Get reference to the bofi structure */
     struct nn_bofi *bofi;
@@ -183,7 +183,7 @@ static void nn_bofi_stop (struct nn_epbase *self)
  */
 static void nn_bofi_destroy (struct nn_epbase *self)
 {
-    _ofi_debug("OFI: Destroying OFI\n");
+    _ofi_debug("OFI[B]: Destroying OFI\n");
 
     /* Get reference to the bofi structure */
     struct nn_bofi *bofi;
@@ -221,7 +221,7 @@ static void nn_bofi_destroy (struct nn_epbase *self)
 static void nn_bofi_shutdown (struct nn_fsm *self, int src, int type,
     void *srcptr)
 {
-    _ofi_debug("OFI: BOFI: Shutdown\n");
+    _ofi_debug("OFI[B]: Shutdown\n");
 
     /* Get pointer to bofi structure */
     struct nn_bofi *bofi;
@@ -234,7 +234,7 @@ static void nn_bofi_shutdown (struct nn_fsm *self, int src, int type,
         bofi->state = NN_BOFI_STATE_STOPPING;
 
         /* Stop OFI operations */
-        _ofi_debug("OFI: Freeing passive endpoint resources\n");
+        _ofi_debug("OFI[B]: Freeing passive endpoint resources\n");
         ofi_shutdown_pep( &bofi->pep );
         ofi_free_pep( &bofi->pep );
 
@@ -270,10 +270,10 @@ static void nn_bofi_accept_thread (void *arg)
         alloc_assert (ep);
 
         /* Listen for incoming connections */
-        _ofi_debug("OFI: bofi_accept_thread: Waiting for incoming connections\n");
+        _ofi_debug("OFI[B]: bofi_accept_thread: Waiting for incoming connections\n");
         ret = ofi_server_accept( &self->ofi, &self->pep, ep );
         if (ret == FI_SHUTDOWN) {
-            _ofi_debug("OFI: bofi_accept_thread: Stopping because of FI_SHUTDOWN\n");
+            _ofi_debug("OFI[B]: bofi_accept_thread: Stopping because of FI_SHUTDOWN\n");
 
             /* Free resources */
             ofi_free_ep(ep);
@@ -293,7 +293,7 @@ static void nn_bofi_accept_thread (void *arg)
 
         /* Check if we are being stopped */
         if (self->state != NN_BOFI_STATE_ACCEPTING) {
-            _ofi_debug("OFI: bofi_accept_thread: Stopping because switched to state %i\n", self->state);
+            _ofi_debug("OFI[B]: bofi_accept_thread: Stopping because switched to state %i\n", self->state);
 
             /* Free resources */
             ofi_free_ep(ep);
@@ -302,20 +302,20 @@ static void nn_bofi_accept_thread (void *arg)
         }
 
         /* Create new connected OFI */
-        _ofi_debug("OFI: bofi_accept_thread: Allocating new SOFI\n");
+        _ofi_debug("OFI[B]: bofi_accept_thread: Allocating new SOFI\n");
         self->sofi = nn_alloc (sizeof (struct nn_sofi), "sofi");
         alloc_assert (self->sofi);
-        nn_sofi_init (self->sofi, &self->ofi, ep, &self->epbase, 
-            NN_BOFI_SRC_SOFI, &self->fsm);
+        nn_sofi_init (self->sofi, &self->ofi, ep, NN_SOFI_NG_RECV,
+            &self->epbase, NN_BOFI_SRC_SOFI, &self->fsm);
 
         /* Notify FSM that a connection was accepted */
-        _ofi_debug("OFI: bofi_accept_thread: Notifying FSM for the result\n");
+        _ofi_debug("OFI[B]: bofi_accept_thread: Notifying FSM for the result\n");
         nn_ctx_enter( self->fsm.ctx );
         nn_fsm_action( &self->fsm, NN_BOFI_CONNECTION_ACCEPTED );
         nn_ctx_leave( self->fsm.ctx );
 
         /* Wait for event to be handled */
-        _ofi_debug("OFI: bofi_accept_thread: Waiting for ack from FSM\n");
+        _ofi_debug("OFI[B]: bofi_accept_thread: Waiting for ack from FSM\n");
         nn_efd_wait( &self->sync, -1 );
         nn_efd_unsignal( &self->sync );
 
@@ -333,7 +333,7 @@ static void nn_bofi_handler (struct nn_fsm *self, int src, int type,
 
     /* Continue with the next OFI Event */
     bofi = nn_cont (self, struct nn_bofi, fsm);
-    _ofi_debug("OFI: nn_bofi_handler state=%i, src=%i, type=%i\n", 
+    _ofi_debug("OFI[B]: nn_bofi_handler state=%i, src=%i, type=%i\n", 
         bofi->state, src, type);
 
     /* Handle new state */
@@ -398,7 +398,7 @@ static void nn_bofi_handler (struct nn_fsm *self, int src, int type,
             switch (type) {
             case NN_SOFI_STOPPED:
                 /* The SOFI fsm was stopped */
-                _ofi_debug("OFI: Cleaning-up SOFI\n");
+                _ofi_debug("OFI[B]: Cleaning-up SOFI\n");
 
                 /* Remove item from list */
                 nn_list_erase (&bofi->sofis, &sofi->item);
@@ -411,7 +411,7 @@ static void nn_bofi_handler (struct nn_fsm *self, int src, int type,
 
             case NN_SOFI_DISCONNECTED:
                 /* A remote enpodint was disconnected */
-                _ofi_debug("OFI: Connection closed, stopping SOFI\n");
+                _ofi_debug("OFI[B]: Connection closed, stopping SOFI\n");
 
                 /* Stop sofi */
                 if (!nn_sofi_isidle (sofi)) {
@@ -463,7 +463,7 @@ static void nn_bofi_handler (struct nn_fsm *self, int src, int type,
             switch (type) {
             case NN_SOFI_STOPPED:
                 /* The SOFI fsm was stopped */
-                _ofi_debug("OFI: Cleaning-up SOFI\n");
+                _ofi_debug("OFI[B]: Cleaning-up SOFI\n");
 
                 /* Remove item from list */
                 nn_list_erase (&bofi->sofis, &sofi->item);
@@ -476,7 +476,7 @@ static void nn_bofi_handler (struct nn_fsm *self, int src, int type,
 
             case NN_SOFI_DISCONNECTED:
                 /* A remote enpodint was disconnected */
-                _ofi_debug("OFI: Connection closed, stopping SOFI\n");
+                _ofi_debug("OFI[B]: Connection closed, stopping SOFI\n");
 
                 /* Stop sofi */
                 if (!nn_sofi_isidle (sofi)) {

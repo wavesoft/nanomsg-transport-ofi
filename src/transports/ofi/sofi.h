@@ -39,13 +39,18 @@
 #define NN_SOFI_DISCONNECTED 2001
 #define NN_SOFI_STOPPED      2002
 
+/* Negotiation direction */
+#define NN_SOFI_NG_NONE      0
+#define NN_SOFI_NG_SEND      1
+#define NN_SOFI_NG_RECV      2
+
 /**
  * Various system structures stored in a shared memory region
  */
 struct nn_ofi_sys_ptrs {
-    uint8_t inhdr  [8];  /* Input header */
     uint8_t outhdr [8];  /* Out header */
     uint8_t sphdr  [64]; /* Protocol header for various uses */
+    uint8_t small  [64]; /* Small chunk of data for various uses */
 };
 
 /**
@@ -86,6 +91,7 @@ struct nn_sofi {
     struct nn_msg outmsg;
 
     /* The negotiated information of the remote endpoint */
+    uint8_t                     ng_direction;
     struct nn_sofi_negotiation  ng_remote;
 
     /* This member can be used by owner to keep individual atcps in a list. */
@@ -121,7 +127,7 @@ struct nn_sofi {
 
 /*  Initialize the state machine */
 void nn_sofi_init (struct nn_sofi *self, 
-    struct ofi_resources *ofi, struct ofi_active_endpoint *ep, 
+    struct ofi_resources *ofi, struct ofi_active_endpoint *ep, const uint8_t ng_direction,
     struct nn_epbase *epbase, int src, struct nn_fsm *owner);
 
 /* Check if FSM is idle */

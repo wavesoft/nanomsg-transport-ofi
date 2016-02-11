@@ -218,14 +218,15 @@ void nn_sofi_DANGEROUS_hack_chunk_size( void * ptr, size_t size )
  * Create a streaming (connected) OFI Socket
  */
 void nn_sofi_init (struct nn_sofi *self, 
-    struct ofi_resources *ofi, struct ofi_active_endpoint *ep, 
+    struct ofi_resources *ofi, struct ofi_active_endpoint *ep, const uint8_t ng_direction,
     struct nn_epbase *epbase, int src, struct nn_fsm *owner)
 {    
     int ret;
 
-    /* Keep OFI resources */
+    /* Keep references */
     self->ofi = ofi;
     self->ep = ep;
+    self->ng_direction = ng_direction;
 
     /* ==================== */
 
@@ -245,7 +246,7 @@ void nn_sofi_init (struct nn_sofi *self,
     /* ==================== */
 
     /* Initialize pipe base */
-    _ofi_debug("OFI: SOFI: Replacing pipebase\n");
+    _ofi_debug("OFI[S]: Replacing pipebase\n");
     nn_pipebase_init (&self->pipebase, &nn_sofi_pipebase_vfptr, epbase);
 
     /* ==================== */
@@ -256,14 +257,14 @@ void nn_sofi_init (struct nn_sofi *self,
         &self->slab_size, &opt_sz);
     nn_epbase_getopt (epbase, NN_SOL_SOCKET, NN_RCVBUF,
         &self->recv_buffer_size, &opt_sz);
-    _ofi_debug("OFI: SOFI: Socket options NN_OFI_SLABMR_SIZE=%i, NN_RCVBUF=%i\n"
+    _ofi_debug("OFI[S]: Socket options NN_OFI_SLABMR_SIZE=%i, NN_RCVBUF=%i\n"
         , self->slab_size, self->recv_buffer_size);
 
     /* Allocate slab buffer */
     size_t slab_size = sizeof( struct nn_ofi_sys_ptrs ) + self->slab_size;
     self->mr_slab_ptr = nn_alloc( slab_size, "ofi (slab memory)" );
     if (!self->mr_slab_ptr) {
-        printf("OFI: SOFI: ERROR: Unable to allocate slab memory region!\n");
+        printf("OFI[S]: ERROR: Unable to allocate slab memory region!\n");
         return;
     }
 
@@ -277,7 +278,7 @@ void nn_sofi_init (struct nn_sofi *self,
     ret = ofi_mr_init( self->ep, &self->mr_slab );
     if (ret) {
        /* TODO: Handle error */
-       printf("OFI: SOFI: ERROR: Unable to alloc an MR obj for slab slab!\n");
+       printf("OFI[S]: ERROR: Unable to alloc an MR obj for slab slab!\n");
        return;
     }
 
@@ -286,7 +287,7 @@ void nn_sofi_init (struct nn_sofi *self,
         slab_size, NN_SOFI_MR_KEY_SLAB, MR_SEND | MR_RECV );
     if (ret) {
        /* TODO: Handle error */
-       printf("OFI: SOFI: ERROR: Unable to mark the slab memory MR region!\n");
+       printf("OFI[S]: ERROR: Unable to mark the slab memory MR region!\n");
        return;
     }
 
@@ -296,7 +297,7 @@ void nn_sofi_init (struct nn_sofi *self,
     ret = ofi_mr_init( self->ep, &self->mr_user );
     if (ret) {
        /* TODO: Handle error */
-       printf("OFI: SOFI: ERROR: Unable to alloc MR obj for user!\n");
+       printf("OFI[S]: ERROR: Unable to alloc MR obj for user!\n");
        return;
     }
 
@@ -308,7 +309,7 @@ void nn_sofi_init (struct nn_sofi *self,
     ret = nn_chunk_alloc(self->recv_buffer_size, 0, (void**)&self->inmsg_chunk);
     if (ret) {
        /* TODO: Handle error */
-       printf("OFI: SOFI: ERROR: Unable to alloc inmsg chunk!\n");
+       printf("OFI[S]: ERROR: Unable to alloc inmsg chunk!\n");
        return;
     }
 
@@ -319,7 +320,7 @@ void nn_sofi_init (struct nn_sofi *self,
     ret = ofi_mr_init( self->ep, &self->mr_inmsg );
     if (ret) {
        /* TODO: Handle error */
-       printf("OFI: SOFI: ERROR: Unable to alloc an MR obj for inmsg!\n");
+       printf("OFI[S]: ERROR: Unable to alloc an MR obj for inmsg!\n");
        return;
     }
 
@@ -328,7 +329,7 @@ void nn_sofi_init (struct nn_sofi *self,
         self->recv_buffer_size, NN_SOFI_MR_KEY_INMSG, MR_RECV );
     if (ret) {
        /* TODO: Handle error */
-       printf("OFI: SOFI: ERROR: Unable to mark the slab memory MR region!\n");
+       printf("OFI[S]: ERROR: Unable to mark the slab memory MR region!\n");
        return;
     }
 
@@ -362,7 +363,7 @@ void nn_sofi_init (struct nn_sofi *self,
     self->keepalive_rx_ctr = 0;
 
     /* Start FSM */
-    _ofi_debug("OFI: SOFI: Start \n");
+    _ofi_debug("OFI[S]: Start \n");
     nn_fsm_start (&self->fsm);
 
 }
@@ -372,7 +373,7 @@ void nn_sofi_init (struct nn_sofi *self,
  */
 void nn_sofi_term (struct nn_sofi *self)
 {  
-    _ofi_debug("OFI: SOFI: Terminating\n");
+    _ofi_debug("OFI[S]: Terminating\n");
 
     /* Free memory */
     nn_chunk_free( self->inmsg_chunk );
@@ -417,7 +418,7 @@ int nn_sofi_isidle (struct nn_sofi *self)
  */
 void nn_sofi_stop (struct nn_sofi *self)
 {
-    _ofi_debug("OFI: SOFI: Stopping\n");
+    _ofi_debug("OFI[S]: Stopping\n");
 
     /* Stop FSM */
     nn_fsm_stop (&self->fsm);
@@ -432,11 +433,11 @@ void nn_sofi_stop (struct nn_sofi *self)
 static void nn_sofi_shutdown (struct nn_fsm *self, int src, int type,
     void *srcptr)
 {
-    _ofi_debug("OFI: SOFI: Shutdown\n");
-
     /* Get pointer to sofi structure */
     struct nn_sofi *sofi;
     sofi = nn_cont (self, struct nn_sofi, fsm);
+
+    _ofi_debug("OFI[S]: Shutdown (state=%i, src=%i, type=%i, thread=%lu)\n", sofi->state, src, type, pthread_self());
 
     /* Switch to shutdown if this was an fsm action */
     if (nn_slow (sofi->state == NN_SOFI_STATE_CONNECTED )) {
@@ -444,12 +445,7 @@ static void nn_sofi_shutdown (struct nn_fsm *self, int src, int type,
 
             /* Disconnect & cleanup everything SOFI */
             nn_sofi_disconnect( sofi );
-
-            // /* Abort OFI Operations */
-            // sofi->state = NN_SOFI_STATE_DISCONNECTING;
-
-            // /* Stop keepalive timer */
-            // nn_timer_stop( &sofi->keepalive_timer);
+            return;
 
         } else {
             nn_fsm_bad_action( sofi->state, src, type );
@@ -468,15 +464,16 @@ static void nn_sofi_shutdown (struct nn_fsm *self, int src, int type,
 
     }
     if (nn_slow (sofi->state == NN_SOFI_STATE_DISCONNECTED)) {
+        _ofi_debug("OFI[S]: ???? (state=%i, src=%i, type=%i, thread=%lu)\n", sofi->state, src, type, pthread_self());
 
         /*  Unmanage memory regions. */
-        _ofi_debug("OFI: Freeing memory resources\n");
+        _ofi_debug("OFI[S]: Freeing memory resources\n");
         ofi_mr_free( sofi->ep, &sofi->mr_slab );
         ofi_mr_free( sofi->ep, &sofi->mr_user );
         ofi_mr_free( sofi->ep, &sofi->mr_inmsg );
 
         /*  Stop endpoint and wait for worker. */
-        _ofi_debug("OFI: Freeing endpoint resources\n");
+        _ofi_debug("OFI[S]: Freeing endpoint resources\n");
         ofi_shutdown_ep( sofi->ep );
         nn_thread_term (&sofi->thread);
         ofi_free_ep( sofi->ep );
@@ -528,7 +525,7 @@ static int nn_sofi_send (struct nn_pipebase *self, struct nn_msg *msg)
 
     /* Send only if connected */
     if (sofi->state != NN_SOFI_STATE_CONNECTED) {
-        _ofi_debug("OFI: SOFI: Sending on a non-connected socket\n");
+        _ofi_debug("OFI[S]: Sending on a non-connected socket\n");
         return -EBADF;
     }
     nn_assert( sofi->outstate == NN_SOFI_OUTSTATE_IDLE );
@@ -554,7 +551,7 @@ static int nn_sofi_recv (struct nn_pipebase *self, struct nn_msg *msg)
     struct nn_sofi *sofi;
     sofi = nn_cont (self, struct nn_sofi, pipebase);
 
-    _ofi_debug("OFI: SOFI: Handling reception of data\n");
+    _ofi_debug("OFI[S]: Handling reception of data\n");
 
     /* Move received message to the user. */
     // nn_mutex_lock (&sofi->rx_sync);
@@ -585,7 +582,7 @@ static void nn_sofi_poller_thread (void *arg)
     uint32_t event;
 
     /* Keep thread alive while  */
-    _ofi_debug("OFI: SOFI: Starting poller thread\n");
+    _ofi_debug("OFI[S]: Starting poller thread\n");
     while ( self->state == NN_SOFI_STATE_CONNECTED ) {
 
         /* ========================================= */
@@ -599,7 +596,7 @@ static void nn_sofi_poller_thread (void *arg)
 
             /* Initialize a new message on the shared pointer */
             nn_msg_init_chunk (&self->inmsg, self->inmsg_chunk);
-            _ofi_debug("OFI: SOFI: Got incoming message of %li bytes\n", cq_entry.len);
+            _ofi_debug("OFI[S]: Got incoming message of %li bytes\n", cq_entry.len);
 
             /* Hack to force new message size on the chunkref */
             if (cq_entry.len <= self->recv_buffer_size) {
@@ -610,7 +607,7 @@ static void nn_sofi_poller_thread (void *arg)
             }
 
             /* Handle the fact that the data are received  */
-            _ofi_debug("OFI: SOFI: Rx CQ Event\n");
+            _ofi_debug("OFI[S]: Rx CQ Event\n");
             nn_worker_execute (self->worker, &self->task_rx);
             // nn_sofi_input_action( self, NN_SOFI_INACTION_RX_DATA );
 
@@ -630,7 +627,7 @@ static void nn_sofi_poller_thread (void *arg)
                 if (err_entry.err == FI_ECANCELED) {
 
                     /* The socket operation was cancelled, we were disconnected */
-                    _ofi_debug("OFI: SOFI: Rx CQ Error (-FI_ECANCELED) caused disconnection\n");
+                    _ofi_debug("OFI[S]: Rx CQ Error (-FI_ECANCELED) caused disconnection\n");
                     nn_worker_execute (self->worker, &self->task_disconnect);
                     // nn_sofi_input_action( self, NN_SOFI_INACTION_CLOSE );
 
@@ -640,7 +637,7 @@ static void nn_sofi_poller_thread (void *arg)
                 }
 
                 /* Handle error */
-                _ofi_debug("OFI: SOFI: Rx CQ Error (%i)\n", -err_entry.err);
+                _ofi_debug("OFI[S]: Rx CQ Error (%i)\n", -err_entry.err);
                 self->error = -err_entry.err;
                 // nn_sofi_input_action( self, NN_SOFI_INACTION_ERROR );
                 nn_worker_execute (self->worker, &self->task_error);
@@ -671,7 +668,7 @@ static void nn_sofi_poller_thread (void *arg)
             // self->outstate = NN_SOFI_OUTSTATE_PENDING;
 
             /* Handle the fact that the data are sent */
-            _ofi_debug("OFI: SOFI: Tx CQ Event\n");
+            _ofi_debug("OFI[S]: Tx CQ Event\n");
             nn_worker_execute (self->worker, &self->task_tx);
             // nn_sofi_output_action( self, NN_SOFI_OUTACTION_TX_ACK );
             // NN_FSM_ACTION_FEED ( &self->fsm, NN_SOFI_SRC_POLLER_THREAD, NN_SOFI_ACTION_TX, NULL );
@@ -685,7 +682,7 @@ static void nn_sofi_poller_thread (void *arg)
                 if (err_entry.err == FI_ECANCELED) {
 
                     /* The socket operation was cancelled, we were disconnected */
-                    _ofi_debug("OFI: SOFI: Tx CQ Error (-FI_ECANCELED) caused disconnection\n");
+                    _ofi_debug("OFI[S]: Tx CQ Error (-FI_ECANCELED) caused disconnection\n");
                     nn_worker_execute (self->worker, &self->task_disconnect);
                     // nn_sofi_output_action( self, NN_SOFI_OUTACTION_CLOSE );
                     // NN_FSM_ACTION_FEED ( &self->fsm, NN_SOFI_SRC_POLLER_THREAD, NN_SOFI_ACTION_DISCONNECT, NULL );
@@ -694,7 +691,7 @@ static void nn_sofi_poller_thread (void *arg)
                 }
 
                 /* Handle error */
-                _ofi_debug("OFI: SOFI: Tx CQ Error (%i)\n", -err_entry.err);
+                _ofi_debug("OFI[S]: Tx CQ Error (%i)\n", -err_entry.err);
                 self->error = -err_entry.err;
                 nn_worker_execute (self->worker, &self->task_error);
                 // nn_sofi_output_action( self, NN_SOFI_OUTACTION_ERROR );
@@ -723,7 +720,7 @@ static void nn_sofi_poller_thread (void *arg)
 
             /* Check for socket disconnection */
             if (event == FI_SHUTDOWN) {
-                _ofi_debug("OFI: SOFI: Got shutdown EQ event\n");
+                _ofi_debug("OFI[S]: Got shutdown EQ event\n");
                 nn_worker_execute (self->worker, &self->task_disconnect);
                 // nn_sofi_disconnect( self );
                 // nn_sofi_output_action( self, NN_SOFI_OUTACTION_CLOSE );
@@ -735,13 +732,13 @@ static void nn_sofi_poller_thread (void *arg)
         }
 
         /* Microsleep for lessen the CPU load */
-        if (!fastpoller--) {
+        if (!--fastpoller) {
             usleep(10);
             fastpoller = 200;
         }
 
     }
-    _ofi_debug("OFI: SOFI: Exited poller thread\n");
+    _ofi_debug("OFI[S]: Exited poller thread\n");
 
 }
 
@@ -749,15 +746,38 @@ static void nn_sofi_poller_thread (void *arg)
  * Helper function to send some small data using local mr and wait
  * until the data are sent.
  */
-static int nn_sofi_send_local( struct nn_sofi *sofi, void * buffer, size_t len )
+static int nn_sofi_send_small( struct nn_sofi *sofi, void * buffer, size_t len )
 {
     /* Copy memory region to core memory region */
-    nn_assert( len <= sofi->slab_size );
-    memcpy( sofi->ptr_slab_out, buffer, len );
+    nn_assert( len <= sizeof(sofi->ptr_slab_sysptr->small) );
+    memcpy( sofi->ptr_slab_sysptr->small, buffer, len );
 
-    /* Send */
-    return ofi_tx_data( sofi->ep, sofi->ptr_slab_out, len, 
+    /* Send small buffer */
+    return ofi_tx_data( sofi->ep, sofi->ptr_slab_sysptr->small, len, 
         OFI_MR_DESC( sofi->mr_slab ), NN_SOFI_IO_TIMEOUT );
+}
+
+/**
+ * Helper function to receive some small data using local mr and wait
+ * until the data are sent.
+ */
+static int nn_sofi_recv_small( struct nn_sofi *sofi, void * buffer, size_t len )
+{
+    int ret;
+    size_t msg_len;
+
+    /* Receive small buffer */
+    ret = ofi_rx_data( sofi->ep, sofi->ptr_slab_sysptr->small, 
+        sizeof(sofi->ptr_slab_sysptr->small), OFI_MR_DESC( sofi->mr_slab ), 
+        &msg_len, NN_SOFI_IO_TIMEOUT );
+
+    /* Abort on errors */
+    if (ret) return ret;
+
+    /* Copy MR to buffer */
+    memcpy( buffer, sofi->ptr_slab_sysptr->small, len );
+    return 0;
+
 }
 
 /**
@@ -780,14 +800,14 @@ static void nn_sofi_input_action(struct nn_sofi *sofi, int action)
                 case NN_SOFI_INACTION_ENTER:
 
                     /* Post receive buffers */
-                    _ofi_debug("OFI: SOFI: Posting receive buffers (max_rx=%i)\n", sofi->recv_buffer_size);
+                    _ofi_debug("OFI[S]: Posting receive buffers (max_rx=%i)\n", sofi->recv_buffer_size);
                     ret = ofi_rx_post( sofi->ep, sofi->inmsg_chunk, sofi->recv_buffer_size, OFI_MR_DESC( sofi->mr_inmsg ) );
 
                     /* Handle errors */
                     if (ret == -FI_REMOTE_DISCONNECT) { /* Remotely disconnected */
 
                         /* Update state and release mutex */
-                        _ofi_debug("OFI: SOFI: Could not post receive buffers because remote endpoit is in invalid state!\n");
+                        _ofi_debug("OFI[S]: Could not post receive buffers because remote endpoit is in invalid state!\n");
 
                         /* Switch directly to closed */
                         sofi->instate = NN_SOFI_INSTATE_CLOSED;
@@ -798,7 +818,7 @@ static void nn_sofi_input_action(struct nn_sofi *sofi, int action)
                     } else if (ret) {
 
                         /* Update state and release mutex */
-                        _ofi_debug("OFI: SOFI: Could not post receive buffers, got error %i!\n", ret);
+                        _ofi_debug("OFI[S]: Could not post receive buffers, got error %i!\n", ret);
 
                         /* Trigger error */
                         sofi->error = ret;
@@ -1015,7 +1035,7 @@ static void nn_sofi_output_action(struct nn_sofi *sofi, int action)
                     ofi_mr_manage( sofi->ep, &sofi->mr_user, 
                         nn_chunkref_data (&sofi->outmsg.body), sz_body, NN_SOFI_MR_KEY_USER, MR_SEND );
 
-                    _ofi_debug("OFI: SOFI: Sending payload (len=%lu)\n", sz_body );
+                    _ofi_debug("OFI[S]: Sending payload (len=%lu)\n", sz_body );
                     ret = fi_send( sofi->ep->ep, nn_chunkref_data (&sofi->outmsg.body), sz_body, 
                         OFI_MR_DESC( sofi->mr_user ), sofi->ep->remote_fi_addr, &sofi->ep->tx_ctx);
                     if (ret) {
@@ -1025,7 +1045,7 @@ static void nn_sofi_output_action(struct nn_sofi *sofi, int action)
 
                         /* If we are in a bad state, we were remotely disconnected */
                         if (ret == -FI_EOPBADSTATE) {
-                            _ofi_debug("OFI: SOFI: fi_send returned -FI_EOPBADSTATE, considering shutdown.\n");
+                            _ofi_debug("OFI[S]: fi_send returned -FI_EOPBADSTATE, considering shutdown.\n");
 
                             /* Swtich to closed state */
                             sofi->outstate = NN_SOFI_OUTSTATE_CLOSED;
@@ -1164,7 +1184,7 @@ static void nn_sofi_handler (struct nn_fsm *self, int src, int type,
 
     /* Continue with the next OFI Event */
     sofi = nn_cont (self, struct nn_sofi, fsm);
-    _ofi_debug("OFI: nn_sofi_handler state=%i, src=%i, type=%i\n", sofi->state, src, 
+    _ofi_debug("OFI[S]: nn_sofi_handler state=%i, src=%i, type=%i\n", sofi->state, src, 
         type);
 
     /* Forward worker events no matter what's the FSM state */
@@ -1172,23 +1192,25 @@ static void nn_sofi_handler (struct nn_fsm *self, int src, int type,
         switch (src) {
 
             case NN_SOFI_TASK_RX:
-                _ofi_debug("OFI: SOFI: Acknowledging rx data event\n");
+                _ofi_debug("OFI[S]: Acknowledging rx data event\n");
                 nn_sofi_input_action( sofi, NN_SOFI_INACTION_RX_DATA );
                 return;
 
             case NN_SOFI_TASK_TX:
-                _ofi_debug("OFI: SOFI: Acknowledging tx data event\n");
+                _ofi_debug("OFI[S]: Acknowledging tx data event\n");
                 nn_sofi_output_action( sofi, NN_SOFI_OUTACTION_TX_ACK );
                 return;
 
             case NN_SOFI_TASK_ERROR:
-                _ofi_debug("OFI: SOFI: Tx/Rx error event\n");
-                nn_sofi_disconnect( sofi );
+                _ofi_debug("OFI[S]: Tx/Rx error event\n");
+                if (sofi->state == NN_SOFI_STATE_CONNECTED)
+                    nn_sofi_disconnect( sofi );
                 return;
 
             case NN_SOFI_TASK_DISCONNECT:
-                _ofi_debug("OFI: SOFI: Tx/Rx disconnection event\n");
-                nn_sofi_disconnect( sofi );
+                _ofi_debug("OFI[S]: Tx/Rx disconnection event\n");
+                if (sofi->state == NN_SOFI_STATE_CONNECTED)
+                    nn_sofi_disconnect( sofi );
                 return;
 
         }
@@ -1207,11 +1229,9 @@ static void nn_sofi_handler (struct nn_fsm *self, int src, int type,
             switch (type) {
             case NN_FSM_START:
 
-                /* Start pipe */
-                _ofi_debug("OFI: SOFI: Started!\n");
-                nn_pipebase_start( &sofi->pipebase );
+                _ofi_debug("OFI[S]: Starting!\n");
 
-                /* We are negotiating */
+                /* Start negotiation */
                 sofi->state = NN_SOFI_STATE_NEGOTIATING;
                 nn_fsm_action( &sofi->fsm, NN_SOFI_ACTION_NEGOTIATE );
 
@@ -1243,11 +1263,19 @@ static void nn_sofi_handler (struct nn_fsm *self, int src, int type,
                 ng_local.unused[2] = 0;
                 ng_local.unused[3] = 0;
 
-                /* Send local negotiation information (returns when sent, NOT when acknowledged) */
-                ret = nn_sofi_send_local( sofi, &ng_local, sizeof(ng_local) );
+                /* Send or receive first */
+                if (sofi->ng_direction == NN_SOFI_NG_SEND) {
+                    _ofi_debug("OFI[S]: Starting handshake (send)\n");
+                    ret = nn_sofi_send_small( sofi, &ng_local, sizeof(ng_local) );
+                } else if (sofi->ng_direction == NN_SOFI_NG_RECV) {
+                    _ofi_debug("OFI[S]: Starting handshake (receive)\n");
+                    ret = nn_sofi_recv_small( sofi, &sofi->ng_remote, sizeof(ng_local) );
+                }
+
+                /* Check for errors */
                 if (ret) {
                     /* An error occured */
-                    _ofi_debug("OFI: SOFI: Unable to handshake\n");
+                    _ofi_debug("OFI[S]: Unable to start handshake\n");
                     sofi->state = NN_SOFI_STATE_DISCONNECTING;
                     /* Notify parent fsm that we are disconnected */
                     nn_fsm_raise(&sofi->fsm, &sofi->disconnected, 
@@ -1256,19 +1284,40 @@ static void nn_sofi_handler (struct nn_fsm *self, int src, int type,
                     return;
                 }
 
-                /* Receive remote negotiation information */
-                ret = ofi_tx_data( sofi->ep, sofi->ptr_slab_out, sizeof(ng_local), 
-                    OFI_MR_DESC( sofi->mr_slab ), NN_SOFI_IO_TIMEOUT );
+                /* Receive or send later */
+                if (sofi->ng_direction == NN_SOFI_NG_SEND) {
+                    _ofi_debug("OFI[S]: Completing handshake (receive)\n");
+                    ret = nn_sofi_recv_small( sofi, &sofi->ng_remote, sizeof(ng_local) );
+                } else if (sofi->ng_direction == NN_SOFI_NG_RECV) {
+                    _ofi_debug("OFI[S]: Completing handshake (send)\n");
+                    ret = nn_sofi_send_small( sofi, &ng_local, sizeof(ng_local) );
+                }
 
-                /* Copy memory region to core memory region */
-                memcpy( &sofi->ng_remote, sofi->ptr_slab_out, sizeof(ng_local) );
+                /* Check for errors */
+                if (ret) {
+                    /* An error occured */
+                    _ofi_debug("OFI[S]: Unable to complete handshake\n");
+                    sofi->state = NN_SOFI_STATE_DISCONNECTING;
+                    /* Notify parent fsm that we are disconnected */
+                    nn_fsm_raise(&sofi->fsm, &sofi->disconnected, 
+                        NN_SOFI_DISCONNECTED);
+                    /* Do not continue */
+                    return;
+                }
+
+                /* Negotiation completed */
                 nn_fsm_action( &sofi->fsm, NN_SOFI_ACTION_NEGOTIATE_DONE );
+
                 return;
 
             case NN_SOFI_ACTION_NEGOTIATE_DONE:
 
                 /* We are connected */
                 sofi->state = NN_SOFI_STATE_CONNECTED;
+
+                /* Start pipe */
+                _ofi_debug("OFI[S]: Started!\n");
+                nn_pipebase_start( &sofi->pipebase );
 
                 /* Start poller thread */
                 nn_thread_init (&sofi->thread, nn_sofi_poller_thread, sofi);
@@ -1339,7 +1388,7 @@ static void nn_sofi_handler (struct nn_fsm *self, int src, int type,
                 /* Check if we have closed everything */
                 if (sofi->instate != NN_SOFI_INSTATE_CLOSED) return;
                 if (sofi->outstate != NN_SOFI_OUTSTATE_CLOSED) return;
-                _ofi_debug("OFI: Both input and output channels are closed!\n");
+                _ofi_debug("OFI[S]: Both input and output channels are closed!\n");
 
                 /* Switch to disconnected */
                 sofi->state = NN_SOFI_STATE_DISCONNECTED;

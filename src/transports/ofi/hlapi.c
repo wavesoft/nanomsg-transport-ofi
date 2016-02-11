@@ -87,9 +87,9 @@
 			int ret = fi_close(&(fd)->fid);	\
 			if (ret) { \
 				if (ret == -FI_EBUSY) { \
-					printf("OFI: *** Error closing FD " #fd " (FI_EBUSY)\n"); \
+					printf("OFI[H]: *** Error closing FD " #fd " (FI_EBUSY)\n"); \
 				} else { \
-					printf("OFI: *** Error closing FD " #fd " caused error = %i\n", ret); \
+					printf("OFI[H]: *** Error closing FD " #fd " caused error = %i\n", ret); \
 				} \
 			} \
 			fd = NULL;		\
@@ -200,7 +200,7 @@ int ft_wait(struct fid_cq *cq)
 
 
 				/* Display other erors */
-				printf("OFI: %s (%s)\n",
+				printf("OFI[H]: %s (%s)\n",
 					fi_strerror(err_entry.err),
 					fi_cq_strerror(cq, err_entry.prov_errno, err_entry.err_data, NULL, 0)
 				);
@@ -251,7 +251,7 @@ int ft_wait_shutdown_aware(struct fid_cq *cq, struct fid_eq *eq, int timeout, st
 		/* Operation failed */
 		if (nn_slow(ret > 0)) {
 			/* Success */
-			_ofi_debug("OFI: ft_wait() succeed with shutdown_interval=%i\n", shutdown_interval);
+			_ofi_debug("OFI[H]: ft_wait() succeed with shutdown_interval=%i\n", shutdown_interval);
 			return 0;
 		} else if (nn_fast(ret < 0 && ret != -FI_EAGAIN)) {
 			if (nn_fast(ret == -FI_EAVAIL)) {
@@ -262,12 +262,12 @@ int ft_wait_shutdown_aware(struct fid_cq *cq, struct fid_eq *eq, int timeout, st
 
 				/* Check if the operation was cancelled (ex. terminating connection) */
 				if (err_entry.err == FI_ECANCELED) {
-					_ofi_debug("OFI: ft_wait() exiting because of FI_ECANCELED\n");
+					_ofi_debug("OFI[H]: ft_wait() exiting because of FI_ECANCELED\n");
 					return -FI_REMOTE_DISCONNECT;
 				}
 
 				/* Display other erors */
-				printf("OFI: %s (%s)\n",
+				printf("OFI[H]: %s (%s)\n",
 					fi_strerror(err_entry.err),
 					fi_cq_strerror(cq, err_entry.prov_errno, err_entry.err_data, NULL, 0)
 				);
@@ -281,7 +281,7 @@ int ft_wait_shutdown_aware(struct fid_cq *cq, struct fid_eq *eq, int timeout, st
 			if (nn_slow(timeout >= 0)) {
 				clock_gettime(CLOCK_MONOTONIC, &b);
 				if ((b.tv_sec - a.tv_sec) > timeout) {
-					_ofi_debug("OFI: ft_wait() timeout expired\n");
+					_ofi_debug("OFI[H]: ft_wait() timeout expired\n");
 					return -FI_ENODATA; /* TODO: Perhaps not treat this as a remote disconnect? */
 				}
 			}
@@ -290,7 +290,7 @@ int ft_wait_shutdown_aware(struct fid_cq *cq, struct fid_eq *eq, int timeout, st
 			if (nn_slow(shutdown_interval > 0)) {
 				if (--shutdown_interval == 0) {
 					/* We are remotely disconnected */
-					_ofi_debug("OFI: ft_wait() exiting because of FI_SHUTDOWN event\n");
+					_ofi_debug("OFI[H]: ft_wait() exiting because of FI_SHUTDOWN event\n");
 					return -FI_REMOTE_DISCONNECT;
 				}
 			}
@@ -366,7 +366,7 @@ int ft_av_insert(struct fid_av *av, void *addr, size_t count, fi_addr_t *fi_addr
  */
 int dbg_show_providers( struct fi_info *list )
 {
-	printf("OFI: Available fabrics as reported from libOFI:\n");
+	printf("OFI[H]: Available fabrics as reported from libOFI:\n");
 
 	// Iterate over the identified providers
 	int i = 1;
@@ -375,7 +375,7 @@ int dbg_show_providers( struct fi_info *list )
 	{
 
 		// Debug
-		printf("OFI:  %2i) fabric='%s', provider='%s' %s\n", 
+		printf("OFI[H]:  %2i) fabric='%s', provider='%s' %s\n", 
 			i,
 			curr->fabric_attr->name, 
 			curr->fabric_attr->prov_name,
@@ -446,7 +446,7 @@ ssize_t ofi_tx_msg( struct ofi_active_endpoint * EP, const struct iovec *msg_iov
 
 		/* If we are in a bad state, we were remotely disconnected */
 		if (ret == -FI_EOPBADSTATE) {
-			_ofi_debug("OFI: HLAPI: ofi_tx_msg() returned -FI_EOPBADSTATE, considering shutdown.\n");
+			_ofi_debug("OFI[H]: ofi_tx_msg() returned -FI_EOPBADSTATE, considering shutdown.\n");
 			return -FI_REMOTE_DISCONNECT;			
 		}
 
@@ -502,7 +502,7 @@ ssize_t ofi_tx_data( struct ofi_active_endpoint * EP, void * buf, const size_t t
 
 		/* If we are in a bad state, we were remotely disconnected */
 		if (ret == -FI_EOPBADSTATE) {
-			_ofi_debug("OFI: HLAPI: ofi_tx_msg() returned -FI_EOPBADSTATE, considering shutdown.\n");
+			_ofi_debug("OFI[H]: ofi_tx_msg() returned -FI_EOPBADSTATE, considering shutdown.\n");
 			return -FI_REMOTE_DISCONNECT;			
 		}
 
@@ -544,7 +544,7 @@ ssize_t ofi_rx_data( struct ofi_active_endpoint * EP, void * buf, const size_t m
 
 		/* If we are in a bad state, we were remotely disconnected */
 		if (ret == -FI_EOPBADSTATE) {
-			_ofi_debug("OFI: HLAPI: ofi_rx() returned %i, considering shutdown.\n", ret);
+			_ofi_debug("OFI[H]: ofi_rx() returned %i, considering shutdown.\n", ret);
 			return -FI_REMOTE_DISCONNECT;
 		}
 
@@ -600,7 +600,7 @@ ssize_t ofi_rx_msg( struct ofi_active_endpoint * EP, const struct iovec *msg_iov
 
 		/* If we are in a bad state, we were remotely disconnected */
 		if (ret == -FI_EOPBADSTATE) {
-			_ofi_debug("OFI: HLAPI: ofi_rx() returned %i, considering shutdown.\n", ret);
+			_ofi_debug("OFI[H]: ofi_rx() returned %i, considering shutdown.\n", ret);
 			return -FI_REMOTE_DISCONNECT;
 		}
 
@@ -643,7 +643,7 @@ int ofi_rx_post( struct ofi_active_endpoint * EP, void * buf, const size_t max_s
 
 		/* If we are in a bad state, we were remotely disconnected */
 		if (ret == -FI_EOPBADSTATE) {
-			_ofi_debug("OFI: HLAPI: ofi_rx() returned %i, considering shutdown.\n", ret);
+			_ofi_debug("OFI[H]: ofi_rx() returned %i, considering shutdown.\n", ret);
 			return -FI_REMOTE_DISCONNECT;
 		}
 
@@ -691,7 +691,7 @@ int ofi_rx_poll( struct ofi_active_endpoint * EP, size_t * rx_size, uint32_t tim
 				}
 
 				/* Display other erors */
-				printf("OFI: ofi_rx_poll: %s (%s)\n",
+				printf("OFI[H]: ofi_rx_poll: %s (%s)\n",
 					fi_strerror(err_entry.err),
 					fi_cq_strerror(EP->rx_cq, err_entry.prov_errno, err_entry.err_data, NULL, 0)
 				);
@@ -737,7 +737,7 @@ int ofi_alloc( struct ofi_resources * R, enum fi_ep_type ep_type )
 	/* Allocate hints */
 	R->hints = fi_allocinfo();
 	if (!R->hints) {
-		printf("OFI: Unable to allocate hints structure!\n");
+		printf("OFI[H]: Unable to allocate hints structure!\n");
 		return 255;
 	}
 
@@ -800,7 +800,7 @@ int ofi_open_fabric( struct ofi_resources * R )
 	}
 
 	/* Debug */
-	printf("OFI: Using fabric=%s, provider=%s\n", 
+	printf("OFI[H]: Using fabric=%s, provider=%s\n", 
 		R->fi->fabric_attr->name, 
 		R->fi->fabric_attr->prov_name );
 
@@ -1043,7 +1043,7 @@ int ofi_restart_passive_ep( struct ofi_resources * R, struct ofi_passive_endpoin
 	} while ((int)rd == 0);
 
 	/* Re-open passive endpoint */
-	_ofi_debug("OFI: Restarting passive endpoint\n");
+	_ofi_debug("OFI[H]: Restarting passive endpoint\n");
 	FT_CLOSE_FID( PEP->pep );
 	FT_CLOSE_FID( PEP->eq );
 	ret = ofi_open_passive_ep( R, PEP );
@@ -1264,7 +1264,7 @@ int ofi_mr_manage( struct ofi_active_endpoint * EP, struct ofi_mr * mr, void * b
 	}
 
 	/* Register buffer */
-	_ofi_debug("OFI: Managing memory region (key=%i)\n", requested_key);
+	_ofi_debug("OFI[H]: Managing memory region (key=%i)\n", requested_key);
 	ret = fi_mr_reg(EP->domain, buf, len, access_flags, 0, requested_key, 0, &mr->mr, NULL);
 	if (ret) {
 		FT_PRINTERR("fi_mr_reg", ret);
@@ -1286,7 +1286,7 @@ int ofi_mr_unmanage( struct ofi_active_endpoint * EP, struct ofi_mr * mr )
 
 	/* Don't do anything if MR is null */
 	if (!mr->mr) return 0;
-	_ofi_debug("OFI: Unmanaging memory region\n");
+	_ofi_debug("OFI[H]: Unmanaging memory region\n");
 
 	/* Close memory region and free descriptor */
 	FT_CLOSE_FID( mr->mr );
@@ -1329,9 +1329,11 @@ int ofi_shutdown_ep( struct ofi_active_endpoint * EP )
 	/* Send a shutdown even to event queuet */
 	struct fi_eq_cm_entry entry = {0};
 	ssize_t rd;
-	rd = fi_eq_write( EP->eq, FI_SHUTDOWN, &entry, sizeof entry, 0 );
-	if (rd != sizeof entry) {
-		_ofi_debug("OFI: ERROR: Unable to signal the shutdown event to EP!");
+	if (EP->eq) {
+		rd = fi_eq_write( EP->eq, FI_SHUTDOWN, &entry, sizeof entry, 0 );
+		if (rd != sizeof entry) {
+			_ofi_debug("OFI[H]: ERROR: Unable to signal the shutdown event to EP!");
+		}
 	}
 
 	/* Not implemented in some providers */
@@ -1363,7 +1365,7 @@ int ofi_shutdown_pep( struct ofi_passive_endpoint * PEP )
 	ssize_t rd;
 	rd = fi_eq_write( PEP->eq, FI_SHUTDOWN, &entry, sizeof entry, 0 );
 	if (rd != sizeof entry) {
-		_ofi_debug("OFI: ERROR: Unable to signal the shutdown event to PEP!");
+		_ofi_debug("OFI[H]: ERROR: Unable to signal the shutdown event to PEP!");
 	}
 
 	/* No particular procedure, just wait for ofi_free_pep */

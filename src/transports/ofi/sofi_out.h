@@ -48,9 +48,17 @@ struct nn_sofi_out {
     struct ofi_resources        * ofi;
     struct ofi_active_endpoint  * ep;
 
-    /* The FSM events */
-    struct nn_fsm_event         error_event;
-    struct nn_fsm_event         close_event;
+    /* Outgoing : Events */
+    struct nn_fsm_event         event_started;
+    struct nn_fsm_event         event_sent;
+    struct nn_fsm_event         event_error;
+    struct nn_fsm_event         event_close;
+
+    /* Incoming : Events through worker tasks */
+    struct nn_worker            * worker;
+    struct nn_worker_task       task_tx;
+    struct nn_worker_task       task_tx_error;
+    struct nn_worker_task       task_tx_ack;
 
     /* Abort cleanup timeout */
     struct nn_timer             abort_timer;
@@ -79,15 +87,17 @@ void nn_sofi_out_stop (struct nn_sofi_out *self);
 /*  Cleanup the state machine */
 void nn_sofi_out_term (struct nn_sofi_out *self);
 
-// /* ============================== */
-// /*         INPUT EVENTS           */
-// /* ============================== */
+/* ============================== */
+/*        EXTERNAL EVENTS         */
+/* ============================== */
 
-// /* There are data available for Rx */
-// void nn_sofi_out_event__rx_data (struct nn_sofi_out *self, /* Data */);
+/* Trigger an rx event */
+void nn_sofi_out_tx_event( struct nn_sofi_out *self );
 
-// /* There was an Rx Error */
-// void nn_sofi_out_event__rx_error (struct nn_sofi_out *self, /* Error */);
+/* Trigger an rx erro event */
+void nn_sofi_out_tx_error_event( struct nn_sofi_out *self, int err_number );
 
+/* Acknowledge a tx event */
+void nn_sofi_out_tx_event_ack( struct nn_sofi_out *self );
 
 #endif

@@ -63,10 +63,7 @@ struct nn_sofi {
 
     /* Asynchronous communication with the worker thread */
     struct nn_worker            * worker;
-    struct nn_worker_task       task_rx;
-    struct nn_worker_task       task_tx;
-    struct nn_worker_task       task_error;
-    struct nn_worker_task       task_disconnected;
+    struct nn_worker_task       task_disconnect;
 
     /*  Pipe connecting this inproc connection to the nanomsg core. */
     struct nn_pipebase          pipebase;
@@ -80,8 +77,8 @@ struct nn_sofi {
     struct nn_sofi_out          sofi_out;
 
     /* Handshake timeout timer */
-    struct nn_timer             handshake_timer;
-    struct nn_timer             keepalive_timer;
+    struct nn_timer             timer_handshake;
+    struct nn_timer             timer_keepalive;
 
 };
 

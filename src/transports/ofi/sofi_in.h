@@ -24,6 +24,7 @@
 #define NN_SOFI_IN_INCLUDED
 
 #include "hlapi.h"
+#include "ofi.h"
 
 #include "../../transport.h"
 #include "../../aio/fsm.h"
@@ -48,12 +49,20 @@ struct nn_sofi_in {
     struct ofi_resources        * ofi;
     struct ofi_active_endpoint  * ep;
 
-    /* The FSM events */
-    struct nn_fsm_event         error_event;
-    struct nn_fsm_event         close_event;
+    /* Outgoing : Events */
+    struct nn_fsm_event         event_started;
+    struct nn_fsm_event         event_received;
+    struct nn_fsm_event         event_error;
+    struct nn_fsm_event         event_close;
+
+    /* Incoming : Events through worker tasks */
+    struct nn_worker            * worker;
+    struct nn_worker_task       task_rx;
+    struct nn_worker_task       task_rx_error;
+    struct nn_worker_task       task_rx_ack;
 
     /* Abort cleanup timeout */
-    struct nn_timer             abort_timer;
+    struct nn_timer             timer_abort;
 
 };
 
@@ -78,5 +87,18 @@ void nn_sofi_in_stop (struct nn_sofi_in *self);
 
 /*  Cleanup the state machine */
 void nn_sofi_in_term (struct nn_sofi_in *self);
+
+/* ============================== */
+/*        EXTERNAL EVENTS         */
+/* ============================== */
+
+/* Trigger an rx event */
+void nn_sofi_in_rx_event( struct nn_sofi_in *self );
+
+/* Trigger an rx erro event */
+void nn_sofi_in_rx_error_event( struct nn_sofi_in *self, int err_number );
+
+/** Acknowledge an rx event */
+void nn_sofi_in_rx_error_ack( struct nn_sofi_in *self );
 
 #endif

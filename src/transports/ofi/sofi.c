@@ -46,13 +46,7 @@
 #define NN_SOFI_SRC_OUT_FSM              1102
 #define NN_SOFI_SRC_HANDSHAKE_TIMER      1103
 #define NN_SOFI_SRC_KEEPALIVE_TIMER      1104
-
-/* SOFI Asynchronous tasks */
-#define NN_SOFI_TASK_RX                  1300
-#define NN_SOFI_TASK_TX                  1301
-#define NN_SOFI_TASK_ERROR               1302
-#define NN_SOFI_TASK_DISCONNECTED        1303
-#define NN_SOFI_TASK_DELAYED_DISCONNECT  1304
+#define NN_SOFI_SRC_TASK_DISCONNECT      1105
 
 /* Timeout values */
 #define NN_SOFI_TIMEOUT_HANDSHAKE        1000
@@ -135,26 +129,13 @@ void nn_sofi_init ( struct nn_sofi *self,
     self->state = NN_SOFI_STATE_IDLE;
     self->error = 0;
 
-    /*  Choose a worker thread to handle this socket. */
-    self->worker = nn_fsm_choose_worker (&self->fsm);
-
-    /* Initialize worker tasks */
-    nn_worker_task_init (&self->task_rx, NN_SOFI_TASK_RX,
-        &self->fsm);
-    nn_worker_task_init (&self->task_tx, NN_SOFI_TASK_TX,
-        &self->fsm);
-    nn_worker_task_init (&self->task_error, NN_SOFI_TASK_ERROR,
-        &self->fsm);
-    nn_worker_task_init (&self->task_disconnected, NN_SOFI_TASK_DISCONNECTED,
-        &self->fsm);
-
     /* ----------------------------------- */
     /*  NanoMsg Component Initialization   */
     /* ----------------------------------- */
 
-    nn_timer_init(&self->handshake_timer, NN_SOFI_SRC_HANDSHAKE_TIMER, 
+    nn_timer_init(&self->timer_handshake, NN_SOFI_SRC_HANDSHAKE_TIMER, 
         &self->fsm);
-    nn_timer_init(&self->keepalive_timer, NN_SOFI_SRC_KEEPALIVE_TIMER,
+    nn_timer_init(&self->timer_keepalive, NN_SOFI_SRC_KEEPALIVE_TIMER,
         &self->fsm);
 
     /* ----------------------------------- */
@@ -168,6 +149,13 @@ void nn_sofi_init ( struct nn_sofi *self,
     /* Initialize OUTPUT Sofi */
     nn_sofi_out_init( &self->sofi_out, ofi, ep, ng_direction, &self->pipebase,
         NN_SOFI_SRC_OUT_FSM, &self->fsm );
+
+    /*  Choose a worker thread to handle this socket. */
+    self->worker = nn_fsm_choose_worker (&self->fsm);
+
+    /* Initialize worker tasks */
+    nn_worker_task_init (&self->task_disconnect, NN_SOFI_SRC_TASK_DISCONNECT,
+        &self->fsm);
 
     /* ----------------------------------- */
     /*  Bootstrap FSM                      */
@@ -215,14 +203,14 @@ void nn_sofi_stop (struct nn_sofi *self)
 
     case NN_SOFI_STATE_HANDSHAKE_HALF:
         _ofi_debug("OFI[S]: Stopping Handshake Timer, Input & Output FSM\n");
-        nn_timer_stop( &self->handshake_timer );
+        nn_timer_stop( &self->timer_handshake );
         nn_sofi_in_stop( &self->sofi_in );
         nn_sofi_out_stop( &self->sofi_out );
         break;
 
     case NN_SOFI_STATE_HANDSHAKE_FULL:
         _ofi_debug("OFI[S]: Stopping Handshake Timer, Input & Output FSM\n");
-        nn_timer_stop( &self->handshake_timer );
+        nn_timer_stop( &self->timer_handshake );
         nn_sofi_in_stop( &self->sofi_in );
         nn_sofi_out_stop( &self->sofi_out );
         break;
@@ -235,7 +223,7 @@ void nn_sofi_stop (struct nn_sofi *self)
 
     case NN_SOFI_STATE_RUNNING:
         _ofi_debug("OFI[S]: Stopping Keepalive Timer, Input & Output FSM\n");
-        nn_timer_stop( &self->keepalive_timer );
+        nn_timer_stop( &self->timer_keepalive );
         nn_sofi_in_stop( &self->sofi_in );
         nn_sofi_out_stop( &self->sofi_out );
         break;
@@ -267,27 +255,21 @@ void nn_sofi_term (struct nn_sofi *self)
     nn_sofi_in_term (&self->sofi_in);
     nn_sofi_out_term (&self->sofi_out);
 
+    /* Cleanup worker tasks */
+    nn_worker_cancel (self->worker, &self->task_disconnect);
+    nn_worker_task_term (&self->task_disconnect);
+
     /* ----------------------------------- */
     /*  NanoMsg Component Termination      */
     /* ----------------------------------- */
 
     /* Stop timers */
-    nn_timer_term (&self->handshake_timer);
-    nn_timer_term (&self->keepalive_timer);
+    nn_timer_term (&self->timer_handshake);
+    nn_timer_term (&self->timer_keepalive);
 
     /* ----------------------------------- */
     /*  NanoMSG Core Termination           */
     /* ----------------------------------- */
-
-    /* Cleanup worker tasks */
-    nn_worker_cancel (self->worker, &self->task_disconnected);
-    nn_worker_cancel (self->worker, &self->task_error);
-    nn_worker_cancel (self->worker, &self->task_tx);
-    nn_worker_cancel (self->worker, &self->task_rx);
-    nn_worker_task_term (&self->task_disconnected);
-    nn_worker_task_term (&self->task_error);
-    nn_worker_task_term (&self->task_tx);
-    nn_worker_task_term (&self->task_rx);
 
     /* Terminate list item */
     nn_list_item_term (&self->item);
@@ -321,7 +303,7 @@ static void nn_sofi_poller_thread (void *arg)
     int ret;
 
     /* Keep thread alive while  */
-    _ofi_debug("OFI[S]: Starting poller thread\n");
+    _ofi_debug("OFI[p]: Starting poller thread\n");
     while ( self->state == NN_SOFI_STATE_RUNNING ) {
 
         /* ========================================= */
@@ -330,7 +312,18 @@ static void nn_sofi_poller_thread (void *arg)
         ret = fi_cq_read( self->ep->rx_cq, &cq_entry, 1 );
         if (nn_slow(ret > 0)) {
 
+            /* Trigger rx worker task */
+            _ofi_debug("OFI[p]: Rx CQ Event\n");
+            nn_sofi_in_rx_event( &self->sofi_in );
+
         } else if (nn_slow(ret != -FI_EAGAIN)) {
+
+            /* Get error details */
+            ret = fi_cq_readerr( self->ep->rx_cq, &err_entry, 0 );
+            _ofi_debug("OFI[p]: Rx CQ Error (ret=%i)\n", err_entry.err );
+
+            /* Trigger rx error worker task */
+            nn_sofi_in_rx_error_event( &self->sofi_in, err_entry.err );
 
         }
 
@@ -340,7 +333,18 @@ static void nn_sofi_poller_thread (void *arg)
         ret = fi_cq_read( self->ep->tx_cq, &cq_entry, 1 );
         if (nn_slow(ret > 0)) {
 
+            /* Trigger tx worker task */
+            _ofi_debug("OFI[p]: Tx CQ Event\n");
+            nn_sofi_out_tx_event( &self->sofi_out );
+
         } else if (nn_slow(ret != -FI_EAGAIN)) {
+
+            /* Get error details */
+            ret = fi_cq_readerr( self->ep->rx_cq, &err_entry, 0 );
+            _ofi_debug("OFI[p]: Tx CQ Error (ret=%i)\n", err_entry.err );
+
+            /* Trigger tx error worker task */
+            nn_sofi_out_tx_error_event( &self->sofi_out, err_entry.err );
 
         }
 
@@ -349,6 +353,14 @@ static void nn_sofi_poller_thread (void *arg)
         /* ========================================= */
         ret = fi_eq_read( self->ep->eq, &event, &eq_entry, sizeof eq_entry, 0);
         if (nn_fast(ret != -FI_EAGAIN)) {
+            _ofi_debug("OFI[p]: Endpoint EQ Event (event=%i)\n", event);
+
+            /* Check for socket disconnection */
+            if (event == FI_SHUTDOWN) {
+                _ofi_debug("OFI[p]: Endpoint Disconnected\n");
+                nn_worker_execute (self->worker, &self->task_disconnect);
+                break;
+            }
 
         }
 
@@ -359,7 +371,7 @@ static void nn_sofi_poller_thread (void *arg)
         }
 
     }
-    _ofi_debug("OFI[S]: Exited poller thread\n");
+    _ofi_debug("OFI[p]: Exited poller thread\n");
 
 }
 
@@ -411,14 +423,35 @@ static void nn_sofi_shutdown (struct nn_fsm *fsm, int src, int type,
 
     /* If this is part of the FSM action, start shutdown */
     if (nn_slow (src == NN_FSM_ACTION && type == NN_FSM_STOP)) {
+        self->state = NN_SOFI_STATE_CLOSING;
+    }
+
+    /* When closing, ensure everything is closed */
+    if (self->state == NN_SOFI_STATE_CLOSING) {
+
+        /* Wait for all components to be idle */
+        if (!nn_timer_isidle(&self->timer_handshake)) return;
+        if (!nn_timer_isidle(&self->timer_keepalive)) return;
+        if (!nn_sofi_in_isidle(&self->sofi_in)) return;
+        if (!nn_sofi_out_isidle(&self->sofi_out)) return;
+
+        /* Switch to closed */
+        self->state = NN_SOFI_STATE_CLOSED;
 
     }
 
-    /* TODO: Wait for all components to become idle */
+    /* When closed, clean-up */
+    if (self->state == NN_SOFI_STATE_CLOSED) {
 
-    /* We are stopped */
-    nn_fsm_stopped(&self->fsm, NN_SOFI_STOPPED);
-    return;
+        /* Stop nanomsg components */
+        nn_pipebase_stop (&self->pipebase);
+        nn_fsm_stopped(&self->fsm, NN_SOFI_STOPPED);
+        return;
+
+    }
+
+    /* Invalid state */
+    nn_fsm_bad_state (self->state, src, type);
 }
 
 /**
@@ -523,7 +556,7 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
 
                 /* Require finite time for the handshake,
                    otherwise abort! */
-                nn_timer_start( &self->handshake_timer, 
+                nn_timer_start( &self->timer_handshake, 
                     NN_SOFI_TIMEOUT_HANDSHAKE );
 
                 /* Send handshake if we are on the sending side */
@@ -655,7 +688,7 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
 
                 /* We completed handshake, stop timer */
                 self->state = NN_SOFI_STATE_HANDSHAKE_COMPLETE;
-                nn_timer_stop( &self->handshake_timer );
+                nn_timer_stop( &self->timer_handshake );
 
                 return;
 
@@ -687,7 +720,7 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
 
                 /* We completed handshake, stop timer */
                 self->state = NN_SOFI_STATE_HANDSHAKE_COMPLETE;
-                nn_timer_stop( &self->handshake_timer );
+                nn_timer_stop( &self->timer_handshake );
 
                 return;
 
@@ -744,7 +777,7 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
                 nn_pipebase_start( &self->pipebase );
 
                 /* Start Keepalive timer */
-                nn_timer_start( &self->keepalive_timer, 
+                nn_timer_start( &self->timer_keepalive, 
                     NN_SOFI_TIMEOUT_KEEPALIVE_TICK );
 
                 return;
@@ -825,15 +858,33 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
                 _ofi_debug("OFI[S]: Keepalive tick\n");
 
                 /* Stop Keepalive timer only to be started later */
-                nn_timer_stop( &self->keepalive_timer );
+                nn_timer_stop( &self->timer_keepalive );
                 return;
 
             case NN_TIMER_STOPPED:
 
                 /* Restart Keepalive timer */
                 _ofi_debug("OFI[S]: Keepalive stopped, restarting\n");
-                nn_timer_start( &self->keepalive_timer, 
+                nn_timer_start( &self->timer_keepalive, 
                     NN_SOFI_TIMEOUT_KEEPALIVE_TICK );
+                return;
+
+            default:
+                nn_fsm_bad_action (self->state, src, type);
+            }
+
+
+        /* ========================= */
+        /*  Worker : Disconnected    */
+        /* ========================= */
+        case NN_SOFI_SRC_TASK_DISCONNECT:
+            switch (type) {
+            case NN_WORKER_TASK_EXECUTE:
+
+                /* Socket was disconnected, close */
+                _ofi_debug("OFI[S]: Disconnectingn from to socket event\n");
+                nn_sofi_stop( self );
+
                 return;
 
             default:
@@ -843,6 +894,7 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
         default:
             nn_fsm_bad_source (self->state, src, type);
         }
+
 
 /******************************************************************************/
 /*  Invalid state.                                                            */

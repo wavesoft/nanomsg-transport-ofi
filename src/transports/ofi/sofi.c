@@ -47,6 +47,7 @@
 
 /* Timeout values */
 #define NN_SOFI_TIMEOUT_HANDSHAKE       1000
+#define NN_SOFI_TIMEOUT_KEEPALIVE_TICK  1000
 
 /* Forward Declarations */
 static void nn_sofi_handler (struct nn_fsm *self, int src, int type, 
@@ -405,6 +406,11 @@ static void nn_sofi_shutdown (struct nn_fsm *fsm, int src, int type,
 
     }
 
+    /* TODO: Wait for all components to become idle */
+
+    /* We are stopped */
+    nn_fsm_stopped(&self->fsm, NN_SOFI_STOPPED);
+    return;
 }
 
 /**
@@ -545,7 +551,7 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
 
                 return;
 
-            case NN_SOFI_IN_EVENT_ERROR:
+            case NN_SOFI_OUT_EVENT_ERROR:
 
                 /* Unable to complete handshake, shutdown */
                 _ofi_debug("OFI[S]: Send error while completing handshake\n");
@@ -583,10 +589,6 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
             default:
                 nn_fsm_bad_action (self->state, src, type);
             }
-
-        default:
-            nn_fsm_bad_source (self->state, src, type);
-        }
 
         case NN_SOFI_SRC_HANDSHAKE_TIMER:
             switch (type) {
@@ -628,7 +630,7 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
 
                 return;
 
-            case NN_SOFI_IN_EVENT_ERROR:
+            case NN_SOFI_OUT_EVENT_ERROR:
 
                 /* Unable to complete handshake, shutdown */
                 _ofi_debug("OFI[S]: Send error while completing handshake\n");
@@ -668,10 +670,6 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
                 nn_fsm_bad_action (self->state, src, type);
             }
 
-        default:
-            nn_fsm_bad_source (self->state, src, type);
-        }
-
         case NN_SOFI_SRC_HANDSHAKE_TIMER:
             switch (type) {
             case NN_TIMER_TIMEOUT:
@@ -705,10 +703,91 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
 
                 /* Start pipebase */
                 self->state = NN_SOFI_STATE_RUNNING;
-                nn_pipebase_start( &sofi->pipebase );
+                nn_pipebase_start( &self->pipebase );
 
-                /* TODO: Start Keepalive */
+                /* Start Keepalive timer */
+                nn_timer_start( &self->keepalive_timer, 
+                    NN_SOFI_TIMEOUT_KEEPALIVE_TICK );
 
+                return;
+
+            default:
+                nn_fsm_bad_action (self->state, src, type);
+            }
+
+        default:
+            nn_fsm_bad_source (self->state, src, type);
+        }
+
+/******************************************************************************/
+/*  RUNNING state.                                                            */
+/*  Negotiation is finished, components are running. We are now just          */
+/*  delegating events.                                                        */
+/******************************************************************************/
+    case NN_SOFI_STATE_RUNNING:
+        switch (src) {
+
+        case NN_SOFI_SRC_OUT_FSM:
+            switch (type) {
+            case NN_SOFI_OUT_EVENT_SENT:
+
+                /* Notify socket base that data are sent */
+                _ofi_debug("OFI[S]: Data are sent\n");
+
+                /* TODO: Handle */
+
+                return;
+
+            case NN_SOFI_OUT_EVENT_ERROR:
+
+                /* Unable to send data, shutdown */
+                _ofi_debug("OFI[S]: Error sending data\n");
+                nn_sofi_stop( self );
+                return;
+
+            default:
+                nn_fsm_bad_action (self->state, src, type);
+            }
+
+        case NN_SOFI_SRC_IN_FSM:
+            switch (type) {
+            case NN_SOFI_IN_EVENT_RECEIVED:
+
+                /* Notify socket base that data are available */
+                _ofi_debug("OFI[S]: Data are available\n");
+
+                /* TODO: Handle */
+
+                return;
+
+            case NN_SOFI_IN_EVENT_ERROR:
+
+                /* Unable to receive data, shutdown */
+                _ofi_debug("OFI[S]: Error receiving data\n");
+                nn_sofi_stop( self );
+                return;
+
+            default:
+                nn_fsm_bad_action (self->state, src, type);
+            }
+
+
+        case NN_SOFI_SRC_KEEPALIVE_TIMER:
+            switch (type) {
+            case NN_TIMER_TIMEOUT:
+
+                /* Handhsake phase is completely terminated */
+                _ofi_debug("OFI[S]: Keepalive tick\n");
+
+                /* Stop Keepalive timer only to be started later */
+                nn_timer_stop( &self->keepalive_timer );
+                return;
+
+            case NN_TIMER_STOPPED:
+
+                /* Restart Keepalive timer */
+                nn_timer_start( &self->keepalive_timer, 
+                    NN_SOFI_TIMEOUT_KEEPALIVE_TICK );
                 return;
 
             default:

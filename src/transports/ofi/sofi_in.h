@@ -62,10 +62,10 @@ struct nn_sofi_in {
 /* ============================== */
 
 /*  Initialize the state machine */
-void nn_sofi_in_init (struct nn_sofi_in *self, 
+void nn_sofi_in_init ( struct nn_sofi_in *self, 
     struct ofi_resources *ofi, struct ofi_active_endpoint *ep,
-    const uint8_t ng_direction, struct np_pipebase * pipebase,
-    int src, struct nn_fsm *owner);
+    const uint8_t ng_direction, struct nn_pipebase * pipebase,
+    int src, struct nn_fsm *owner );
 
 /* Check if FSM is idle */
 int nn_sofi_in_isidle (struct nn_sofi_in *self);
@@ -78,15 +78,5 @@ void nn_sofi_in_stop (struct nn_sofi_in *self);
 
 /*  Cleanup the state machine */
 void nn_sofi_in_term (struct nn_sofi_in *self);
-
-/* ============================== */
-/*         INPUT EVENTS           */
-/* ============================== */
-
-/* Data needs to be sent */
-void nn_sofi_in_event__tx_data (struct nn_sofi_in *self, /* Data */);
-
-/* Acknowledge transmission of data */
-void nn_sofi_in_event__tx_ack (struct nn_sofi_in *self);
 
 #endif

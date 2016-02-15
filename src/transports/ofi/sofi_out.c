@@ -21,6 +21,9 @@
 */
 
 #include "sofi_out.h"
+#include "../../utils/cont.h"
+#include "../../utils/err.h"
+#include "../../utils/fast.h"
 
 /* FSM States */
 #define NN_SOFI_OUT_STATE_IDLE          3001
@@ -46,7 +49,7 @@ static void nn_sofi_out_shutdown (struct nn_fsm *self, int src, int type,
 /*  Initialize the state machine */
 void nn_sofi_out_init (struct nn_sofi_out *self, 
     struct ofi_resources *ofi, struct ofi_active_endpoint *ep,
-    const uint8_t ng_direction, struct np_pipebase * pipebase,
+    const uint8_t ng_direction, struct nn_pipebase * pipebase,
     int src, struct nn_fsm *owner)
 {
 
@@ -64,19 +67,25 @@ void nn_sofi_out_init (struct nn_sofi_out *self,
 /* Check if FSM is idle */
 int nn_sofi_out_isidle (struct nn_sofi_out *self)
 {
-
+    return nn_fsm_isidle (&self->fsm);
 }
 
 /*  Stop the state machine */
 void nn_sofi_out_stop (struct nn_sofi_out *self)
 {
-
+    nn_fsm_stop( &self->fsm );
 }
 
 /*  Cleanup the state machine */
 void nn_sofi_out_term (struct nn_sofi_out *self)
 {
 
+}
+
+/*  Start the state machine */
+void nn_sofi_out_start (struct nn_sofi_out *self)
+{
+    nn_fsm_start( &self->fsm );
 }
 
 /* ============================== */
@@ -112,13 +121,12 @@ static void nn_sofi_out_handler (struct nn_fsm *fsm, int src, int type,
 /******************************************************************************/
 /*  IDLE state.                                                               */
 /******************************************************************************/
-    case NN_SOFI_IN_STATE_IDLE:
+    case NN_SOFI_OUT_STATE_IDLE:
         switch (src) {
 
         case NN_FSM_ACTION:
             switch (type) {
             case NN_FSM_START:
-
 
 
                 return;

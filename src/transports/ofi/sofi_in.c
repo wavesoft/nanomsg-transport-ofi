@@ -21,6 +21,9 @@
 */
 
 #include "sofi_in.h"
+#include "../../utils/cont.h"
+#include "../../utils/err.h"
+#include "../../utils/fast.h"
 
 /* FSM States */
 #define NN_SOFI_IN_STATE_IDLE           2001
@@ -46,7 +49,7 @@ static void nn_sofi_in_shutdown (struct nn_fsm *self, int src, int type,
 /* ============================== */
 
 /* Post buffers */
-static int nn_sofi_in_post_buffers(struct nn_sofi_in *self)
+static void nn_sofi_in_post_buffers(struct nn_sofi_in *self)
 {
 
 }
@@ -58,7 +61,7 @@ static int nn_sofi_in_post_buffers(struct nn_sofi_in *self)
 /*  Initialize the state machine */
 void nn_sofi_in_init (struct nn_sofi_in *self, 
     struct ofi_resources *ofi, struct ofi_active_endpoint *ep,
-    const uint8_t ng_direction, struct np_pipebase * pipebase,
+    const uint8_t ng_direction, struct nn_pipebase * pipebase,
     int src, struct nn_fsm *owner)
 {
 
@@ -76,13 +79,13 @@ void nn_sofi_in_init (struct nn_sofi_in *self,
 /* Check if FSM is idle */
 int nn_sofi_in_isidle (struct nn_sofi_in *self)
 {
-
+    return nn_fsm_isidle (&self->fsm);
 }
 
 /*  Stop the state machine */
 void nn_sofi_in_stop (struct nn_sofi_in *self)
 {
-
+    nn_fsm_stop( &self->fsm );
 }
 
 /*  Cleanup the state machine */
@@ -91,21 +94,27 @@ void nn_sofi_in_term (struct nn_sofi_in *self)
 
 }
 
+/*  Start the state machine */
+void nn_sofi_in_start (struct nn_sofi_in *self)
+{
+    nn_fsm_start( &self->fsm );
+}
+
 /* ============================== */
 /*         INPUT EVENTS           */
 /* ============================== */
 
-/* Data needs to be sent */
-void nn_sofi_in_event__tx_data (struct nn_sofi_in *self, /* Data */)
-{
+// /* Data needs to be sent */
+// void nn_sofi_in_event__tx_data (struct nn_sofi_in *self, /* Data */)
+// {
 
-}
+// }
 
-/* Acknowledge transmission of data */
-void nn_sofi_in_event__tx_ack (struct nn_sofi_in *self)
-{
+// /* Acknowledge transmission of data */
+// void nn_sofi_in_event__tx_ack (struct nn_sofi_in *self)
+// {
 
-}
+// }
 
 /* ============================== */
 /*          FSM HANDLERS          */

@@ -62,10 +62,10 @@ struct nn_sofi_out {
 /* ============================== */
 
 /*  Initialize the state machine */
-void nn_sofi_out_init (struct nn_sofi_out *self, 
+void nn_sofi_out_init ( struct nn_sofi_out *self, 
     struct ofi_resources *ofi, struct ofi_active_endpoint *ep,
-    const uint8_t ng_direction, struct np_pipebase * pipebase,
-    int src, struct nn_fsm *owner);
+    const uint8_t ng_direction, struct nn_pipebase * pipebase,
+    int src, struct nn_fsm *owner );
 
 /* Check if FSM is idle */
 int nn_sofi_out_isidle (struct nn_sofi_out *self);
@@ -79,15 +79,15 @@ void nn_sofi_out_stop (struct nn_sofi_out *self);
 /*  Cleanup the state machine */
 void nn_sofi_out_term (struct nn_sofi_out *self);
 
-/* ============================== */
-/*         INPUT EVENTS           */
-/* ============================== */
+// /* ============================== */
+// /*         INPUT EVENTS           */
+// /* ============================== */
 
-/* There are data available for Rx */
-void nn_sofi_out_event__rx_data (struct nn_sofi_out *self, /* Data */);
+// /* There are data available for Rx */
+// void nn_sofi_out_event__rx_data (struct nn_sofi_out *self, /* Data */);
 
-/* There was an Rx Error */
-void nn_sofi_out_event__rx_error (struct nn_sofi_out *self, /* Error */);
+// /* There was an Rx Error */
+// void nn_sofi_out_event__rx_error (struct nn_sofi_out *self, /* Error */);
 
 
 #endif

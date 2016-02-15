@@ -34,11 +34,20 @@
 #include "../../utils/thread.h"
 // #include "../../utils/mutex.h"
 
-/* FSM Events */
+/* Outgoing FSM events towards FSM IN/OUT */
 #define NN_SOFI_EVENT_RX_EVENT          1201
 #define NN_SOFI_EVENT_RX_ERROR          1202
 #define NN_SOFI_EVENT_TX_EVENT          1203
 #define NN_SOFI_EVENT_TX_ERROR          1204
+
+/* Outgoing FSM events towards parent */
+#define NN_SOFI_STOPPED                 1210
+#define NN_SOFI_DISCONNECTED            1211
+
+/* Negotiation direction */
+#define NN_SOFI_NG_NONE                 0
+#define NN_SOFI_NG_SEND                 1
+#define NN_SOFI_NG_RECV                 2
 
 /* Shared, Connected OFI FSM */
 struct nn_sofi {
@@ -47,6 +56,7 @@ struct nn_sofi {
     struct nn_fsm               fsm;
     int                         state;
     int                         error;
+    uint8_t                     ng_direction;
 
     /* This member can be used by owner to keep individual sofis in a list. */
     struct nn_list_item         item;

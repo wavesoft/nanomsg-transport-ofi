@@ -26,7 +26,9 @@
 #include "ofi.h"
 #include "sofi.h"
 
+#include "../../utils/err.h"
 #include "../../utils/cont.h"
+#include "../../utils/fast.h"
 
 /* FSM States */
 #define NN_SOFI_STATE_IDLE               1001
@@ -40,14 +42,21 @@
 #define NN_SOFI_STATE_CLOSED             1009
 
 /* FSM Sources */
-#define NN_SOFI_SRC_IN_FSM              1101
-#define NN_SOFI_SRC_OUT_FSM             1102
-#define NN_SOFI_SRC_HANDSHAKE_TIMER     1103
-#define NN_SOFI_SRC_KEEPALIVE_TIMER     1104
+#define NN_SOFI_SRC_IN_FSM               1101
+#define NN_SOFI_SRC_OUT_FSM              1102
+#define NN_SOFI_SRC_HANDSHAKE_TIMER      1103
+#define NN_SOFI_SRC_KEEPALIVE_TIMER      1104
+
+/* SOFI Asynchronous tasks */
+#define NN_SOFI_TASK_RX                  1300
+#define NN_SOFI_TASK_TX                  1301
+#define NN_SOFI_TASK_ERROR               1302
+#define NN_SOFI_TASK_DISCONNECTED        1303
+#define NN_SOFI_TASK_DELAYED_DISCONNECT  1304
 
 /* Timeout values */
-#define NN_SOFI_TIMEOUT_HANDSHAKE       1000
-#define NN_SOFI_TIMEOUT_KEEPALIVE_TICK  1000
+#define NN_SOFI_TIMEOUT_HANDSHAKE        1000
+#define NN_SOFI_TIMEOUT_KEEPALIVE_TICK   1000
 
 /* Forward Declarations */
 static void nn_sofi_handler (struct nn_fsm *self, int src, int type, 
@@ -93,9 +102,10 @@ static void nn_sofi_handle_handshake( struct nn_sofi *self )
 /* ============================== */
 
 /*  Initialize the state machine */
-void nn_sofi_init (struct nn_sofi *self, 
-    struct ofi_resources *ofi, struct ofi_active_endpoint *ep,
-    const uint8_t ng_direction, int src, struct nn_fsm *owner)
+void nn_sofi_init ( struct nn_sofi *self, 
+    struct ofi_resources *ofi, struct ofi_active_endpoint *ep, 
+    const uint8_t ng_direction, struct nn_epbase *epbase, int src, 
+    struct nn_fsm *owner )
 {
 
     /* Keep references */
@@ -152,11 +162,11 @@ void nn_sofi_init (struct nn_sofi *self,
     /* ----------------------------------- */
 
     /* Initialize INPUT Sofi */
-    nn_sofi_in_init( &self->sofi_in, ofi, ep, direction, &self->pipebase,
+    nn_sofi_in_init( &self->sofi_in, ofi, ep, ng_direction, &self->pipebase,
         NN_SOFI_SRC_IN_FSM, &self->fsm );
 
     /* Initialize OUTPUT Sofi */
-    nn_sofi_out_init( &self->sofi_out, ofi, ep, direction, &self->pipebase,
+    nn_sofi_out_init( &self->sofi_out, ofi, ep, ng_direction, &self->pipebase,
         NN_SOFI_SRC_OUT_FSM, &self->fsm );
 
     /* ----------------------------------- */
@@ -270,12 +280,10 @@ void nn_sofi_term (struct nn_sofi *self)
     /* ----------------------------------- */
 
     /* Cleanup worker tasks */
-    nn_worker_cancel (self->worker, &self->task_delayed_disconnect);
     nn_worker_cancel (self->worker, &self->task_disconnected);
     nn_worker_cancel (self->worker, &self->task_error);
     nn_worker_cancel (self->worker, &self->task_tx);
     nn_worker_cancel (self->worker, &self->task_rx);
-    nn_worker_task_term (&self->task_delayed_disconnect);
     nn_worker_task_term (&self->task_disconnected);
     nn_worker_task_term (&self->task_error);
     nn_worker_task_term (&self->task_tx);
@@ -314,7 +322,7 @@ static void nn_sofi_poller_thread (void *arg)
 
     /* Keep thread alive while  */
     _ofi_debug("OFI[S]: Starting poller thread\n");
-    while ( self->state == NN_SOFI_STATE_CONNECTED ) {
+    while ( self->state == NN_SOFI_STATE_RUNNING ) {
 
         /* ========================================= */
         /* Wait for Rx CQ event */
@@ -766,7 +774,7 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
 
                 /* Notify socket base that data are sent */
                 _ofi_debug("OFI[S]: Data are sent\n");
-                nn_pipebase_sent(&sofi->pipebase);
+                nn_pipebase_sent(&self->pipebase);
 
                 return;
 

@@ -28,12 +28,22 @@
 
 /* FSM States */
 #define NN_SOFI_OUT_STATE_IDLE          3001
+#define NN_SOFI_OUT_STATE_READY         3002
+#define NN_SOFI_OUT_STATE_POSTED        3003
+#define NN_SOFI_OUT_STATE_ERROR         3004
+#define NN_SOFI_OUT_STATE_CLOSED        3005
+#define NN_SOFI_OUT_STATE_ABORTING      3006
+#define NN_SOFI_OUT_STATE_ABORT_CLEANUP 3007
+#define NN_SOFI_OUT_STATE_ABORT_TIMEOUT 3008
 
 /* FSM Sources */
 #define NN_SOFI_OUT_SRC_TIMER           3101
-#define NN_SOFI_IN_SRC_TASK_TX          3102
-#define NN_SOFI_IN_SRC_TASK_TX_ACK      3104
-#define NN_SOFI_IN_SRC_TASK_TX_ERROR    3103
+#define NN_SOFI_OUT_SRC_TASK_TX         3102
+#define NN_SOFI_OUT_SRC_TASK_TX_ERROR   3103
+#define NN_SOFI_OUT_SRC_TASK_TX_SEND    3104
+
+/* Timeout values */
+#define NN_SOFI_OUT_TIMEOUT_ABORT       1000
 
 /* Forward Declarations */
 static void nn_sofi_out_handler (struct nn_fsm *self, int src, int type, 
@@ -61,8 +71,6 @@ void nn_sofi_out_init (struct nn_sofi_out *self,
     /* Initialize events */
     nn_fsm_event_init (&self->event_started);
     nn_fsm_event_init (&self->event_sent);
-    nn_fsm_event_init (&self->event_error);
-    nn_fsm_event_init (&self->event_close);
 
     /* Initialize FSM */
     nn_fsm_init (&self->fsm, nn_sofi_out_handler, nn_sofi_out_shutdown,
@@ -72,11 +80,15 @@ void nn_sofi_out_init (struct nn_sofi_out *self,
     self->worker = nn_fsm_choose_worker (&self->fsm);
 
     /* Initialize worker tasks */
-    nn_worker_task_init (&self->task_tx, NN_SOFI_IN_SRC_TASK_TX,
+    nn_worker_task_init (&self->task_tx_send, NN_SOFI_OUT_SRC_TASK_TX_SEND,
         &self->fsm);
-    nn_worker_task_init (&self->task_tx_ack, NN_SOFI_IN_SRC_TASK_TX_ACK,
+    nn_worker_task_init (&self->task_tx, NN_SOFI_OUT_SRC_TASK_TX,
         &self->fsm);
-    nn_worker_task_init (&self->task_tx_error, NN_SOFI_IN_SRC_TASK_TX_ERROR,
+    nn_worker_task_init (&self->task_tx_error, NN_SOFI_OUT_SRC_TASK_TX_ERROR,
+        &self->fsm);
+
+    /* Initialize timer */
+    nn_timer_init(&self->timer_abort, NN_SOFI_OUT_SRC_TIMER, 
         &self->fsm);
 
     /* Reset properties */
@@ -91,30 +103,24 @@ int nn_sofi_out_isidle (struct nn_sofi_out *self)
     return nn_fsm_isidle (&self->fsm);
 }
 
-/*  Stop the state machine */
-void nn_sofi_out_stop (struct nn_sofi_out *self)
-{
-    _ofi_debug("OFI[o]: Stopping Output FSM\n");
-    nn_fsm_stop( &self->fsm );
-}
-
 /*  Cleanup the state machine */
 void nn_sofi_out_term (struct nn_sofi_out *self)
 {
     _ofi_debug("OFI[o]: Terminating Output FSM\n");
 
+    /* Abort timer */
+    nn_timer_term (&self->timer_abort);
+
     /* Cleanup events */
     nn_fsm_event_term (&self->event_started);
     nn_fsm_event_term (&self->event_sent);
-    nn_fsm_event_term (&self->event_error);
-    nn_fsm_event_term (&self->event_close);
 
     /* Cleanup worker tasks */
     nn_worker_cancel (self->worker, &self->task_tx_error);
-    nn_worker_cancel (self->worker, &self->task_tx_ack);
+    nn_worker_cancel (self->worker, &self->task_tx_send);
     nn_worker_cancel (self->worker, &self->task_tx);
     nn_worker_task_term (&self->task_tx_error);
-    nn_worker_task_term (&self->task_tx_ack);
+    nn_worker_task_term (&self->task_tx_send);
     nn_worker_task_term (&self->task_tx);
 
     /* Terminate fsm */
@@ -127,6 +133,53 @@ void nn_sofi_out_start (struct nn_sofi_out *self)
 {
     _ofi_debug("OFI[o]: Starting Output FSM\n");
     nn_fsm_start( &self->fsm );
+}
+
+/*  Stop the state machine */
+void nn_sofi_out_stop (struct nn_sofi_out *self)
+{
+    _ofi_debug("OFI[o]: Stopping Input FSM\n");
+
+    /* Handle stop according to state */
+    switch (self->state) {
+
+        /* This cases are safe to stop right away */
+        case NN_SOFI_OUT_STATE_IDLE:
+        case NN_SOFI_OUT_STATE_READY:
+
+            /* These are safe to become 'closed' */
+            _ofi_debug("OFI[o]: Switching state=%i to closed\n", self->state);
+            self->state = NN_SOFI_OUT_STATE_CLOSED;
+
+        case NN_SOFI_OUT_STATE_CLOSED:
+        case NN_SOFI_OUT_STATE_ERROR:
+
+            /* We are safe to stop right away */
+            _ofi_debug("OFI[o]: Stopping right away\n");
+            nn_fsm_stop( &self->fsm );
+            break;
+
+        /* Pending state switches to abording */
+        case NN_SOFI_OUT_STATE_POSTED:
+
+            /* Start timeout and start abording */
+            _ofi_debug("OFI[o]: Switching to ABORTING state\n");
+            self->state = NN_SOFI_OUT_STATE_ABORTING;
+            nn_timer_start (&self->timer_abort, NN_SOFI_OUT_TIMEOUT_ABORT);
+            break;
+
+        /* Critical states, don't do anything here, we'll stop in the end */
+        case NN_SOFI_OUT_STATE_ABORTING:
+        case NN_SOFI_OUT_STATE_ABORT_TIMEOUT:
+        case NN_SOFI_OUT_STATE_ABORT_CLEANUP:
+            _ofi_debug("OFI[o]: Ignoring STOP command\n");
+            break;
+
+    };
+
+
+    _ofi_debug("OFI[o]: Stopping Output FSM\n");
+    nn_fsm_stop( &self->fsm );
 }
 
 /* ============================== */
@@ -152,12 +205,12 @@ void nn_sofi_out_tx_error_event( struct nn_sofi_out *self, int err_number )
 }
 
 /**
- * Acknowledge a tx event
+ * Trigger the transmission of a packet
  */
-void nn_sofi_out_tx_event_ack( struct nn_sofi_out *self )
+void nn_sofi_out_tx_event_send( struct nn_sofi_out *self )
 {
     /* Trigger worker task */
-    nn_worker_execute (self->worker, &self->task_tx_ack);
+    nn_worker_execute (self->worker, &self->task_tx_send);
 }
 
 /* ============================== */
@@ -173,6 +226,29 @@ static void nn_sofi_out_shutdown (struct nn_fsm *fsm, int src, int type,
     /* Get pointer to sofi structure */
     struct nn_sofi_out *self;
     self = nn_cont (fsm, struct nn_sofi_out, fsm);
+
+    /* If this is part of the FSM action, start shutdown */
+    if (nn_slow (src == NN_FSM_ACTION && type == NN_FSM_STOP)) {
+
+        /* Stop FSM, triggering a final event according to state */
+        if (self->state == NN_SOFI_OUT_STATE_CLOSED) {
+            _ofi_debug("OFI[o]: Stopping FSM with CLOSE event\n");
+            nn_fsm_stopped(&self->fsm, NN_SOFI_OUT_EVENT_CLOSE);
+
+        } else if (self->state == NN_SOFI_OUT_STATE_ERROR) {
+            _ofi_debug("OFI[o]: Stopping FSM with ERROR event\n");
+            nn_fsm_stopped(&self->fsm, NN_SOFI_OUT_EVENT_ERROR);
+
+        } else {
+            nn_fsm_bad_state (self->state, src, type);    
+        }
+
+        return;
+
+    }
+
+    /* Invalid state */
+    nn_fsm_bad_state (self->state, src, type);
 
 }
 
@@ -196,10 +272,17 @@ static void nn_sofi_out_handler (struct nn_fsm *fsm, int src, int type,
     case NN_SOFI_OUT_STATE_IDLE:
         switch (src) {
 
+        /* ========================= */
+        /*  FSM Action               */
+        /* ========================= */
         case NN_FSM_ACTION:
             switch (type) {
             case NN_FSM_START:
 
+                /* That's the first acknowledement event */
+                self->state = NN_SOFI_OUT_STATE_READY;
+                nn_fsm_raise(&self->fsm, &self->event_started, 
+                    NN_SOFI_OUT_EVENT_STARTED);
 
                 return;
 
@@ -210,6 +293,133 @@ static void nn_sofi_out_handler (struct nn_fsm *fsm, int src, int type,
         default:
             nn_fsm_bad_source (self->state, src, type);
         }
+
+/******************************************************************************/
+/*  READY state.                                                              */
+/*  We are ready to send data to the remote endpoint.                         */
+/******************************************************************************/
+    case NN_SOFI_OUT_STATE_READY:
+        switch (src) {
+
+        /* ========================= */
+        /*  TASK: Send Data          */
+        /* ========================= */
+        case NN_SOFI_OUT_SRC_TASK_TX_SEND:
+            switch (type) {
+            case NN_WORKER_TASK_EXECUTE:
+
+                /* We have posted the buffers */
+                self->state = NN_SOFI_OUT_STATE_POSTED;
+
+                return;
+
+            default:
+                nn_fsm_bad_action (self->state, src, type);
+            }
+
+        default:
+            nn_fsm_bad_source (self->state, src, type);
+        }
+
+/******************************************************************************/
+/*  POSTED state.                                                             */
+/*  Data are posted to the NIC, we are waiting for a send acknowledgement     */
+/*  or for a send error.                                                      */
+/******************************************************************************/
+    case NN_SOFI_OUT_STATE_POSTED:
+        switch (src) {
+
+        /* ========================= */
+        /*  TASK: Send Completed     */
+        /* ========================= */
+        case NN_SOFI_OUT_SRC_TASK_TX:
+            switch (type) {
+            case NN_WORKER_TASK_EXECUTE:
+
+                /* The posted buffers are sent */
+                self->state = NN_SOFI_OUT_STATE_READY;
+
+                /* Notify that data are sent */
+                _ofi_debug("OFI[o]: Acknowledged sent event\n");
+                nn_fsm_raise(&self->fsm, &self->event_sent, 
+                    NN_SOFI_OUT_EVENT_SENT);
+
+                return;
+
+            default:
+                nn_fsm_bad_action (self->state, src, type);
+            }
+
+        /* ========================= */
+        /*  TASK: Send Error         */
+        /* ========================= */
+        case NN_SOFI_OUT_SRC_TASK_TX_ERROR:
+            switch (type) {
+            case NN_WORKER_TASK_EXECUTE:
+
+                /* There was an acknowledgement error */
+                _ofi_debug("OFI[o]: Error acknowledging the send event\n");
+                self->state = NN_SOFI_OUT_STATE_ERROR;
+                nn_sofi_out_stop( self );
+
+                return;
+
+            default:
+                nn_fsm_bad_action (self->state, src, type);
+            }
+
+        default:
+            nn_fsm_bad_source (self->state, src, type);
+        }
+
+/******************************************************************************/
+/*  ABORTING state.                                                           */
+/*  There was a pending acknowledgement but we were requested to abort, so    */
+/*  wait for ack or error (or timeout) events.                                */
+/******************************************************************************/
+    case NN_SOFI_OUT_STATE_ABORTING:
+        switch (src) {
+
+        /* ========================= */
+        /*  TASK: Send Acknowledged  */
+        /* ========================= */
+        case NN_SOFI_OUT_SRC_TASK_TX:
+            switch (type) {
+            case NN_WORKER_TASK_EXECUTE:
+
+                /* We got acknowledgement, continue with abort cleanup */
+                _ofi_debug("OFI[o]: Acknowledged sent event\n");
+                self->state = NN_SOFI_OUT_STATE_ABORT_CLEANUP;
+                nn_timer_stop (&self->timer_abort);
+
+                return;
+
+            default:
+                nn_fsm_bad_action (self->state, src, type);
+            }
+
+        /* ========================= */
+        /*  TASK: Send Error         */
+        /* ========================= */
+        case NN_SOFI_OUT_SRC_TASK_TX_ERROR:
+            switch (type) {
+            case NN_WORKER_TASK_EXECUTE:
+
+                /* We got acknowledgement, continue with abort cleanup */
+                _ofi_debug("OFI[o]: Acknowledged sent event\n");
+                self->state = NN_SOFI_OUT_STATE_ABORT_CLEANUP;
+                nn_timer_stop (&self->timer_abort);
+
+                return;
+
+            default:
+                nn_fsm_bad_action (self->state, src, type);
+            }
+
+        default:
+            nn_fsm_bad_source (self->state, src, type);
+        }
+
 
 /******************************************************************************/
 /*  Invalid state.                                                            */

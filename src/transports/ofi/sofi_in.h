@@ -24,7 +24,6 @@
 #define NN_SOFI_IN_INCLUDED
 
 #include "hlapi.h"
-#include "ofi.h"
 
 #include "../../transport.h"
 #include "../../aio/fsm.h"
@@ -36,6 +35,36 @@
 #define NN_SOFI_IN_EVENT_ERROR          2203
 #define NN_SOFI_IN_EVENT_CLOSE          2204
 
+/**
+ * The [INPUT SOFI] FSM is used like this:
+ *
+ * - Initialize it using `nn_sofi_in_init`
+ *
+ * - Start it using `nn_sofi_in_start`
+ *   + The FSM Will raise `NN_SOFI_IN_EVENT_STARTED` when ready
+ *
+ * - Wait for CQ Events and call:
+ *   + `nn_sofi_in_rx_event` when an Rx CQ event is completed
+ *   + `nn_sofi_in_rx_error_event` when an Rx CQ error event occurs
+ *
+ * - The FSM will process the buffers, populate the `inmsg` property and
+ *   + Will raise `NN_SOFI_IN_EVENT_RECEIVED` when a message is ready
+ *
+ * - When the buffer is processed you *MUST* call:
+ *   + `nn_sofi_in_rx_error_ack` 
+ *
+ * - You can force a shutdown by calling `nn_sofi_in_stop` function.
+ *   The FSM will take care of cleanly shutting down everything and will
+ *   raise either `NN_SOFI_IN_EVENT_ERROR` or `NN_SOFI_IN_EVENT_CLOSE`
+ *
+ * - If at any time the connection is cleanly closed, the FSM will raise
+ *   the event `NN_SOFI_IN_EVENT_CLOSE` 
+ *
+ * - If at any time an error occurs, the FSM will raise the event
+ *   `NN_SOFI_IN_EVENT_ERROR`, setting the `error` property accordingly.
+ *
+ */
+
 /* Shared, Connected OFI FSM */
 struct nn_sofi_in {
 
@@ -43,6 +72,9 @@ struct nn_sofi_in {
     struct nn_fsm               fsm;
     int                         state;
     int                         error;
+
+    /* The received message */
+    struct nn_msg               inmsg;
 
     /* References */
     struct nn_pipebase          * pipebase;
@@ -52,8 +84,6 @@ struct nn_sofi_in {
     /* Outgoing : Events */
     struct nn_fsm_event         event_started;
     struct nn_fsm_event         event_received;
-    struct nn_fsm_event         event_error;
-    struct nn_fsm_event         event_close;
 
     /* Incoming : Events through worker tasks */
     struct nn_worker            * worker;

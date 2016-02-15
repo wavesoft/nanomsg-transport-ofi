@@ -85,8 +85,6 @@ void nn_sofi_in_init (struct nn_sofi_in *self,
     /* Initialize events */
     nn_fsm_event_init (&self->event_started);
     nn_fsm_event_init (&self->event_received);
-    nn_fsm_event_init (&self->event_error);
-    nn_fsm_event_init (&self->event_close);
 
     /* Initialize FSM */
     nn_fsm_init (&self->fsm, nn_sofi_in_handler, nn_sofi_in_shutdown,
@@ -134,8 +132,6 @@ void nn_sofi_in_term (struct nn_sofi_in *self)
     /* Cleanup events */
     nn_fsm_event_term (&self->event_started);
     nn_fsm_event_term (&self->event_received);
-    nn_fsm_event_term (&self->event_error);
-    nn_fsm_event_term (&self->event_close);
 
     /* Cleanup worker tasks */
     nn_worker_cancel (self->worker, &self->task_rx_error);
@@ -155,7 +151,7 @@ void nn_sofi_in_term (struct nn_sofi_in *self)
  */
 void nn_sofi_in_start (struct nn_sofi_in *self)
 {
-    _ofi_debug("OFI[i]: Stargin Input FSM\n");
+    _ofi_debug("OFI[i]: Starting Input FSM\n");
     nn_fsm_start( &self->fsm );
 }
 
@@ -172,12 +168,16 @@ void nn_sofi_in_stop (struct nn_sofi_in *self)
         /* This cases are safe to stop right away */
         case NN_SOFI_IN_STATE_IDLE:
         case NN_SOFI_IN_STATE_POSTED:
+
+            /* These are safe to become 'closed' */
+            _ofi_debug("OFI[i]: Switching state=%i to closed\n", self->state);
+            self->state = NN_SOFI_IN_STATE_CLOSED;
+
         case NN_SOFI_IN_STATE_CLOSED:
         case NN_SOFI_IN_STATE_ERROR:
 
             /* We are safe to stop right away */
             _ofi_debug("OFI[i]: Stopping right away\n");
-            self->state = NN_SOFI_IN_STATE_CLOSED;
             nn_fsm_stop( &self->fsm );
             break;
 
@@ -299,19 +299,22 @@ static void nn_sofi_in_handler (struct nn_fsm *fsm, int src, int type,
             case NN_FSM_START:
 
                 /* Post buffers */
-                if (nn_sofi_in_post_buffers( self )) {
+                if (!nn_sofi_in_post_buffers( self )) {
 
                     /* When successful switch to POSTED state */
                     _ofi_debug("OFI[i]: Input buffers posted\n");
                     self->state = NN_SOFI_IN_STATE_POSTED;
+
+                    /* That's the first acknowledement event */
+                    nn_fsm_raise(&self->fsm, &self->event_started, 
+                        NN_SOFI_IN_EVENT_STARTED);
 
                 } else {
 
                     /* When unsuccessful, raise ERROR event */
                     _ofi_debug("OFI[i]: Error trying to post input buffers\n");
                     self->state = NN_SOFI_IN_STATE_ERROR;
-                    nn_fsm_raise(&self->fsm, &self->event_error, 
-                        NN_SOFI_IN_EVENT_ERROR);
+                    nn_sofi_in_stop( self );
 
                 }
 
@@ -368,8 +371,7 @@ static void nn_sofi_in_handler (struct nn_fsm *fsm, int src, int type,
                 /* Trigger error event */
                 _ofi_debug("OFI[i]: Error Rx event\n");
                 self->state = NN_SOFI_IN_STATE_ERROR;
-                nn_fsm_raise(&self->fsm, &self->event_error, 
-                    NN_SOFI_IN_EVENT_ERROR);
+                nn_sofi_in_stop( self );
                 return;
 
             default:
@@ -397,7 +399,7 @@ static void nn_sofi_in_handler (struct nn_fsm *fsm, int src, int type,
 
                 /* Post buffers */
                 _ofi_debug("OFI[i]: Acknowledged receive event\n");
-                if (nn_sofi_in_post_buffers( self )) {
+                if (!nn_sofi_in_post_buffers( self )) {
 
                     /* When successful switch to POSTED state */
                     _ofi_debug("OFI[i]: Input buffers posted\n");
@@ -408,8 +410,7 @@ static void nn_sofi_in_handler (struct nn_fsm *fsm, int src, int type,
                     /* When unsuccessful, raise ERROR event */
                     _ofi_debug("OFI[i]: Error trying to post input buffers\n");
                     self->state = NN_SOFI_IN_STATE_ERROR;
-                    nn_fsm_raise(&self->fsm, &self->event_error, 
-                        NN_SOFI_IN_EVENT_ERROR);
+                    nn_sofi_in_stop( self );
 
                 }
                 return;
@@ -489,7 +490,7 @@ static void nn_sofi_in_handler (struct nn_fsm *fsm, int src, int type,
                 /* Timer stopped, but there was an error */
                 _ofi_debug("OFI[i]: Timeout timer stopped, going for error\n");
                 self->state = NN_SOFI_IN_STATE_ERROR;
-                nn_fsm_stop( &self->fsm );
+                nn_sofi_in_stop( self );
 
                 return;
 
@@ -519,7 +520,7 @@ static void nn_sofi_in_handler (struct nn_fsm *fsm, int src, int type,
                 /* Timer stopped, and we are good */
                 _ofi_debug("OFI[i]: Timeout timer stopped, closed\n");
                 self->state = NN_SOFI_IN_STATE_CLOSED;
-                nn_fsm_stop( &self->fsm );
+                nn_sofi_in_stop( self );
 
                 return;
 

@@ -35,6 +35,34 @@
 #define NN_SOFI_OUT_EVENT_ERROR         3203
 #define NN_SOFI_OUT_EVENT_CLOSE         3204
 
+/**
+ * The [OUTPUT SOFI] FSM is used like this:
+ *
+ * - Initialize it using `nn_sofi_out_init`
+ *
+ * - Start it using `nn_sofi_out_start`
+ *   + The FSM Will raise `NN_SOFI_OUT_EVENT_STARTED` when ready
+ *
+ * - Wait for CQ Events and call:
+ *   + `nn_sofi_out_rx_event` when a Tx CQ event is completed
+ *   + `nn_sofi_out_rx_error_event` when a Tx CQ error event occurs
+ *
+ * - When you want to send some data you should populate the `outmsg`
+ *   property and then call `nn_sofi_out_tx_event_send`.
+ *   + The FSM will rause `NN_SOFI_OUT_EVENT_SENT` when you can reuse your buffer 
+ *
+ * - You can force a shutdown by calling `nn_sofi_out_stop` function.
+ *   The FSM will take care of cleanly shutting down everything and will
+ *   raise either `NN_SOFI_OUT_EVENT_ERROR` or `NN_SOFI_OUT_EVENT_CLOSE`
+ *
+ * - If at any time the connection is cleanly closed, the FSM will raise
+ *   the event `NN_SOFI_OUT_EVENT_CLOSE`.
+ *
+ * - If at any time an error occurs, the FSM will raise the event
+ *   `NN_SOFI_OUT_EVENT_ERROR`, setting the `error` property accordingly.
+ *
+ */
+
 /* Shared, Connected OFI FSM */
 struct nn_sofi_out {
 
@@ -42,6 +70,9 @@ struct nn_sofi_out {
     struct nn_fsm               fsm;
     int                         state;
     int                         error;
+
+    /* The outgoing message */
+    struct nn_msg               outmsg;
 
     /* References */
     struct nn_pipebase          * pipebase;
@@ -51,17 +82,15 @@ struct nn_sofi_out {
     /* Outgoing : Events */
     struct nn_fsm_event         event_started;
     struct nn_fsm_event         event_sent;
-    struct nn_fsm_event         event_error;
-    struct nn_fsm_event         event_close;
 
     /* Incoming : Events through worker tasks */
     struct nn_worker            * worker;
     struct nn_worker_task       task_tx;
     struct nn_worker_task       task_tx_error;
-    struct nn_worker_task       task_tx_ack;
+    struct nn_worker_task       task_tx_send;
 
     /* Abort cleanup timeout */
-    struct nn_timer             abort_timer;
+    struct nn_timer             timer_abort;
 
 };
 
@@ -91,13 +120,13 @@ void nn_sofi_out_term (struct nn_sofi_out *self);
 /*        EXTERNAL EVENTS         */
 /* ============================== */
 
+/* Trigger the transmission of a packet */
+void nn_sofi_out_tx_event_send( struct nn_sofi_out *self );
+
 /* Trigger an rx event */
 void nn_sofi_out_tx_event( struct nn_sofi_out *self );
 
 /* Trigger an rx erro event */
 void nn_sofi_out_tx_error_event( struct nn_sofi_out *self, int err_number );
-
-/* Acknowledge a tx event */
-void nn_sofi_out_tx_event_ack( struct nn_sofi_out *self );
 
 #endif

@@ -433,6 +433,9 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
     case NN_SOFI_STATE_IDLE:
         switch (src) {
 
+        /* ========================= */
+        /*  FSM Action               */
+        /* ========================= */
         case NN_FSM_ACTION:
             switch (type) {
             case NN_FSM_START:
@@ -460,6 +463,9 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
     case NN_SOFI_STATE_INIT_IN:
         switch (src) {
 
+        /* ========================= */
+        /*  INPUT FSM Events         */
+        /* ========================= */
         case NN_SOFI_SRC_IN_FSM:
             switch (type) {
             case NN_SOFI_IN_EVENT_STARTED:
@@ -496,6 +502,9 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
     case NN_SOFI_STATE_INIT_OUT:
         switch (src) {
 
+        /* ========================= */
+        /*  OUTPUT FSM Events        */
+        /* ========================= */
         case NN_SOFI_SRC_OUT_FSM:
             switch (type) {
             case NN_SOFI_OUT_EVENT_STARTED:
@@ -538,6 +547,9 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
     case NN_SOFI_STATE_HANDSHAKE_HALF:
         switch (src) {
 
+        /* ========================= */
+        /*  OUTPUT FSM Events        */
+        /* ========================= */
         case NN_SOFI_SRC_OUT_FSM:
             switch (type) {
             case NN_SOFI_OUT_EVENT_SENT:
@@ -562,6 +574,9 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
                 nn_fsm_bad_action (self->state, src, type);
             }
 
+        /* ========================= */
+        /*  INPUT FSM Events         */
+        /* ========================= */
         case NN_SOFI_SRC_IN_FSM:
             switch (type) {
             case NN_SOFI_IN_EVENT_RECEIVED:
@@ -590,6 +605,9 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
                 nn_fsm_bad_action (self->state, src, type);
             }
 
+        /* ========================= */
+        /*  Handshake Timeout Timer  */
+        /* ========================= */
         case NN_SOFI_SRC_HANDSHAKE_TIMER:
             switch (type) {
             case NN_TIMER_TIMEOUT:
@@ -615,6 +633,9 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
     case NN_SOFI_STATE_HANDSHAKE_FULL:
         switch (src) {
 
+        /* ========================= */
+        /*  OUTPUT FSM Events        */
+        /* ========================= */
         case NN_SOFI_SRC_OUT_FSM:
             switch (type) {
             case NN_SOFI_OUT_EVENT_SENT:
@@ -641,6 +662,9 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
                 nn_fsm_bad_action (self->state, src, type);
             }
 
+        /* ========================= */
+        /*  INPUT FSM Event          */
+        /* ========================= */
         case NN_SOFI_SRC_IN_FSM:
             switch (type) {
             case NN_SOFI_IN_EVENT_RECEIVED:
@@ -670,6 +694,9 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
                 nn_fsm_bad_action (self->state, src, type);
             }
 
+        /* ========================= */
+        /*  Handshake Timeout Timer  */
+        /* ========================= */
         case NN_SOFI_SRC_HANDSHAKE_TIMER:
             switch (type) {
             case NN_TIMER_TIMEOUT:
@@ -694,6 +721,9 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
     case NN_SOFI_STATE_HANDSHAKE_COMPLETE:
         switch (src) {
 
+        /* ========================= */
+        /*  Handshake Timeout Timer  */
+        /* ========================= */
         case NN_SOFI_SRC_HANDSHAKE_TIMER:
             switch (type) {
             case NN_TIMER_STOPPED:
@@ -727,14 +757,16 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
     case NN_SOFI_STATE_RUNNING:
         switch (src) {
 
+        /* ========================= */
+        /*  OUTPUT FSM Events        */
+        /* ========================= */
         case NN_SOFI_SRC_OUT_FSM:
             switch (type) {
             case NN_SOFI_OUT_EVENT_SENT:
 
                 /* Notify socket base that data are sent */
                 _ofi_debug("OFI[S]: Data are sent\n");
-
-                /* TODO: Handle */
+                nn_pipebase_sent(&sofi->pipebase);
 
                 return;
 
@@ -749,14 +781,16 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
                 nn_fsm_bad_action (self->state, src, type);
             }
 
+        /* ========================= */
+        /*  INPUT FSM Events         */
+        /* ========================= */
         case NN_SOFI_SRC_IN_FSM:
             switch (type) {
             case NN_SOFI_IN_EVENT_RECEIVED:
 
                 /* Notify socket base that data are available */
                 _ofi_debug("OFI[S]: Data are available\n");
-
-                /* TODO: Handle */
+                nn_pipebase_received (&self->pipebase);
 
                 return;
 
@@ -772,6 +806,9 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
             }
 
 
+        /* ========================= */
+        /*  Keepalive Ticks Timer    */
+        /* ========================= */
         case NN_SOFI_SRC_KEEPALIVE_TIMER:
             switch (type) {
             case NN_TIMER_TIMEOUT:
@@ -786,6 +823,7 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
             case NN_TIMER_STOPPED:
 
                 /* Restart Keepalive timer */
+                _ofi_debug("OFI[S]: Keepalive stopped, restarting\n");
                 nn_timer_start( &self->keepalive_timer, 
                     NN_SOFI_TIMEOUT_KEEPALIVE_TICK );
                 return;

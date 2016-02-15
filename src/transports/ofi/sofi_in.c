@@ -58,8 +58,10 @@ static int nn_sofi_in_post_buffers(struct nn_sofi_in *self)
 /*  Initialize the state machine */
 void nn_sofi_in_init (struct nn_sofi_in *self, 
     struct ofi_resources *ofi, struct ofi_active_endpoint *ep,
-    const uint8_t ng_direction, int src, struct nn_fsm *owner)
+    const uint8_t ng_direction, struct np_pipebase * pipebase,
+    int src, struct nn_fsm *owner)
 {
+
 
     /* Initialize FSM */
     nn_fsm_init (&self->fsm, nn_sofi_in_handler, nn_sofi_in_shutdown,

@@ -29,20 +29,31 @@
 #include "../../aio/fsm.h"
 #include "../../aio/timer.h"
 
+/* FSM Events */
+#define NN_SOFI_IN_EVENT_STARTED        2201
+#define NN_SOFI_IN_EVENT_RECEIVED       2202
+#define NN_SOFI_IN_EVENT_ERROR          2203
+#define NN_SOFI_IN_EVENT_CLOSE          2204
+
 /* Shared, Connected OFI FSM */
 struct nn_sofi_in {
 
     /* The state machine. */
-    struct nn_fsm       fsm;
-    int                 state;
-    int                 error;
+    struct nn_fsm               fsm;
+    int                         state;
+    int                         error;
+
+    /* References */
+    struct nn_pipebase          * pipebase;
+    struct ofi_resources        * ofi;
+    struct ofi_active_endpoint  * ep;
 
     /* The FSM events */
-    struct nn_fsm_event error_event;
-    struct nn_fsm_event close_event;
+    struct nn_fsm_event         error_event;
+    struct nn_fsm_event         close_event;
 
     /* Abort cleanup timeout */
-    struct nn_timer     abort_timer;
+    struct nn_timer             abort_timer;
 
 };
 
@@ -53,10 +64,14 @@ struct nn_sofi_in {
 /*  Initialize the state machine */
 void nn_sofi_in_init (struct nn_sofi_in *self, 
     struct ofi_resources *ofi, struct ofi_active_endpoint *ep,
-    const uint8_t ng_direction, int src, struct nn_fsm *owner);
+    const uint8_t ng_direction, struct np_pipebase * pipebase,
+    int src, struct nn_fsm *owner);
 
 /* Check if FSM is idle */
 int nn_sofi_in_isidle (struct nn_sofi_in *self);
+
+/*  Start the state machine */
+void nn_sofi_in_start (struct nn_sofi_in *self);
 
 /*  Stop the state machine */
 void nn_sofi_in_stop (struct nn_sofi_in *self);

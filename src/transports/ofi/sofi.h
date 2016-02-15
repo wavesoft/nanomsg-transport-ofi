@@ -24,6 +24,8 @@
 #define NN_SOFI_INCLUDED
 
 #include "hlapi.h"
+#include "sofi_in.h"
+#include "sofi_out.h"
 
 #include "../../transport.h"
 #include "../../aio/fsm.h"
@@ -31,6 +33,12 @@
 #include "../../aio/worker.h"
 #include "../../utils/thread.h"
 // #include "../../utils/mutex.h"
+
+/* FSM Events */
+#define NN_SOFI_EVENT_RX_EVENT          1201
+#define NN_SOFI_EVENT_RX_ERROR          1202
+#define NN_SOFI_EVENT_TX_EVENT          1203
+#define NN_SOFI_EVENT_TX_ERROR          1204
 
 /* Shared, Connected OFI FSM */
 struct nn_sofi {
@@ -40,8 +48,11 @@ struct nn_sofi {
     int                         state;
     int                         error;
 
+    /* This member can be used by owner to keep individual sofis in a list. */
+    struct nn_list_item         item;
+
     /* Asynchronous communication with the worker thread */
-    struct nn_worker            *worker;
+    struct nn_worker            * worker;
     struct nn_worker_task       task_rx;
     struct nn_worker_task       task_tx;
     struct nn_worker_task       task_error;
@@ -53,6 +64,14 @@ struct nn_sofi {
     /* The high-level api structures */
     struct ofi_resources        * ofi;
     struct ofi_active_endpoint  * ep;
+
+    /* Sub-components */
+    struct nn_sofi_in           sofi_in;
+    struct nn_sofi_out          sofi_out;
+
+    /* Handshake timeout timer */
+    struct nn_timer             handshake_timer;
+    struct nn_timer             keepalive_timer;
 
 };
 

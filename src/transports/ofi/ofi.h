@@ -28,13 +28,27 @@
 #include "../../transport.h"
 #endif
 
+/* Uncomment the following to force verose messages for debugging */
+#define OFI_DEBUG_LOG
+
+/* Helper macro to enable or disable verbose logs on console */
+#ifdef OFI_DEBUG_LOG
+    #include <pthread.h>
+    /* Enable debug */
+    // #define _ofi_debug(...)   printf("[%012i] ", (int)pthread_self()); printf(__VA_ARGS__);
+    #define _ofi_debug(...)     printf(__VA_ARGS__)
+#else
+    /* Disable debug */
+    #define _ofi_debug(...)
+#endif
+
 /* Default slab memory size (I/O operations with this size
  * or less will be memcpy'ied to the share memory slab). Above this,
  * they will be tagged as shared and sent as-is. */
 #define NN_OFI_DEFAULT_SLABMR_SIZE 65536
 
-/* Uncomment the following to enable verose messages for debugging */
-#define OFI_DEBUG_LOG
+/* SOFI Source */
+#define NN_OFI_SRC_SOFI     1000
 
 extern struct nn_transport *nn_ofi;
 

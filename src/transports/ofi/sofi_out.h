@@ -20,54 +20,59 @@
     IN THE SOFTWARE.
 */
 
-#ifndef NN_SOFI_INCLUDED
-#define NN_SOFI_INCLUDED
+#ifndef NN_SOFI_OUT_INCLUDED
+#define NN_SOFI_OUT_INCLUDED
 
 #include "hlapi.h"
 
 #include "../../transport.h"
 #include "../../aio/fsm.h"
 #include "../../aio/timer.h"
-#include "../../aio/worker.h"
-#include "../../utils/thread.h"
-// #include "../../utils/mutex.h"
 
 /* Shared, Connected OFI FSM */
-struct nn_sofi {
+struct nn_sofi_out {
 
-    /*  The state machine. */
-    struct nn_fsm               fsm;
-    int                         state;
-    int                         error;
+    /* The state machine. */
+    struct nn_fsm       fsm;
+    int                 state;
+    int                 error;
 
-    /* Asynchronous communication with the worker thread */
-    struct nn_worker            *worker;
-    struct nn_worker_task       task_rx;
-    struct nn_worker_task       task_tx;
-    struct nn_worker_task       task_error;
-    struct nn_worker_task       task_disconnected;
+    /* The FSM events */
+    struct nn_fsm_event error_event;
+    struct nn_fsm_event close_event;
 
-    /*  Pipe connecting this inproc connection to the nanomsg core. */
-    struct nn_pipebase          pipebase;
-
-    /* The high-level api structures */
-    struct ofi_resources        * ofi;
-    struct ofi_active_endpoint  * ep;
+    /* Abort cleanup timeout */
+    struct nn_timer     abort_timer;
 
 };
 
+/* ============================== */
+/*    CONSTRUCTOR / DESTRUCTOR    */
+/* ============================== */
+
 /*  Initialize the state machine */
-void nn_sofi_init (struct nn_sofi *self, 
-    struct ofi_resources *ofi, struct ofi_active_endpoint *ep, const uint8_t ng_direction,
-    struct nn_epbase *epbase, int src, struct nn_fsm *owner);
+void nn_sofi_out_init (struct nn_sofi_out *self, 
+    struct ofi_resources *ofi, struct ofi_active_endpoint *ep,
+    const uint8_t ng_direction, int src, struct nn_fsm *owner);
 
 /* Check if FSM is idle */
-int nn_sofi_isidle (struct nn_sofi *self);
+int nn_sofi_out_isidle (struct nn_sofi_out *self);
 
 /*  Stop the state machine */
-void nn_sofi_stop (struct nn_sofi *sofi);
+void nn_sofi_out_stop (struct nn_sofi_out *self);
 
 /*  Cleanup the state machine */
-void nn_sofi_term (struct nn_sofi *sofi);
+void nn_sofi_out_term (struct nn_sofi_out *self);
+
+/* ============================== */
+/*         INPUT EVENTS           */
+/* ============================== */
+
+/* There are data available for Rx */
+void nn_sofi_out_event__rx_data (struct nn_sofi_out *self, /* Data */);
+
+/* There was an Rx Error */
+void nn_sofi_out_event__rx_error (struct nn_sofi_out *self, /* Error */);
+
 
 #endif

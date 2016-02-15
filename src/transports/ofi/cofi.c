@@ -44,7 +44,7 @@
 #define NN_COFI_STATE_STOPPING          3
 
 /* State machine sources */
-#define NN_COFI_SRC_SOFI                1
+#define NN_COFI_SRC_SOFI                NN_OFI_SRC_SOFI
 
 /* nn_epbase virtual interface implementation. */
 static void nn_cofi_stop (struct nn_epbase *self);

@@ -49,7 +49,7 @@
 #define NN_BOFI_CONNECTION_ACCEPTED     1
 
 /* BOFI Child FSM Sources */
-#define NN_BOFI_SRC_SOFI                1
+#define NN_BOFI_SRC_SOFI                NN_OFI_SRC_SOFI
 
 struct nn_bofi {
 

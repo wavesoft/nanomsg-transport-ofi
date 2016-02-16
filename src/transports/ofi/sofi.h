@@ -32,7 +32,7 @@
 #include "../../aio/timer.h"
 #include "../../aio/worker.h"
 #include "../../utils/thread.h"
-// #include "../../utils/mutex.h"
+#include "../../utils/efd.h"
 
 /* Outgoing FSM events towards FSM IN/OUT */
 #define NN_SOFI_EVENT_RX_EVENT          1201
@@ -42,7 +42,7 @@
 
 /* Outgoing FSM events towards parent */
 #define NN_SOFI_STOPPED                 1210
-#define NN_SOFI_DISCONNECTED            1211
+#define NN_SOFI_INTERRUPTED             1211
 
 /* Negotiation direction */
 #define NN_SOFI_NG_NONE                 0
@@ -54,8 +54,10 @@ struct nn_sofi {
 
     /*  The state machine. */
     struct nn_fsm               fsm;
+    struct nn_epbase            * epbase;
     int                         state;
     int                         error;
+    uint8_t                     flags;
     uint8_t                     ng_direction;
 
     /* This member can be used by owner to keep individual sofis in a list. */
@@ -67,7 +69,9 @@ struct nn_sofi {
 
     /* The worker thread */
     struct nn_thread            thread_worker;
-    uint8_t                     conneted;
+
+    /* Outgoing events */
+    struct nn_fsm_event         event_interrupted;
 
     /*  Pipe connecting this inproc connection to the nanomsg core. */
     struct nn_pipebase          pipebase;

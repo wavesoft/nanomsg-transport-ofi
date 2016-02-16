@@ -29,6 +29,8 @@
 #include "../../utils/err.h"
 #include "../../utils/cont.h"
 #include "../../utils/fast.h"
+#include "../../core/ep.h"
+#include "../../core/sock.h"
 
 /* FSM States */
 #define NN_SOFI_STATE_IDLE               1001
@@ -51,6 +53,11 @@
 /* Timeout values */
 #define NN_SOFI_TIMEOUT_HANDSHAKE        1000
 #define NN_SOFI_TIMEOUT_KEEPALIVE_TICK   1000
+
+/* Local flags */
+#define NN_SOFI_FLAGS_THREAD_ACTIVE      0x01
+#define NN_SOFI_FLAGS_PIPEBASE_ACTIVE    0x02
+#define NN_SOFI_FLAGS_SEND_PENDING       0x04
 
 /* Forward Declarations */
 static void nn_sofi_handler (struct nn_fsm *self, int src, int type, 
@@ -105,10 +112,11 @@ void nn_sofi_init ( struct nn_sofi *self,
     /* Keep references */
     self->ofi = ofi;
     self->ep = ep;
+    self->epbase = epbase;
     self->ng_direction = ng_direction;
 
     /* Initialize properties */
-    self->conneted = 0;
+    self->flags = 0;
 
     /* ----------------------------------- */
     /*  libFabric/HLAPI Initialization     */
@@ -136,9 +144,20 @@ void nn_sofi_init ( struct nn_sofi *self,
     /*  NanoMsg Component Initialization   */
     /* ----------------------------------- */
 
+    /* Initialize events */
+    nn_fsm_event_init (&self->event_interrupted);
+
+    /* Initialize timers */
     nn_timer_init(&self->timer_handshake, NN_SOFI_SRC_HANDSHAKE_TIMER, 
         &self->fsm);
     nn_timer_init(&self->timer_keepalive, NN_SOFI_SRC_KEEPALIVE_TIMER,
+        &self->fsm);
+
+    /*  Choose a worker thread to handle this socket. */
+    self->worker = nn_fsm_choose_worker (&self->fsm);
+
+    /* Initialize worker tasks */
+    nn_worker_task_init (&self->task_disconnect, NN_SOFI_SRC_TASK_DISCONNECT,
         &self->fsm);
 
     /* ----------------------------------- */
@@ -153,13 +172,6 @@ void nn_sofi_init ( struct nn_sofi *self,
     nn_sofi_out_init( &self->sofi_out, ofi, ep, ng_direction, &self->pipebase,
         NN_SOFI_SRC_OUT_FSM, &self->fsm );
 
-    /*  Choose a worker thread to handle this socket. */
-    self->worker = nn_fsm_choose_worker (&self->fsm);
-
-    /* Initialize worker tasks */
-    nn_worker_task_init (&self->task_disconnect, NN_SOFI_SRC_TASK_DISCONNECT,
-        &self->fsm);
-
     /* ----------------------------------- */
     /*  Bootstrap FSM                      */
     /* ----------------------------------- */
@@ -167,6 +179,52 @@ void nn_sofi_init ( struct nn_sofi *self,
     /* Start FSM */
     _ofi_debug("OFI[S]: Starting FSM \n");
     nn_fsm_start (&self->fsm);
+
+}
+
+/**
+ * Cleanup the state machine
+ */
+void nn_sofi_term (struct nn_sofi *self)
+{
+
+    /* ----------------------------------- */
+    /*  OFI Sub-Component Termination      */
+    /* ----------------------------------- */
+
+    /* Terminate sub-components */
+    nn_sofi_in_term (&self->sofi_in);
+    nn_sofi_out_term (&self->sofi_out);
+
+    /* ----------------------------------- */
+    /*  NanoMsg Component Termination      */
+    /* ----------------------------------- */
+
+    /* Terminate events */
+    nn_fsm_event_term (&self->event_interrupted);
+
+    /* Stop timers */
+    nn_timer_term (&self->timer_handshake);
+    nn_timer_term (&self->timer_keepalive);
+
+    /* Cleanup worker tasks */
+    nn_worker_cancel (self->worker, &self->task_disconnect);
+    nn_worker_task_term (&self->task_disconnect);
+
+    /* ----------------------------------- */
+    /*  NanoMSG Core Termination           */
+    /* ----------------------------------- */
+
+    /* Terminate list item */
+    nn_list_item_term (&self->item);
+
+    /* Cleanup components */
+    nn_pipebase_term (&self->pipebase);
+    nn_fsm_term (&self->fsm);
+
+    /* ----------------------------------- */
+    /*  libFabric/HLAPI Termination        */
+    /* ----------------------------------- */
 
 }
 
@@ -186,7 +244,17 @@ void nn_sofi_stop (struct nn_sofi *self)
     /* Switch to closing */
     int fsm_state = self->state;
     self->state = NN_SOFI_STATE_CLOSING;
-    self->conneted = 0; /* <- Stops Poller Thread */
+
+    /* Stop thread */
+    self->flags &= ~NN_SOFI_FLAGS_THREAD_ACTIVE;
+
+    /* If we never stated sockbase put socket in zombie mode */
+    if (fsm_state < NN_SOFI_STATE_RUNNING) {
+
+        /* Invoke NN_SOCK_ACTION_ZOMBIFY to the socket FSM */
+        nn_fsm_action (&self->epbase->ep->sock->fsm, 1);
+        
+    }
 
     /* Stop components according to state */
     switch (fsm_state) {
@@ -244,49 +312,6 @@ void nn_sofi_stop (struct nn_sofi *self)
 
 }
 
-/**
- * Cleanup the state machine
- */
-void nn_sofi_term (struct nn_sofi *self)
-{
-
-    /* ----------------------------------- */
-    /*  OFI Sub-Component Termination      */
-    /* ----------------------------------- */
-
-    /* Terminate sub-components */
-    nn_sofi_in_term (&self->sofi_in);
-    nn_sofi_out_term (&self->sofi_out);
-
-    /* Cleanup worker tasks */
-    nn_worker_cancel (self->worker, &self->task_disconnect);
-    nn_worker_task_term (&self->task_disconnect);
-
-    /* ----------------------------------- */
-    /*  NanoMsg Component Termination      */
-    /* ----------------------------------- */
-
-    /* Stop timers */
-    nn_timer_term (&self->timer_handshake);
-    nn_timer_term (&self->timer_keepalive);
-
-    /* ----------------------------------- */
-    /*  NanoMSG Core Termination           */
-    /* ----------------------------------- */
-
-    /* Terminate list item */
-    nn_list_item_term (&self->item);
-
-    /* Cleanup components */
-    nn_pipebase_term (&self->pipebase);
-    nn_fsm_term (&self->fsm);
-
-    /* ----------------------------------- */
-    /*  libFabric/HLAPI Termination        */
-    /* ----------------------------------- */
-
-}
-
 /* ============================== */
 /*         WORKER THREAD          */
 /* ============================== */
@@ -307,7 +332,7 @@ static void nn_sofi_poller_thread (void *arg)
 
     /* Keep thread alive while  */
     _ofi_debug("OFI[p]: Starting poller thread\n");
-    while ( self->conneted ) {
+    while ( self->flags & NN_SOFI_FLAGS_THREAD_ACTIVE ) {
 
         /* ========================================= */
         /* Wait for Rx CQ event */
@@ -392,6 +417,7 @@ static int nn_sofi_send (struct nn_pipebase *pb, struct nn_msg *msg)
     int ret;
     struct nn_sofi *self;
     self = nn_cont (pb, struct nn_sofi, pipebase);
+    _ofi_debug("OFI[S]: NanoMsg SEND event\n");
 
     /* TODO: Forward event to OUT FSM */
 
@@ -408,6 +434,7 @@ static int nn_sofi_recv (struct nn_pipebase *pb, struct nn_msg *msg)
     int ret;
     struct nn_sofi *self;
     self = nn_cont (pb, struct nn_sofi, pipebase);
+    _ofi_debug("SOFI[S]: NanoMsg RECV event\n");
 
     /* TODO: Forward event to IN FSM */
 
@@ -433,6 +460,13 @@ static void nn_sofi_shutdown (struct nn_fsm *fsm, int src, int type,
 
     /* Before closing, ensure everything is idle */
     if (self->state == NN_SOFI_STATE_CLOSING) {
+
+        /* Start pipebase if pipebase was not started
+           (This is required before we are able to stop it) */
+        // if (self->flags & NN_SOFI_FLAGS_SEND_PENDING) {
+        //     nn_pipebase_sent(&self->pipebase);
+        //     return;
+        // }
 
         /* Wait for all components to be idle (each one of this
            component will trigger an event when it becomes idle) */
@@ -496,6 +530,8 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
 
                 /* Initialize input FSM */
                 _ofi_debug("OFI[S]: Initializing OFI-Input\n");
+
+                /* Start IN SOFI */
                 self->state = NN_SOFI_STATE_INIT_IN;
                 nn_sofi_in_start( &self->sofi_in );
 
@@ -535,7 +571,10 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
 
                 /* Unable to initialize input SOFI, shutdown */
                 _ofi_debug("OFI[S]: Error while initializing OFI-Input\n");
-                nn_sofi_stop( self );
+                self->error = EINTR;
+                nn_sofi_stop(self);
+                // nn_fsm_raise(&self->fsm, &self->event_interrupted, 
+                //     NN_SOFI_INTERRUPTED);
                 return;
 
             default:
@@ -568,7 +607,7 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
                 self->state = NN_SOFI_STATE_HANDSHAKE_HALF;
 
                 /* Start poller thread, which is needed for the Rx/Tx Events */
-                self->conneted = 1;
+                self->flags |= NN_SOFI_FLAGS_THREAD_ACTIVE;
                 nn_thread_init (&self->thread_worker, nn_sofi_poller_thread, 
                     self);
 
@@ -588,7 +627,10 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
 
                 /* Unable to initialize output SOFI, shutdown */
                 _ofi_debug("OFI[S]: Error while initializing OFI-Output\n");
-                nn_sofi_stop( self );
+                self->error = EINTR;
+                nn_sofi_stop(self);
+                // nn_fsm_raise(&self->fsm, &self->event_interrupted, 
+                //     NN_SOFI_INTERRUPTED);
                 return;
 
             default:
@@ -626,7 +668,10 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
 
                 /* Unable to complete handshake, shutdown */
                 _ofi_debug("OFI[S]: Send error while completing handshake\n");
-                nn_sofi_stop( self );
+                self->error = EINTR;
+                nn_sofi_stop(self);
+                // nn_fsm_raise(&self->fsm, &self->event_interrupted, 
+                //     NN_SOFI_INTERRUPTED);
                 return;
 
             default:
@@ -657,7 +702,10 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
 
                 /* Unable to complete handshake, shutdown */
                 _ofi_debug("OFI[S]: Receive error while completing handshake\n");
-                nn_sofi_stop( self );
+                self->error = EINTR;
+                nn_sofi_stop(self);
+                // nn_fsm_raise(&self->fsm, &self->event_interrupted, 
+                //     NN_SOFI_INTERRUPTED);
                 return;
 
             default:
@@ -673,7 +721,10 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
 
                 /* Unable to complete handshake, shutdown */
                 _ofi_debug("OFI[S]: Handshake timed out!\n");
-                nn_sofi_stop( self );
+                self->error = ETIMEDOUT;
+                nn_sofi_stop(self);
+                // nn_fsm_raise(&self->fsm, &self->event_interrupted, 
+                //     NN_SOFI_INTERRUPTED);
                 return;
 
             default:
@@ -714,7 +765,10 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
 
                 /* Unable to complete handshake, shutdown */
                 _ofi_debug("OFI[S]: Send error while completing handshake\n");
-                nn_sofi_stop( self );
+                self->error = EINTR;
+                nn_sofi_stop(self);
+                // nn_fsm_raise(&self->fsm, &self->event_interrupted, 
+                //     NN_SOFI_INTERRUPTED);
                 return;
 
             default:
@@ -746,7 +800,10 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
 
                 /* Unable to complete handshake, shutdown */
                 _ofi_debug("OFI[S]: Receive error while completing handshake\n");
-                nn_sofi_stop( self );
+                self->error = EINTR;
+                nn_sofi_stop(self);
+                // nn_fsm_raise(&self->fsm, &self->event_interrupted, 
+                //     NN_SOFI_INTERRUPTED);
                 return;
 
             default:
@@ -762,7 +819,10 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
 
                 /* Unable to complete handshake, shutdown */
                 _ofi_debug("OFI[S]: Handshake timed out!\n");
-                nn_sofi_stop( self );
+                self->error = ETIMEDOUT;
+                nn_sofi_stop(self);
+                // nn_fsm_raise(&self->fsm, &self->event_interrupted, 
+                //     NN_SOFI_INTERRUPTED);
                 return;
 
             default:
@@ -790,7 +850,7 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
                 /* Handhsake phase is completely terminated */
                 _ofi_debug("OFI[S]: Handshake sequence completed\n");
 
-                /* Start pipebase */
+                /* We are now running */
                 self->state = NN_SOFI_STATE_RUNNING;
                 nn_pipebase_start( &self->pipebase );
 
@@ -833,7 +893,10 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
 
                 /* Unable to send data, shutdown */
                 _ofi_debug("OFI[S]: Error sending data\n");
-                nn_sofi_stop( self );
+                self->error = EIO;
+                nn_sofi_stop(self);
+                // nn_fsm_raise(&self->fsm, &self->event_interrupted, 
+                //     NN_SOFI_INTERRUPTED);
                 return;
 
             default:
@@ -857,7 +920,10 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
 
                 /* Unable to receive data, shutdown */
                 _ofi_debug("OFI[S]: Error receiving data\n");
-                nn_sofi_stop( self );
+                self->error = EIO;
+                nn_sofi_stop(self);
+                // nn_fsm_raise(&self->fsm, &self->event_interrupted, 
+                //     NN_SOFI_INTERRUPTED);
                 return;
 
             default:
@@ -901,7 +967,10 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
 
                 /* Socket was disconnected, close */
                 _ofi_debug("OFI[S]: Disconnectingn from to socket event\n");
-                nn_sofi_stop( self );
+                self->error = 0;
+                nn_sofi_stop(self);
+                // nn_fsm_raise(&self->fsm, &self->event_interrupted, 
+                //     NN_SOFI_INTERRUPTED);
 
                 return;
 

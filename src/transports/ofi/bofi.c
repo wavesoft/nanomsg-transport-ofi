@@ -400,9 +400,9 @@ static void nn_bofi_handler (struct nn_fsm *self, int src, int type,
 
                 return;
 
-            case NN_SOFI_DISCONNECTED:
+            case NN_SOFI_INTERRUPTED:
                 /* A remote enpodint was disconnected */
-                _ofi_debug("OFI[B]: Connection closed, stopping SOFI\n");
+                _ofi_debug("OFI[B]: Connection interrupted, stopping SOFI\n");
 
                 /* Stop sofi */
                 if (!nn_sofi_isidle (sofi)) {
@@ -465,9 +465,9 @@ static void nn_bofi_handler (struct nn_fsm *self, int src, int type,
 
                 return;
 
-            case NN_SOFI_DISCONNECTED:
+            case NN_SOFI_INTERRUPTED:
                 /* A remote enpodint was disconnected */
-                _ofi_debug("OFI[B]: Connection closed, stopping SOFI\n");
+                _ofi_debug("OFI[B]: Connection interrupted, stopping SOFI\n");
 
                 /* Stop sofi */
                 if (!nn_sofi_isidle (sofi)) {

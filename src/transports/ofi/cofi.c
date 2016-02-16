@@ -25,6 +25,7 @@
 #include "sofi.h"
 #include "hlapi.h"
 
+#include "../../core/ep.h"
 #include "../../utils/err.h"
 #include "../../utils/cont.h"
 #include "../../utils/alloc.h"
@@ -269,12 +270,20 @@ static void nn_cofi_handler (struct nn_fsm *self, int src, int type,
 
         case NN_COFI_SRC_SOFI:
             switch (type) {
+
+            case NN_SOFI_INTERRUPTED:
+
+                /* SOFI Interrupted (connection broken) */
+                _ofi_debug("OFI[C]: Connection interrupted\n");
+                nn_ep_stop(cofi->epbase.ep);
+                nn_sofi_stop(&cofi->sofi);
+                return;
+
             case NN_SOFI_STOPPED:
 
                 /* Disconnected from remote endpoint */
-                _ofi_debug("OFI[C]: Connection dropped\n");
+                _ofi_debug("OFI[C]: SOFI Stopped, cleaning-up\n");
                 nn_fsm_stop (&cofi->fsm);
-
                 return;
 
             default:

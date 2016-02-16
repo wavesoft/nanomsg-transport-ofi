@@ -36,7 +36,11 @@
     #include <stdio.h>
     #include <pthread.h>
     /* Enable debug */
-    #define _ofi_debug(...)   printf("[%012i] ", (int)pthread_self()); printf(__VA_ARGS__);
+    #define _ofi_debug(...)   { \
+        char msg[1024]; \
+        sprintf(msg, __VA_ARGS__); \
+        printf("[%012i] %s", (int)pthread_self(), msg); \
+    };
     // #define _ofi_debug(...)     printf(__VA_ARGS__)
 #else
     /* Disable debug */

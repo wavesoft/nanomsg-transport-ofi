@@ -213,6 +213,14 @@ void nn_sofi_out_tx_event_send( struct nn_sofi_out *self )
     nn_worker_execute (self->worker, &self->task_tx_send);
 }
 
+/**
+ * Synchronous (blocking) tx request 
+ */
+size_t nn_sofi_out_tx( struct nn_sofi_out *self, void * ptr, size_t max_sz, int timeout )
+{
+    return -1;
+}
+
 /* ============================== */
 /*          FSM HANDLERS          */
 /* ============================== */

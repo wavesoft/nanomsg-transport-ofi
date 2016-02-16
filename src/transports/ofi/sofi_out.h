@@ -129,4 +129,7 @@ void nn_sofi_out_tx_event( struct nn_sofi_out *self );
 /* Trigger an rx erro event */
 void nn_sofi_out_tx_error_event( struct nn_sofi_out *self, int err_number );
 
+/** Synchronous (blocking) tx request */
+size_t nn_sofi_out_tx( struct nn_sofi_out *self, void * ptr, size_t max_sz, int timeout );
+
 #endif

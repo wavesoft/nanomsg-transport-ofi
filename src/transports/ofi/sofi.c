@@ -36,10 +36,9 @@
 #define NN_SOFI_STATE_IDLE               1001
 #define NN_SOFI_STATE_INIT_IN            1002
 #define NN_SOFI_STATE_INIT_OUT           1003
-#define NN_SOFI_STATE_HANDSHAKE_HALF     1004
-#define NN_SOFI_STATE_HANDSHAKE_FULL     1005
-#define NN_SOFI_STATE_HANDSHAKE_COMPLETE 1006
-#define NN_SOFI_STATE_RUNNING            1007
+#define NN_SOFI_STATE_HANDSHAKE          1004
+#define NN_SOFI_STATE_RUNNING            1005
+#define NN_SOFI_STATE_ERROR              1007
 #define NN_SOFI_STATE_CLOSING            1008
 #define NN_SOFI_STATE_CLOSED             1009
 
@@ -85,17 +84,39 @@ static void nn_sofi_send_handshake( struct nn_sofi *self )
 {
     _ofi_debug("OFI[S]: Sending handshake\n");
 
-    /* TODO: Send data */
+    /* Don't do anything on an invalid state */
+    if (self->state != NN_SOFI_STATE_HANDSHAKE) return;
+
+    /* Synchronous send */
+    self->error = nn_sofi_out_tx( &self->sofi_out, &self->hs_local, 
+        sizeof(self->hs_local), NN_SOFI_TIMEOUT_HANDSHAKE );
+
+    /* Switch state if an error occured */
+    if (self->error != 0) {
+        self->state = NN_SOFI_STATE_ERROR;
+    }
+
 }
 
 /**
  * Complete handshake
  */
-static void nn_sofi_handle_handshake( struct nn_sofi *self )
+static void nn_sofi_recv_handshake( struct nn_sofi *self )
 {
-    _ofi_debug("OFI[S]: Handling handshake\n");
+    _ofi_debug("OFI[S]: Receiving handshake\n");
 
-    /* TODO: Handle received data */
+    /* Don't do anything on an invalid state */
+    if (self->state != NN_SOFI_STATE_HANDSHAKE) return;
+
+    /* Synchronous receive */
+    self->error = nn_sofi_out_tx( &self->sofi_out, &self->hs_remote, 
+        sizeof(self->hs_remote), NN_SOFI_TIMEOUT_HANDSHAKE );
+
+    /* Switch state if an error occured */
+    if (self->error != 0) {
+        self->state = NN_SOFI_STATE_ERROR;
+    }
+
 }
 
 /* ============================== */
@@ -145,8 +166,6 @@ void nn_sofi_init ( struct nn_sofi *self,
     /* ----------------------------------- */
 
     /* Initialize timers */
-    nn_timer_init(&self->timer_handshake, NN_SOFI_SRC_HANDSHAKE_TIMER, 
-        &self->fsm);
     nn_timer_init(&self->timer_keepalive, NN_SOFI_SRC_KEEPALIVE_TIMER,
         &self->fsm);
 
@@ -198,7 +217,6 @@ void nn_sofi_term (struct nn_sofi *self)
     /* ----------------------------------- */
 
     /* Stop timers */
-    nn_timer_term (&self->timer_handshake);
     nn_timer_term (&self->timer_keepalive);
 
     /* Cleanup worker tasks */
@@ -235,20 +253,16 @@ int nn_sofi_isidle (struct nn_sofi *self)
  */
 void nn_sofi_stop (struct nn_sofi *self)
 {
+
+    /* This should NEVER be reached on intermediate states */
+    nn_assert( self->state != NN_SOFI_STATE_HANDSHAKE );
+
     /* Switch to closing */
     int fsm_state = self->state;
     self->state = NN_SOFI_STATE_CLOSING;
 
     /* Stop thread */
     self->flags &= ~NN_SOFI_FLAGS_THREAD_ACTIVE;
-
-    /* If we never stated sockbase put socket in zombie mode */
-    if (fsm_state < NN_SOFI_STATE_RUNNING) {
-
-        /* Invoke NN_SOCK_ACTION_ZOMBIFY to the socket FSM */
-        nn_fsm_action (&self->epbase->ep->sock->fsm, 1);
-        
-    }
 
     /* Stop components according to state */
     switch (fsm_state) {
@@ -267,30 +281,15 @@ void nn_sofi_stop (struct nn_sofi *self)
         nn_sofi_out_stop( &self->sofi_out );
         break;
 
-    case NN_SOFI_STATE_HANDSHAKE_HALF:
-    case NN_SOFI_STATE_HANDSHAKE_FULL:
-        _ofi_debug("OFI[S]: Stopping [fsm_in, fsm_out, timer_handshake, "
-            "worker]\n");
-        nn_timer_stop( &self->timer_handshake );
-        nn_sofi_in_stop( &self->sofi_in );
-        nn_sofi_out_stop( &self->sofi_out );
-        nn_thread_term (&self->thread_worker);
-        break;
-
-    case NN_SOFI_STATE_HANDSHAKE_COMPLETE:
-        _ofi_debug("OFI[S]: Stopping [fsm_in, fsm_out, worker]\n");
-        nn_sofi_in_stop( &self->sofi_in );
-        nn_sofi_out_stop( &self->sofi_out );
-        nn_thread_term (&self->thread_worker);
-        break;
-
     case NN_SOFI_STATE_RUNNING:
+        nn_thread_term (&self->thread_worker);
+
+    case NN_SOFI_STATE_ERROR:
         _ofi_debug("OFI[S]: Stopping [fsm_in, fsm_out, timer_keepalive, "
             "worker]\n");
         nn_timer_stop( &self->timer_keepalive );
         nn_sofi_in_stop( &self->sofi_in );
         nn_sofi_out_stop( &self->sofi_out );
-        nn_thread_term (&self->thread_worker);
         break;
 
     case NN_SOFI_STATE_CLOSING:
@@ -413,6 +412,13 @@ static int nn_sofi_send (struct nn_pipebase *pb, struct nn_msg *msg)
     self = nn_cont (pb, struct nn_sofi, pipebase);
     _ofi_debug("OFI[S]: NanoMsg SEND event\n");
 
+    /* Return error codes on erroreus states */
+    if (nn_slow(self->state == NN_SOFI_STATE_ERROR)) {
+        return self->error;
+    } else if (nn_slow(self->state != NN_SOFI_STATE_RUNNING)) {
+        return -EFSM;
+    }
+
     /* TODO: Forward event to OUT FSM */
 
     /* Success */
@@ -455,17 +461,9 @@ static void nn_sofi_shutdown (struct nn_fsm *fsm, int src, int type,
     /* Before closing, ensure everything is idle */
     if (self->state == NN_SOFI_STATE_CLOSING) {
 
-        /* Start pipebase if pipebase was not started
-           (This is required before we are able to stop it) */
-        // if (self->flags & NN_SOFI_FLAGS_SEND_PENDING) {
-        //     nn_pipebase_sent(&self->pipebase);
-        //     return;
-        // }
-
         /* Wait for all components to be idle (each one of this
            component will trigger an event when it becomes idle) */
         _ofi_debug("OFI[S]: Waiting for all components to be idle\n");
-        if (!nn_timer_isidle(&self->timer_handshake)) return;
         if (!nn_timer_isidle(&self->timer_keepalive)) return;
         if (!nn_sofi_in_isidle(&self->sofi_in)) return;
         if (!nn_sofi_out_isidle(&self->sofi_out)) return;
@@ -596,21 +594,41 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
 
                 /* Rx/Tx Initialized, start handshaking */
                 _ofi_debug("OFI[S]: Performing handshake\n");
-                self->state = NN_SOFI_STATE_HANDSHAKE_HALF;
+                self->state = NN_SOFI_STATE_HANDSHAKE;
 
-                /* Start poller thread, which is needed for the Rx/Tx Events */
-                self->flags |= NN_SOFI_FLAGS_THREAD_ACTIVE;
-                nn_thread_init (&self->thread_worker, nn_sofi_poller_thread, 
-                    self);
-
-                /* Require finite time for the handshake,
-                   otherwise abort! */
-                nn_timer_start( &self->timer_handshake, 
-                    NN_SOFI_TIMEOUT_HANDSHAKE );
-
-                /* Send handshake if we are on the sending side */
+                /* Half part of handshake */
                 if (self->ng_direction == NN_SOFI_NG_SEND) {
                     nn_sofi_send_handshake( self );
+                    nn_sofi_recv_handshake( self );
+                } else if (self->ng_direction == NN_SOFI_NG_RECV) {
+                    nn_sofi_recv_handshake( self );
+                    nn_sofi_send_handshake( self );
+                }
+
+                /* No matter what's the outocome, start the pipebase */
+                nn_pipebase_start( &self->pipebase );
+
+                /* Switch to running only if handshake did not cause error */
+                if (self->state == NN_SOFI_STATE_HANDSHAKE) {
+
+                    /* Switch to running state */
+                    self->state = NN_SOFI_STATE_RUNNING;
+
+                    /* Start poller thread */
+                    self->flags |= NN_SOFI_FLAGS_THREAD_ACTIVE;
+                    nn_thread_init (&self->thread_worker, nn_sofi_poller_thread, 
+                        self);
+
+                    /* Start keepalive timer */
+                    nn_timer_start( &self->timer_keepalive, 
+                        NN_SOFI_TIMEOUT_KEEPALIVE_TICK );
+
+                } else {
+
+                    /* Stop FSM through worker in order to allow other tasks,
+                       such as pending nn_send events, to complete */
+                    nn_worker_execute (self->worker, &self->task_disconnect);
+
                 }
 
                 return;
@@ -621,221 +639,6 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
                 _ofi_debug("OFI[S]: Error while initializing OFI-Output\n");
                 self->error = EINTR;
                 nn_sofi_stop(self);
-                return;
-
-            default:
-                nn_fsm_bad_action (self->state, src, type);
-            }
-
-        default:
-            nn_fsm_bad_source (self->state, src, type);
-        }
-
-/******************************************************************************/
-/*  HANDSHAKE_HALF state.                                                     */
-/*  We are waiting for a completion of the first phase of the handshake phase */
-/******************************************************************************/
-    case NN_SOFI_STATE_HANDSHAKE_HALF:
-        switch (src) {
-
-        /* ========================= */
-        /*  OUTPUT FSM Events        */
-        /* ========================= */
-        case NN_SOFI_SRC_OUT_FSM:
-            switch (type) {
-            case NN_SOFI_OUT_EVENT_SENT:
-
-                /* We were on the sending direction */
-                _ofi_debug("OFI[S]: Completing handshake\n");
-                nn_assert( self->ng_direction == NN_SOFI_NG_SEND );
-
-                /* We are waiting for a receive event (or timeout) */
-                self->state = NN_SOFI_STATE_HANDSHAKE_FULL;
-
-                return;
-
-            case NN_SOFI_OUT_EVENT_ERROR:
-
-                /* Unable to complete handshake, shutdown */
-                _ofi_debug("OFI[S]: Send error while completing handshake\n");
-                self->error = EINTR;
-                nn_sofi_stop(self);
-                return;
-
-            default:
-                nn_fsm_bad_action (self->state, src, type);
-            }
-
-        /* ========================= */
-        /*  INPUT FSM Events         */
-        /* ========================= */
-        case NN_SOFI_SRC_IN_FSM:
-            switch (type) {
-            case NN_SOFI_IN_EVENT_RECEIVED:
-
-                /* Handle incoming phase of handshake */
-                _ofi_debug("OFI[S]: Completing handshake\n");
-                nn_assert( self->ng_direction == NN_SOFI_NG_RECV );
-
-                /* Handle reception of data */
-                nn_sofi_handle_handshake( self );
-
-                /* Send data and wait for Tx event (or timeout) */
-                nn_sofi_send_handshake( self );
-                self->state = NN_SOFI_STATE_HANDSHAKE_FULL;
-
-                return;
-
-            case NN_SOFI_IN_EVENT_ERROR:
-
-                /* Unable to complete handshake, shutdown */
-                _ofi_debug("OFI[S]: Receive error while completing handshake\n");
-                self->error = EINTR;
-                nn_sofi_stop(self);
-                return;
-
-            default:
-                nn_fsm_bad_action (self->state, src, type);
-            }
-
-        /* ========================= */
-        /*  Handshake Timeout Timer  */
-        /* ========================= */
-        case NN_SOFI_SRC_HANDSHAKE_TIMER:
-            switch (type) {
-            case NN_TIMER_TIMEOUT:
-
-                /* Unable to complete handshake, shutdown */
-                _ofi_debug("OFI[S]: Handshake timed out!\n");
-                self->error = ETIMEDOUT;
-                nn_sofi_stop(self);
-                return;
-
-            default:
-                nn_fsm_bad_action (self->state, src, type);
-            }
-
-        default:
-            nn_fsm_bad_source (self->state, src, type);
-        }
-
-/******************************************************************************/
-/*  HANDSHAKE_FULL state.                                                     */
-/*  We have already sent/received the first packet in the previous state, now */
-/*  it's time to complete our part of the negotiation.                        */
-/******************************************************************************/
-    case NN_SOFI_STATE_HANDSHAKE_FULL:
-        switch (src) {
-
-        /* ========================= */
-        /*  OUTPUT FSM Events        */
-        /* ========================= */
-        case NN_SOFI_SRC_OUT_FSM:
-            switch (type) {
-            case NN_SOFI_OUT_EVENT_SENT:
-
-                /* We must be on the receiving direction */
-                nn_assert( self->ng_direction == NN_SOFI_NG_RECV );
-                _ofi_debug("OFI[S]: Handshake is completed, stopping "
-                           "timeout timer\n");
-
-                /* We completed handshake, stop timer */
-                self->state = NN_SOFI_STATE_HANDSHAKE_COMPLETE;
-                nn_timer_stop( &self->timer_handshake );
-
-                return;
-
-            case NN_SOFI_OUT_EVENT_ERROR:
-
-                /* Unable to complete handshake, shutdown */
-                _ofi_debug("OFI[S]: Send error while completing handshake\n");
-                self->error = EINTR;
-                nn_sofi_stop(self);
-                return;
-
-            default:
-                nn_fsm_bad_action (self->state, src, type);
-            }
-
-        /* ========================= */
-        /*  INPUT FSM Event          */
-        /* ========================= */
-        case NN_SOFI_SRC_IN_FSM:
-            switch (type) {
-            case NN_SOFI_IN_EVENT_RECEIVED:
-
-                /* We must be on the sending direction */
-                nn_assert( self->ng_direction == NN_SOFI_NG_SEND );
-                _ofi_debug("OFI[S]: Handshake is completed, stopping "
-                           "timeout timer\n");
-
-                /* Handle reception of data */
-                nn_sofi_handle_handshake( self );
-
-                /* We completed handshake, stop timer */
-                self->state = NN_SOFI_STATE_HANDSHAKE_COMPLETE;
-                nn_timer_stop( &self->timer_handshake );
-
-                return;
-
-            case NN_SOFI_IN_EVENT_ERROR:
-
-                /* Unable to complete handshake, shutdown */
-                _ofi_debug("OFI[S]: Receive error while completing handshake\n");
-                self->error = EINTR;
-                nn_sofi_stop(self);
-                return;
-
-            default:
-                nn_fsm_bad_action (self->state, src, type);
-            }
-
-        /* ========================= */
-        /*  Handshake Timeout Timer  */
-        /* ========================= */
-        case NN_SOFI_SRC_HANDSHAKE_TIMER:
-            switch (type) {
-            case NN_TIMER_TIMEOUT:
-
-                /* Unable to complete handshake, shutdown */
-                _ofi_debug("OFI[S]: Handshake timed out!\n");
-                self->error = ETIMEDOUT;
-                nn_sofi_stop(self);
-                return;
-
-            default:
-                nn_fsm_bad_action (self->state, src, type);
-            }
-
-        default:
-            nn_fsm_bad_source (self->state, src, type);
-        }
-
-/******************************************************************************/
-/*  HANDSHAKE_COMPLETE state.                                                 */
-/*  We are only waiting for the handshake timer to be closed.                 */
-/******************************************************************************/
-    case NN_SOFI_STATE_HANDSHAKE_COMPLETE:
-        switch (src) {
-
-        /* ========================= */
-        /*  Handshake Timeout Timer  */
-        /* ========================= */
-        case NN_SOFI_SRC_HANDSHAKE_TIMER:
-            switch (type) {
-            case NN_TIMER_STOPPED:
-
-                /* Handhsake phase is completely terminated */
-                _ofi_debug("OFI[S]: Handshake sequence completed\n");
-
-                /* We are now running */
-                self->state = NN_SOFI_STATE_RUNNING;
-                nn_pipebase_start( &self->pipebase );
-
-                /* Start Keepalive timer */
-                nn_timer_start( &self->timer_keepalive, 
-                    NN_SOFI_TIMEOUT_KEEPALIVE_TICK );
-
                 return;
 
             default:
@@ -954,6 +757,61 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
             nn_fsm_bad_source (self->state, src, type);
         }
 
+/******************************************************************************/
+/*  ERROR state.                                                              */
+/*  An error occured and all the events are just drained in the sink.         */
+/******************************************************************************/
+    case NN_SOFI_STATE_ERROR:
+        switch (src) {
+
+        /* ========================= */
+        /*  IN/OUT FSM Events       */
+        /* ========================= */
+        case NN_SOFI_SRC_OUT_FSM:
+        case NN_SOFI_SRC_IN_FSM:
+            return;
+
+        /* ========================= */
+        /*  Keepalive Ticks Timer    */
+        /* ========================= */
+        case NN_SOFI_SRC_KEEPALIVE_TIMER:
+            switch (type) {
+            case NN_TIMER_TIMEOUT:
+
+                /* Stop Keepalive timer */
+                _ofi_debug("OFI[S]: Stopping keepalive timer\n");
+                nn_timer_stop( &self->timer_keepalive );
+                return;
+
+            case NN_TIMER_STOPPED:
+                /* Restart Keepalive timer */
+                _ofi_debug("OFI[S]: Keepalive stopped, restarting\n");
+                return;
+
+            default:
+                nn_fsm_bad_action (self->state, src, type);
+            }
+
+        /* ========================= */
+        /*  Worker : Disconnected    */
+        /* ========================= */
+        case NN_SOFI_SRC_TASK_DISCONNECT:
+            switch (type) {
+            case NN_WORKER_TASK_EXECUTE:
+
+                /* Socket was disconnected, close */
+                _ofi_debug("OFI[S]: Disconnectingn from to socket event\n");
+                nn_sofi_stop(self);
+
+                return;
+
+            default:
+                nn_fsm_bad_action (self->state, src, type);
+            }
+
+        default:
+            nn_fsm_bad_source (self->state, src, type);
+        }
 
 /******************************************************************************/
 /*  Invalid state.                                                            */

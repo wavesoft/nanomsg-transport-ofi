@@ -232,6 +232,14 @@ void nn_sofi_in_rx_error_ack( struct nn_sofi_in *self )
     nn_worker_execute (self->worker, &self->task_rx_ack);
 }
 
+/**
+ * Synchronous (blocking) rx request
+ */
+size_t nn_sofi_in_rx( struct nn_sofi_in *self, void * ptr, size_t max_sz, int timeout )
+{
+    return -1;
+}
+
 /* ============================== */
 /*          FSM HANDLERS          */
 /* ============================== */

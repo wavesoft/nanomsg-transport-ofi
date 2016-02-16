@@ -128,7 +128,10 @@ void nn_sofi_in_rx_event( struct nn_sofi_in *self );
 /* Trigger an rx erro event */
 void nn_sofi_in_rx_error_event( struct nn_sofi_in *self, int err_number );
 
-/** Acknowledge an rx event */
+/* Acknowledge an rx event */
 void nn_sofi_in_rx_error_ack( struct nn_sofi_in *self );
+
+/* Synchronous (blocking) rx request */
+size_t nn_sofi_in_rx( struct nn_sofi_in *self, void * ptr, size_t max_sz, int timeout );
 
 #endif

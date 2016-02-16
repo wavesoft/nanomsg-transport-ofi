@@ -48,6 +48,12 @@
 #define NN_SOFI_NG_SEND                 1
 #define NN_SOFI_NG_RECV                 2
 
+/* Handshake information */
+struct nn_sofi_handshake
+{
+    /* data */
+};
+
 /* Shared, Connected OFI FSM */
 struct nn_sofi {
 
@@ -81,8 +87,9 @@ struct nn_sofi {
     struct nn_sofi_out          sofi_out;
 
     /* Handshake timeout timer */
-    struct nn_timer             timer_handshake;
     struct nn_timer             timer_keepalive;
+    struct nn_sofi_handshake    hs_local;
+    struct nn_sofi_handshake    hs_remote;
 
 };
 

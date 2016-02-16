@@ -65,6 +65,10 @@ struct nn_sofi {
     struct nn_worker            * worker;
     struct nn_worker_task       task_disconnect;
 
+    /* The worker thread */
+    struct nn_thread            thread_worker;
+    uint8_t                     conneted;
+
     /*  Pipe connecting this inproc connection to the nanomsg core. */
     struct nn_pipebase          pipebase;
 

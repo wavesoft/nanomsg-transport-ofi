@@ -45,15 +45,6 @@
 #include "platf/osx.c"
 #endif
 
-/* Helper macro to enable or disable verbose logs on console */
-#ifdef OFI_DEBUG_LOG
-    /* Enable debug */
-    #define _ofi_debug(...)   printf(__VA_ARGS__)
-#else
-    /* Disable debug */
-    #define _ofi_debug(...)
-#endif
-
 #define FT_ERR(fmt, ...) \
 	do { fprintf(stderr, "OFI: %s:%d: " fmt, __FILE__, __LINE__, ##__VA_ARGS__); } while (0)
 

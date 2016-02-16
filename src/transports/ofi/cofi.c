@@ -29,15 +29,6 @@
 #include "../../utils/cont.h"
 #include "../../utils/alloc.h"
 
-/* Helper macro to enable or disable verbose logs on console */
-#ifdef OFI_DEBUG_LOG
-    /* Enable debug */
-    #define _ofi_debug(...)   printf(__VA_ARGS__)
-#else
-    /* Disable debug */
-    #define _ofi_debug(...)
-#endif
-
 /* State machine states */
 #define NN_COFI_STATE_IDLE              1
 #define NN_COFI_STATE_CONNECTED         2
@@ -63,8 +54,8 @@ static void nn_cofi_shutdown (struct nn_fsm *self, int src, int type,
 struct nn_cofi {
 
     /*  The state machine. */
-    struct nn_fsm fsm;
-    int state;
+    struct nn_fsm               fsm;
+    int                         state;
 
     /* The high-level api structures */
     struct ofi_resources        ofi;
@@ -72,11 +63,11 @@ struct nn_cofi {
 
     /*  This object is a specific type of endpoint.
         Thus it is derived from epbase. */
-    struct nn_epbase epbase;
+    struct nn_epbase            epbase;
 
     /*  State machine that handles the active part of the connection
         lifetime. */
-    struct nn_sofi sofi;
+    struct nn_sofi              sofi;
 
 };
 
@@ -201,20 +192,23 @@ static void nn_cofi_shutdown (struct nn_fsm *self, int src, int type,
 
     /* Switch to shutdown if this was an fsm action */
     if (nn_slow (src == NN_FSM_ACTION && type == NN_FSM_STOP)) {
-        if (!nn_sofi_isidle (&cofi->sofi)) {
-            nn_sofi_stop (&cofi->sofi);
-        }
+
+        /* Enter stopping state */
         cofi->state = NN_COFI_STATE_STOPPING;
+
+        /* Stop SOFI if not already stopped */
+        if (!nn_sofi_isidle (&cofi->sofi)) {
+            _ofi_debug("OFI[C]: SOFI is not idle, shutting down\n");
+            nn_sofi_stop (&cofi->sofi);
+            return;
+        }
     }
 
     /* If we are in shutting down state, stop everyhing else */
     if (cofi->state == NN_COFI_STATE_STOPPING) {
 
-        /* Wait for STCP to be idle */
-        if (!nn_sofi_isidle (&cofi->sofi))
-            return;
-
         /* We are stopped */
+        _ofi_debug("OFI[C]: Stopping epbase\n");
         nn_fsm_stopped_noevent (&cofi->fsm);
         nn_epbase_stopped (&cofi->epbase);
         return;
@@ -275,39 +269,12 @@ static void nn_cofi_handler (struct nn_fsm *self, int src, int type,
 
         case NN_COFI_SRC_SOFI:
             switch (type) {
-            case NN_SOFI_DISCONNECTED:
+            case NN_SOFI_STOPPED:
 
                 /* Disconnected from remote endpoint */
-                _ofi_debug("OFI[C]: Remotely disconnected\n");
+                _ofi_debug("OFI[C]: Connection dropped\n");
                 nn_fsm_stop (&cofi->fsm);
 
-                return;
-
-            default:
-                nn_fsm_bad_action (cofi->state, src, type);
-            }
-
-        default:
-            nn_fsm_bad_source (cofi->state, src, type);
-        }
-
-/******************************************************************************/
-/*  STOPPING state.                                                           */
-/*  This state is initiated by nn_cofi_shutdown                               */
-/******************************************************************************/
-    case NN_COFI_STATE_STOPPING:
-        switch (src) {
-
-        case NN_COFI_SRC_SOFI:
-            switch (type) {
-
-            case NN_SOFI_STOPPED:
-                /* Successfully stopped - We don't care */
-                return;
-
-            case NN_SOFI_DISCONNECTED:
-                /* We are disconnected, but we are stopping - We don't care */
-                _ofi_debug("Stopping Again!\n");
                 return;
 
             default:

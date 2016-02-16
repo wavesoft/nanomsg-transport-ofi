@@ -107,6 +107,9 @@ void nn_sofi_init ( struct nn_sofi *self,
     self->ep = ep;
     self->ng_direction = ng_direction;
 
+    /* Initialize properties */
+    self->conneted = 0;
+
     /* ----------------------------------- */
     /*  libFabric/HLAPI Initialization     */
     /* ----------------------------------- */
@@ -183,54 +186,54 @@ void nn_sofi_stop (struct nn_sofi *self)
     /* Switch to closing */
     int fsm_state = self->state;
     self->state = NN_SOFI_STATE_CLOSING;
+    self->conneted = 0; /* <- Stops Poller Thread */
 
     /* Stop components according to state */
     switch (fsm_state) {
     case NN_SOFI_STATE_IDLE:
-        _ofi_debug("OFI[S]: No components to stop\n");
+        _ofi_debug("OFI[S]: Stopping []\n");
         break;
 
     case NN_SOFI_STATE_INIT_IN:
-        _ofi_debug("OFI[S]: Stopping Input FSM\n");
+        _ofi_debug("OFI[S]: Stopping [fsm_in]\n");
         nn_sofi_in_stop( &self->sofi_in );
         break;
 
     case NN_SOFI_STATE_INIT_OUT:
-        _ofi_debug("OFI[S]: Stopping Input & Output FSM\n");
+        _ofi_debug("OFI[S]: Stopping [fsm_in, fsm_out]\n");
         nn_sofi_in_stop( &self->sofi_in );
         nn_sofi_out_stop( &self->sofi_out );
         break;
 
     case NN_SOFI_STATE_HANDSHAKE_HALF:
-        _ofi_debug("OFI[S]: Stopping Handshake Timer, Input & Output FSM\n");
-        nn_timer_stop( &self->timer_handshake );
-        nn_sofi_in_stop( &self->sofi_in );
-        nn_sofi_out_stop( &self->sofi_out );
-        break;
-
     case NN_SOFI_STATE_HANDSHAKE_FULL:
-        _ofi_debug("OFI[S]: Stopping Handshake Timer, Input & Output FSM\n");
+        _ofi_debug("OFI[S]: Stopping [fsm_in, fsm_out, timer_handshake, "
+            "worker]\n");
         nn_timer_stop( &self->timer_handshake );
         nn_sofi_in_stop( &self->sofi_in );
         nn_sofi_out_stop( &self->sofi_out );
+        nn_thread_term (&self->thread_worker);
         break;
 
     case NN_SOFI_STATE_HANDSHAKE_COMPLETE:
-        _ofi_debug("OFI[S]: Stopping Input & Output FSM\n");
+        _ofi_debug("OFI[S]: Stopping [fsm_in, fsm_out, worker]\n");
         nn_sofi_in_stop( &self->sofi_in );
         nn_sofi_out_stop( &self->sofi_out );
+        nn_thread_term (&self->thread_worker);
         break;
 
     case NN_SOFI_STATE_RUNNING:
-        _ofi_debug("OFI[S]: Stopping Keepalive Timer, Input & Output FSM\n");
+        _ofi_debug("OFI[S]: Stopping [fsm_in, fsm_out, timer_keepalive, "
+            "worker]\n");
         nn_timer_stop( &self->timer_keepalive );
         nn_sofi_in_stop( &self->sofi_in );
         nn_sofi_out_stop( &self->sofi_out );
+        nn_thread_term (&self->thread_worker);
         break;
 
     case NN_SOFI_STATE_CLOSING:
     case NN_SOFI_STATE_CLOSED:
-        _ofi_debug("OFI[S]: No components to stop\n");
+        _ofi_debug("OFI[S]: Stopping []\n");
         break;
 
     }
@@ -304,7 +307,7 @@ static void nn_sofi_poller_thread (void *arg)
 
     /* Keep thread alive while  */
     _ofi_debug("OFI[p]: Starting poller thread\n");
-    while ( self->state == NN_SOFI_STATE_RUNNING ) {
+    while ( self->conneted ) {
 
         /* ========================================= */
         /* Wait for Rx CQ event */
@@ -358,7 +361,8 @@ static void nn_sofi_poller_thread (void *arg)
             /* Check for socket disconnection */
             if (event == FI_SHUTDOWN) {
                 _ofi_debug("OFI[p]: Endpoint Disconnected\n");
-                nn_worker_execute (self->worker, &self->task_disconnect);
+                if (self->state == NN_SOFI_STATE_RUNNING)
+                    nn_worker_execute (self->worker, &self->task_disconnect);
                 break;
             }
 
@@ -423,13 +427,16 @@ static void nn_sofi_shutdown (struct nn_fsm *fsm, int src, int type,
 
     /* If this is part of the FSM action, start shutdown */
     if (nn_slow (src == NN_FSM_ACTION && type == NN_FSM_STOP)) {
+        _ofi_debug("OFI[S]: We are now closing\n");
         self->state = NN_SOFI_STATE_CLOSING;
     }
 
-    /* When closing, ensure everything is closed */
+    /* Before closing, ensure everything is idle */
     if (self->state == NN_SOFI_STATE_CLOSING) {
 
-        /* Wait for all components to be idle */
+        /* Wait for all components to be idle (each one of this
+           component will trigger an event when it becomes idle) */
+        _ofi_debug("OFI[S]: Waiting for all components to be idle\n");
         if (!nn_timer_isidle(&self->timer_handshake)) return;
         if (!nn_timer_isidle(&self->timer_keepalive)) return;
         if (!nn_sofi_in_isidle(&self->sofi_in)) return;
@@ -440,10 +447,16 @@ static void nn_sofi_shutdown (struct nn_fsm *fsm, int src, int type,
 
     }
 
-    /* When closed, clean-up */
+    /* If closed, clean-up */
     if (self->state == NN_SOFI_STATE_CLOSED) {
 
+        /*  Stop endpoint and wait for worker. */
+        _ofi_debug("OFI[S]: Freeing OFI resources\n");
+        ofi_shutdown_ep( self->ep );
+        ofi_free_ep( self->ep );
+
         /* Stop nanomsg components */
+        _ofi_debug("OFI[S]: Stopping pipebase\n");
         nn_pipebase_stop (&self->pipebase);
         nn_fsm_stopped(&self->fsm, NN_SOFI_STOPPED);
         return;
@@ -553,6 +566,11 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
                 /* Rx/Tx Initialized, start handshaking */
                 _ofi_debug("OFI[S]: Performing handshake\n");
                 self->state = NN_SOFI_STATE_HANDSHAKE_HALF;
+
+                /* Start poller thread, which is needed for the Rx/Tx Events */
+                self->conneted = 1;
+                nn_thread_init (&self->thread_worker, nn_sofi_poller_thread, 
+                    self);
 
                 /* Require finite time for the handshake,
                    otherwise abort! */

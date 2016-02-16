@@ -34,10 +34,10 @@
 /* Helper macro to enable or disable verbose logs on console */
 #ifdef OFI_DEBUG_LOG
     #include <stdio.h>
-    // #include <pthread.h>
+    #include <pthread.h>
     /* Enable debug */
-    // #define _ofi_debug(...)   printf("[%012i] ", (int)pthread_self()); printf(__VA_ARGS__);
-    #define _ofi_debug(...)     printf(__VA_ARGS__)
+    #define _ofi_debug(...)   printf("[%012i] ", (int)pthread_self()); printf(__VA_ARGS__);
+    // #define _ofi_debug(...)     printf(__VA_ARGS__)
 #else
     /* Disable debug */
     #define _ofi_debug(...)

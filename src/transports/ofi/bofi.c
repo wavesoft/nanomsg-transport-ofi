@@ -31,15 +31,6 @@
 #include "../../utils/efd.h"
 #include "../../aio/ctx.h"
 
-/* Helper macro to enable or disable verbose logs on console */
-#ifdef OFI_DEBUG_LOG
-    /* Enable debug */
-    #define _ofi_debug(...)   printf(__VA_ARGS__)
-#else
-    /* Disable debug */
-    #define _ofi_debug(...)
-#endif
-
 /* BOFI States */
 #define NN_BOFI_STATE_IDLE              1
 #define NN_BOFI_STATE_ACCEPTING         2

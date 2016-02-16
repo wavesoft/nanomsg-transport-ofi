@@ -271,13 +271,13 @@ static void nn_cofi_handler (struct nn_fsm *self, int src, int type,
         case NN_COFI_SRC_SOFI:
             switch (type) {
 
-            case NN_SOFI_INTERRUPTED:
+            // case NN_SOFI_INTERRUPTED:
 
-                /* SOFI Interrupted (connection broken) */
-                _ofi_debug("OFI[C]: Connection interrupted\n");
-                nn_ep_stop(cofi->epbase.ep);
-                nn_sofi_stop(&cofi->sofi);
-                return;
+            //     /* SOFI Interrupted (connection broken) */
+            //     _ofi_debug("OFI[C]: Connection interrupted\n");
+            //     nn_ep_stop(cofi->epbase.ep);
+            //     nn_sofi_stop(&cofi->sofi);
+            //     return;
 
             case NN_SOFI_STOPPED:
 

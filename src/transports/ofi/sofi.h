@@ -42,7 +42,6 @@
 
 /* Outgoing FSM events towards parent */
 #define NN_SOFI_STOPPED                 1210
-#define NN_SOFI_INTERRUPTED             1211
 
 /* Negotiation direction */
 #define NN_SOFI_NG_NONE                 0
@@ -69,9 +68,6 @@ struct nn_sofi {
 
     /* The worker thread */
     struct nn_thread            thread_worker;
-
-    /* Outgoing events */
-    struct nn_fsm_event         event_interrupted;
 
     /*  Pipe connecting this inproc connection to the nanomsg core. */
     struct nn_pipebase          pipebase;

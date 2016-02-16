@@ -400,16 +400,16 @@ static void nn_bofi_handler (struct nn_fsm *self, int src, int type,
 
                 return;
 
-            case NN_SOFI_INTERRUPTED:
-                /* A remote enpodint was disconnected */
-                _ofi_debug("OFI[B]: Connection interrupted, stopping SOFI\n");
+            // case NN_SOFI_INTERRUPTED:
+            //     /* A remote enpodint was disconnected */
+            //     _ofi_debug("OFI[B]: Connection interrupted, stopping SOFI\n");
 
-                /* Stop sofi */
-                if (!nn_sofi_isidle (sofi)) {
-                    nn_sofi_stop (sofi);
-                }
+            //     /* Stop sofi */
+            //     if (!nn_sofi_isidle (sofi)) {
+            //         nn_sofi_stop (sofi);
+            //     }
 
-                return;
+            //     return;
             default:
                 nn_fsm_bad_action (bofi->state, src, type);
             }
@@ -465,16 +465,16 @@ static void nn_bofi_handler (struct nn_fsm *self, int src, int type,
 
                 return;
 
-            case NN_SOFI_INTERRUPTED:
-                /* A remote enpodint was disconnected */
-                _ofi_debug("OFI[B]: Connection interrupted, stopping SOFI\n");
+            // case NN_SOFI_INTERRUPTED:
+            //     /* A remote enpodint was disconnected */
+            //     _ofi_debug("OFI[B]: Connection interrupted, stopping SOFI\n");
 
-                /* Stop sofi */
-                if (!nn_sofi_isidle (sofi)) {
-                    nn_sofi_stop (sofi);
-                }
+            //     /* Stop sofi */
+            //     if (!nn_sofi_isidle (sofi)) {
+            //         nn_sofi_stop (sofi);
+            //     }
 
-                return;
+            //     return;
             default:
                 nn_fsm_bad_action (bofi->state, src, type);
             }

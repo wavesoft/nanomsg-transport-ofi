@@ -144,9 +144,6 @@ void nn_sofi_init ( struct nn_sofi *self,
     /*  NanoMsg Component Initialization   */
     /* ----------------------------------- */
 
-    /* Initialize events */
-    nn_fsm_event_init (&self->event_interrupted);
-
     /* Initialize timers */
     nn_timer_init(&self->timer_handshake, NN_SOFI_SRC_HANDSHAKE_TIMER, 
         &self->fsm);
@@ -199,9 +196,6 @@ void nn_sofi_term (struct nn_sofi *self)
     /* ----------------------------------- */
     /*  NanoMsg Component Termination      */
     /* ----------------------------------- */
-
-    /* Terminate events */
-    nn_fsm_event_term (&self->event_interrupted);
 
     /* Stop timers */
     nn_timer_term (&self->timer_handshake);
@@ -573,8 +567,6 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
                 _ofi_debug("OFI[S]: Error while initializing OFI-Input\n");
                 self->error = EINTR;
                 nn_sofi_stop(self);
-                // nn_fsm_raise(&self->fsm, &self->event_interrupted, 
-                //     NN_SOFI_INTERRUPTED);
                 return;
 
             default:
@@ -629,8 +621,6 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
                 _ofi_debug("OFI[S]: Error while initializing OFI-Output\n");
                 self->error = EINTR;
                 nn_sofi_stop(self);
-                // nn_fsm_raise(&self->fsm, &self->event_interrupted, 
-                //     NN_SOFI_INTERRUPTED);
                 return;
 
             default:
@@ -670,8 +660,6 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
                 _ofi_debug("OFI[S]: Send error while completing handshake\n");
                 self->error = EINTR;
                 nn_sofi_stop(self);
-                // nn_fsm_raise(&self->fsm, &self->event_interrupted, 
-                //     NN_SOFI_INTERRUPTED);
                 return;
 
             default:
@@ -704,8 +692,6 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
                 _ofi_debug("OFI[S]: Receive error while completing handshake\n");
                 self->error = EINTR;
                 nn_sofi_stop(self);
-                // nn_fsm_raise(&self->fsm, &self->event_interrupted, 
-                //     NN_SOFI_INTERRUPTED);
                 return;
 
             default:
@@ -723,8 +709,6 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
                 _ofi_debug("OFI[S]: Handshake timed out!\n");
                 self->error = ETIMEDOUT;
                 nn_sofi_stop(self);
-                // nn_fsm_raise(&self->fsm, &self->event_interrupted, 
-                //     NN_SOFI_INTERRUPTED);
                 return;
 
             default:
@@ -767,8 +751,6 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
                 _ofi_debug("OFI[S]: Send error while completing handshake\n");
                 self->error = EINTR;
                 nn_sofi_stop(self);
-                // nn_fsm_raise(&self->fsm, &self->event_interrupted, 
-                //     NN_SOFI_INTERRUPTED);
                 return;
 
             default:
@@ -802,8 +784,6 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
                 _ofi_debug("OFI[S]: Receive error while completing handshake\n");
                 self->error = EINTR;
                 nn_sofi_stop(self);
-                // nn_fsm_raise(&self->fsm, &self->event_interrupted, 
-                //     NN_SOFI_INTERRUPTED);
                 return;
 
             default:
@@ -821,8 +801,6 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
                 _ofi_debug("OFI[S]: Handshake timed out!\n");
                 self->error = ETIMEDOUT;
                 nn_sofi_stop(self);
-                // nn_fsm_raise(&self->fsm, &self->event_interrupted, 
-                //     NN_SOFI_INTERRUPTED);
                 return;
 
             default:
@@ -895,8 +873,6 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
                 _ofi_debug("OFI[S]: Error sending data\n");
                 self->error = EIO;
                 nn_sofi_stop(self);
-                // nn_fsm_raise(&self->fsm, &self->event_interrupted, 
-                //     NN_SOFI_INTERRUPTED);
                 return;
 
             default:
@@ -922,8 +898,6 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
                 _ofi_debug("OFI[S]: Error receiving data\n");
                 self->error = EIO;
                 nn_sofi_stop(self);
-                // nn_fsm_raise(&self->fsm, &self->event_interrupted, 
-                //     NN_SOFI_INTERRUPTED);
                 return;
 
             default:
@@ -969,8 +943,6 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
                 _ofi_debug("OFI[S]: Disconnectingn from to socket event\n");
                 self->error = 0;
                 nn_sofi_stop(self);
-                // nn_fsm_raise(&self->fsm, &self->event_interrupted, 
-                //     NN_SOFI_INTERRUPTED);
 
                 return;
 

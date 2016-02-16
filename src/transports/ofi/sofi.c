@@ -203,6 +203,7 @@ void nn_sofi_init ( struct nn_sofi *self,
  */
 void nn_sofi_term (struct nn_sofi *self)
 {
+    _ofi_debug("OFI[S]: Cleaning-up SOFI\n");
 
     /* ----------------------------------- */
     /*  OFI Sub-Component Termination      */
@@ -237,6 +238,10 @@ void nn_sofi_term (struct nn_sofi *self)
     /* ----------------------------------- */
     /*  libFabric/HLAPI Termination        */
     /* ----------------------------------- */
+
+    /* Free endpoint resources */
+    _ofi_debug("OFI[S]: Freeing OFI resources\n");
+    ofi_free_ep( self->ep );
 
 }
 
@@ -477,9 +482,8 @@ static void nn_sofi_shutdown (struct nn_fsm *fsm, int src, int type,
     if (self->state == NN_SOFI_STATE_CLOSED) {
 
         /*  Stop endpoint and wait for worker. */
-        _ofi_debug("OFI[S]: Freeing OFI resources\n");
+        _ofi_debug("OFI[S]: Stopping OFI endpoint\n");
         ofi_shutdown_ep( self->ep );
-        ofi_free_ep( self->ep );
 
         /* Stop nanomsg components */
         _ofi_debug("OFI[S]: Stopping pipebase\n");

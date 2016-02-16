@@ -389,7 +389,7 @@ static void nn_bofi_handler (struct nn_fsm *self, int src, int type,
             switch (type) {
             case NN_SOFI_STOPPED:
                 /* The SOFI fsm was stopped */
-                _ofi_debug("OFI[B]: Cleaning-up SOFI\n");
+                _ofi_debug("OFI[B]: Marking SOFI as inactive\n");
 
                 /* Remove item from list */
                 nn_list_erase (&bofi->sofis, &sofi->item);
@@ -454,7 +454,7 @@ static void nn_bofi_handler (struct nn_fsm *self, int src, int type,
             switch (type) {
             case NN_SOFI_STOPPED:
                 /* The SOFI fsm was stopped */
-                _ofi_debug("OFI[B]: Cleaning-up SOFI\n");
+                _ofi_debug("OFI[B]: Marking SOFI as inactive\n");
 
                 /* Remove item from list */
                 nn_list_erase (&bofi->sofis, &sofi->item);

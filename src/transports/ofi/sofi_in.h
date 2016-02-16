@@ -24,7 +24,6 @@
 #define NN_SOFI_IN_INCLUDED
 
 #include "hlapi.h"
-
 #include "../../transport.h"
 #include "../../aio/fsm.h"
 #include "../../aio/timer.h"
@@ -34,6 +33,10 @@
 #define NN_SOFI_IN_EVENT_RECEIVED       2202
 #define NN_SOFI_IN_EVENT_ERROR          2203
 #define NN_SOFI_IN_EVENT_CLOSE          2204
+
+/* MR Keys */
+#define NN_SOFI_IN_MR_SMALL             0xF200
+#define NN_SOFI_IN_MR_INPUT             0xF201
 
 /**
  * The [INPUT SOFI] FSM is used like this:
@@ -93,6 +96,9 @@ struct nn_sofi_in {
 
     /* Abort cleanup timeout */
     struct nn_timer             timer_abort;
+
+    /* Buffers */
+    struct ofi_mr               mr_small;
 
 };
 

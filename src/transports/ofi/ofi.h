@@ -50,10 +50,13 @@
 /* Default slab memory size (I/O operations with this size
  * or less will be memcpy'ied to the share memory slab). Above this,
  * they will be tagged as shared and sent as-is. */
-#define NN_OFI_DEFAULT_SLABMR_SIZE 65536
+#define NN_OFI_DEFAULT_SLABMR_SIZE  65536
+
+/* Message size for blocking small I/O */
+#define NN_OFI_SMALLMR_SIZE         1024
 
 /* SOFI Source */
-#define NN_OFI_SRC_SOFI     1000
+#define NN_OFI_SRC_SOFI             1000
 
 extern struct nn_transport *nn_ofi;
 

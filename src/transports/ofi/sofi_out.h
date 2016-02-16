@@ -24,7 +24,6 @@
 #define NN_SOFI_OUT_INCLUDED
 
 #include "hlapi.h"
-
 #include "../../transport.h"
 #include "../../aio/fsm.h"
 #include "../../aio/timer.h"
@@ -34,6 +33,10 @@
 #define NN_SOFI_OUT_EVENT_SENT          3202
 #define NN_SOFI_OUT_EVENT_ERROR         3203
 #define NN_SOFI_OUT_EVENT_CLOSE         3204
+
+/* MR Keys */
+#define NN_SOFI_OUT_MR_SMALL            0xF300
+#define NN_SOFI_OUT_MR_OUTPUT_BASE      0xF301
 
 /**
  * The [OUTPUT SOFI] FSM is used like this:
@@ -91,6 +94,9 @@ struct nn_sofi_out {
 
     /* Abort cleanup timeout */
     struct nn_timer             timer_abort;
+
+    /* Buffers */
+    struct ofi_mr               mr_small;
 
 };
 

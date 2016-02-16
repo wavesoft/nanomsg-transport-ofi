@@ -22,6 +22,8 @@
 
 #include "ofi.h"
 #include "sofi_out.h"
+
+#include "../../utils/alloc.h"
 #include "../../utils/cont.h"
 #include "../../utils/err.h"
 #include "../../utils/fast.h"
@@ -68,6 +70,12 @@ void nn_sofi_out_init (struct nn_sofi_out *self,
 {
     _ofi_debug("OFI[o]: Initializing Output FSM\n");
 
+    /* Initialize properties */
+    self->state = NN_SOFI_OUT_STATE_IDLE;
+    self->error = 0;
+    self->ofi = ofi;
+    self->ep = ep;
+
     /* Initialize events */
     nn_fsm_event_init (&self->event_started);
     nn_fsm_event_init (&self->event_sent);
@@ -91,9 +99,12 @@ void nn_sofi_out_init (struct nn_sofi_out *self,
     nn_timer_init(&self->timer_abort, NN_SOFI_OUT_SRC_TIMER, 
         &self->fsm);
 
-    /* Reset properties */
-    self->state = NN_SOFI_OUT_STATE_IDLE;
-    self->error = 0;
+    /* Manage a new MR for small blocking calls */
+    ofi_mr_init( ep, &self->mr_small );
+    ofi_mr_manage( ep, &self->mr_small, 
+        nn_alloc(NN_OFI_SMALLMR_SIZE, "mr_small"), 
+        NN_OFI_SMALLMR_SIZE,
+        NN_SOFI_OUT_MR_SMALL, MR_RECV );
 
 }
 
@@ -107,6 +118,10 @@ int nn_sofi_out_isidle (struct nn_sofi_out *self)
 void nn_sofi_out_term (struct nn_sofi_out *self)
 {
     _ofi_debug("OFI[o]: Terminating Output FSM\n");
+
+    /* Free MR */
+    nn_free( self->mr_small.ptr );
+    ofi_mr_free( self->ep, &self->mr_small );
 
     /* Abort timer */
     nn_timer_term (&self->timer_abort);
@@ -216,9 +231,24 @@ void nn_sofi_out_tx_event_send( struct nn_sofi_out *self )
 /**
  * Synchronous (blocking) tx request 
  */
-size_t nn_sofi_out_tx( struct nn_sofi_out *self, void * ptr, size_t max_sz, int timeout )
+size_t nn_sofi_out_tx( struct nn_sofi_out *self, void * ptr, 
+    size_t max_sz, int timeout )
 {
-    return -1;
+    int ret;
+
+    /* Check if message does not fit in the buffer */
+    if (max_sz > NN_OFI_SMALLMR_SIZE)
+        return -ENOMEM;
+
+    /* Move data to small MR */
+    memcpy( self->mr_small.ptr, ptr, max_sz );
+
+    /* Receive data synchronously */
+    ret = ofi_tx_data( self->ep, self->mr_small.ptr, max_sz, 
+        OFI_MR_DESC(self->mr_small), timeout );
+
+    /* Return result */
+    return ret;
 }
 
 /* ============================== */
@@ -249,6 +279,7 @@ static void nn_sofi_out_shutdown (struct nn_fsm *fsm, int src, int type,
 
         } else {
             nn_fsm_bad_state (self->state, src, type);    
+
         }
 
         return;

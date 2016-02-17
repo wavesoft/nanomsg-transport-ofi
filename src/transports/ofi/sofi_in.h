@@ -36,7 +36,7 @@
 
 /* MR Keys */
 #define NN_SOFI_IN_MR_SMALL             0xF200
-#define NN_SOFI_IN_MR_INPUT             0xF201
+#define NN_SOFI_IN_MR_INPUT_BASE        0xF201
 
 /**
  * The [INPUT SOFI] FSM is used like this:

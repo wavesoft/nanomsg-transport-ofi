@@ -222,10 +222,15 @@ void nn_sofi_out_tx_error_event( struct nn_sofi_out *self, int err_number )
 /**
  * Trigger the transmission of a packet
  */
-void nn_sofi_out_tx_event_send( struct nn_sofi_out *self )
+int nn_sofi_out_tx_event_send( struct nn_sofi_out *self, struct nn_msg *msg )
 {
+    /* Check if this is already in queue */
+
     /* Trigger worker task */
     nn_worker_execute (self->worker, &self->task_tx_send);
+
+    /* We are good */
+    return 0;
 }
 
 /**

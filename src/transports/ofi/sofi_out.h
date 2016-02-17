@@ -25,6 +25,7 @@
 
 #include "hlapi.h"
 #include "../../transport.h"
+#include "../../utils/msg.h"
 #include "../../aio/fsm.h"
 #include "../../aio/timer.h"
 
@@ -127,7 +128,7 @@ void nn_sofi_out_term (struct nn_sofi_out *self);
 /* ============================== */
 
 /* Trigger the transmission of a packet */
-void nn_sofi_out_tx_event_send( struct nn_sofi_out *self );
+int nn_sofi_out_tx_event_send( struct nn_sofi_out *self, struct nn_msg *msg );
 
 /* Trigger an rx event */
 void nn_sofi_out_tx_event( struct nn_sofi_out *self );

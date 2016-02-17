@@ -49,7 +49,8 @@
 #define NN_SOFI_IN_TIMEOUT_ABORT        1000
 
 /* Incoming MR flags */
-#define NN_SOFI_IN_MR_FLAG_LOCKED       0x00000001
+#define NN_SOFI_IN_MR_FLAG_POSTED       0x00000001
+#define NN_SOFI_IN_MR_FLAG_LOCKED       0x00000002
 
 /* Forward Declarations */
 static void nn_sofi_in_handler (struct nn_fsm *self, int src, int type, 
@@ -113,8 +114,8 @@ static int nn_sofi_in_post_buffers(struct nn_sofi_in *self)
             * chunk_end = self->mr_chunks + self->queue_size;
          chunk < chunk_end; chunk++ ) {
 
-        /* If we found a free chunk, use it */
-        if (!(chunk->flags & NN_SOFI_IN_MR_FLAG_LOCKED)) {
+        /* If we found a free chunk (not posted and not locked), use it */
+        if (chunk->flags == 0) {
             pick_chunk = chunk;
             break; 
         }
@@ -157,8 +158,8 @@ static int nn_sofi_in_post_buffers(struct nn_sofi_in *self)
         return -EBADF;
     }
 
-    /* Lock chunk */
-    pick_chunk->flags |= NN_SOFI_IN_MR_FLAG_LOCKED;
+    /* Mark chunk as posted */
+    pick_chunk->flags |= NN_SOFI_IN_MR_FLAG_POSTED;
 
     /* Successful */
     return 0;
@@ -379,8 +380,10 @@ void nn_sofi_in_rx_event( struct nn_sofi_in *self,
     struct nn_sofi_in_chunk * chunk = cq_entry->op_context;
     _ofi_debug("OFI[o]: Got CQ event for the received frame, ctx=%p\n", cq_entry->op_context);
 
-    /* Unlock mrm chunk */
-    chunk->flags &= ~NN_SOFI_IN_MR_FLAG_LOCKED;
+    /* The chunk is not posted any more, but it's now locked because the
+       contents of the buffer must perserved till acknowledged. */
+    chunk->flags &= ~NN_SOFI_IN_MR_FLAG_POSTED;
+    chunk->flags |= NN_SOFI_IN_MR_FLAG_LOCKED;
 
     /* We can only receive if we are in POSTED or SENDING state */
     nn_assert( self->state != NN_SOFI_IN_STATE_POSTED );
@@ -401,8 +404,9 @@ void nn_sofi_in_rx_error_event( struct nn_sofi_in *self,
     struct nn_sofi_in_chunk * chunk = cq_entry->op_context;
     _ofi_debug("OFI[o]: Got CQ error for the received frame, ctx=%p\n", cq_entry->op_context);
 
-    /* Unlock mrm chunk */
-    chunk->flags &= ~NN_SOFI_IN_MR_FLAG_LOCKED;
+    /* The chunk is not posted any more, neither locked since we are not
+       going to process it further. */
+    chunk->flags &= ~NN_SOFI_IN_MR_FLAG_POSTED;
 
     /* Trigger worker task */
     nn_worker_execute (self->worker, &self->task_rx_error);

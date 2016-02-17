@@ -138,7 +138,8 @@ void nn_sofi_out_tx_event( struct nn_sofi_out *self,
     struct fi_cq_data_entry * cq_entry );
 
 /* Trigger an rx erro event */
-void nn_sofi_out_tx_error_event( struct nn_sofi_out *self, int err_number );
+void nn_sofi_out_tx_error_event( struct nn_sofi_out *self, 
+    struct fi_cq_err_entry * cq_err );
 
 /** Synchronous (blocking) tx request */
 size_t nn_sofi_out_tx( struct nn_sofi_out *self, void * ptr, size_t max_sz, int timeout );

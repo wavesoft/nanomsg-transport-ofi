@@ -325,8 +325,9 @@ static void nn_sofi_poller_thread (void *arg)
     uint32_t event;
     int ret;
 
-    /* Keep thread alive while  */
     _ofi_debug("OFI[p]: Starting poller thread\n");
+
+    /* Keep thread alive while the THREAD_ACTIVE flag is set  */
     while ( self->flags & NN_SOFI_FLAGS_THREAD_ACTIVE ) {
 
         /* ========================================= */
@@ -337,7 +338,7 @@ static void nn_sofi_poller_thread (void *arg)
 
             /* Trigger rx worker task */
             _ofi_debug("OFI[p]: Rx CQ Event\n");
-            nn_sofi_in_rx_event( &self->sofi_in );
+            nn_sofi_in_rx_event( &self->sofi_in, &cq_entry );
 
         } else if (nn_slow(ret != -FI_EAGAIN)) {
 
@@ -346,7 +347,7 @@ static void nn_sofi_poller_thread (void *arg)
             _ofi_debug("OFI[p]: Rx CQ Error (ret=%i)\n", err_entry.err );
 
             /* Trigger rx error worker task */
-            nn_sofi_in_rx_error_event( &self->sofi_in, err_entry.err );
+            nn_sofi_in_rx_error_event( &self->sofi_in, &err_entry );
 
         }
 
@@ -367,7 +368,7 @@ static void nn_sofi_poller_thread (void *arg)
             _ofi_debug("OFI[p]: Tx CQ Error (ret=%i)\n", err_entry.err );
 
             /* Trigger tx error worker task */
-            nn_sofi_out_tx_error_event( &self->sofi_out, err_entry.err );
+            nn_sofi_out_tx_error_event( &self->sofi_out, &err_entry );
 
         }
 

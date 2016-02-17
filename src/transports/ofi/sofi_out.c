@@ -235,8 +235,15 @@ void nn_sofi_out_tx_event( struct nn_sofi_out *self,
 /**
  * Trigger a tx error event
  */
-void nn_sofi_out_tx_error_event( struct nn_sofi_out *self, int err_number )
+void nn_sofi_out_tx_error_event( struct nn_sofi_out *self, 
+    struct fi_cq_err_entry * cq_err )
 {
+    struct nn_ofi_mrm_chunk * chunk = cq_err->op_context;
+    _ofi_debug("OFI[o]: Got CQ event for the sent frame, ctx=%p\n", cq_err->op_context);
+
+    /* Unlock mrm chunk */
+    nn_ofi_mrm_unlock( chunk );
+
     /* Trigger worker task */
     nn_worker_execute (self->worker, &self->task_tx_error);
 }

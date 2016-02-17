@@ -224,7 +224,8 @@ void nn_sofi_in_stop (struct nn_sofi_in *self)
 /**
  * Trigger an rx event
  */
-void nn_sofi_in_rx_event( struct nn_sofi_in *self )
+void nn_sofi_in_rx_event( struct nn_sofi_in *self, 
+    struct fi_cq_data_entry * cq_entry )
 {
     /* Trigger worker task */
     nn_worker_execute (self->worker, &self->task_rx);
@@ -233,7 +234,8 @@ void nn_sofi_in_rx_event( struct nn_sofi_in *self )
 /**
  * Trigger an rx error event
  */
-void nn_sofi_in_rx_error_event( struct nn_sofi_in *self, int err_number )
+void nn_sofi_in_rx_error_event( struct nn_sofi_in *self, 
+    struct fi_cq_err_entry * cq_err )
 {
     /* Trigger worker task */
     nn_worker_execute (self->worker, &self->task_rx_error);

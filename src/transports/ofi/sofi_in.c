@@ -401,8 +401,8 @@ void nn_sofi_in_rx_event( struct nn_sofi_in *self,
 void nn_sofi_in_rx_error_event( struct nn_sofi_in *self, 
     struct fi_cq_err_entry * cq_err )
 {
-    struct nn_sofi_in_chunk * chunk = cq_entry->op_context;
-    _ofi_debug("OFI[o]: Got CQ error for the received frame, ctx=%p\n", cq_entry->op_context);
+    struct nn_sofi_in_chunk * chunk = cq_err->op_context;
+    _ofi_debug("OFI[o]: Got CQ error for the received frame, ctx=%p\n", cq_err->op_context);
 
     /* The chunk is not posted any more, neither locked since we are not
        going to process it further. */

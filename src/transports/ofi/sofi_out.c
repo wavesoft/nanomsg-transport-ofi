@@ -53,6 +53,7 @@ static void nn_sofi_out_handler (struct nn_fsm *self, int src, int type,
 static void nn_sofi_out_shutdown (struct nn_fsm *self, int src, int type, 
     void *srcptr);
 
+
 /* ============================== */
 /*       HELPER FUNCTIONS         */
 /* ============================== */
@@ -63,10 +64,10 @@ static void nn_sofi_out_shutdown (struct nn_fsm *self, int src, int type,
 /* ============================== */
 
 /*  Initialize the state machine */
-void nn_sofi_out_init (struct nn_sofi_out *self, 
+void nn_sofi_out_init ( struct nn_sofi_out *self, 
     struct ofi_resources *ofi, struct ofi_active_endpoint *ep,
-    const uint8_t ng_direction, struct nn_pipebase * pipebase,
-    int src, struct nn_fsm *owner)
+    const uint8_t ng_direction, int queue_size,
+    struct nn_pipebase * pipebase, int src, struct nn_fsm *owner )
 {
     _ofi_debug("OFI[o]: Initializing Output FSM\n");
 
@@ -106,6 +107,10 @@ void nn_sofi_out_init (struct nn_sofi_out *self,
         NN_OFI_SMALLMR_SIZE,
         NN_SOFI_OUT_MR_SMALL, MR_RECV );
 
+    /* Initialize MRM for managing multiple memory regions */
+    nn_ofi_mrm_init( &self->mrm, ep, queue_size, NN_SOFI_OUT_MR_OUTPUT_BASE,
+        FI_SEND | FI_WRITE | FI_REMOTE_READ );
+
 }
 
 /* Check if FSM is idle */
@@ -122,6 +127,9 @@ void nn_sofi_out_term (struct nn_sofi_out *self)
     /* Free MR */
     nn_free( self->mr_small.ptr );
     ofi_mr_free( self->ep, &self->mr_small );
+
+    /* Free MRM */
+    nn_ofi_mrm_term( &self->mrm );
 
     /* Abort timer */
     nn_timer_term (&self->timer_abort);

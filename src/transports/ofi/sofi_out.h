@@ -24,6 +24,8 @@
 #define NN_SOFI_OUT_INCLUDED
 
 #include "hlapi.h"
+#include "utils/mrm.h"
+
 #include "../../transport.h"
 #include "../../utils/msg.h"
 #include "../../aio/fsm.h"
@@ -98,6 +100,7 @@ struct nn_sofi_out {
 
     /* Buffers */
     struct ofi_mr               mr_small;
+    struct nn_ofi_mrm           mrm;
 
 };
 
@@ -108,8 +111,8 @@ struct nn_sofi_out {
 /*  Initialize the state machine */
 void nn_sofi_out_init ( struct nn_sofi_out *self, 
     struct ofi_resources *ofi, struct ofi_active_endpoint *ep,
-    const uint8_t ng_direction, struct nn_pipebase * pipebase,
-    int src, struct nn_fsm *owner );
+    const uint8_t ng_direction, int queue_size,
+    struct nn_pipebase * pipebase, int src, struct nn_fsm *owner );
 
 /* Check if FSM is idle */
 int nn_sofi_out_isidle (struct nn_sofi_out *self);

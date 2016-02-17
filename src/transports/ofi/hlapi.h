@@ -49,6 +49,21 @@
 #define FT_PRINTERR(call, retv) \
 	do { fprintf(stderr, "OFI: Error on " call "(): %s:%d, ret=%d (%s)\n", __FILE__, __LINE__, (int) retv, fi_strerror((int) -retv)); } while (0)
 
+#define FT_CLOSE_FID(fd)			\
+	do {					\
+		if ((fd)) {			\
+			int ret = fi_close(&(fd)->fid);	\
+			if (ret) { \
+				if (ret == -FI_EBUSY) { \
+					printf("OFI[H]: *** Error closing FD " #fd " (FI_EBUSY)\n"); \
+				} else { \
+					printf("OFI[H]: *** Error closing FD " #fd " caused error = %i\n", ret); \
+				} \
+			} \
+			fd = NULL;		\
+		}				\
+	} while (0)
+
 /* Forward declarations */
 struct ofi_mr;
 

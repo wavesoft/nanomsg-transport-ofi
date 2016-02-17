@@ -129,7 +129,6 @@ void nn_sofi_init ( struct nn_sofi *self,
     const uint8_t ng_direction, struct nn_epbase *epbase, int src, 
     struct nn_fsm *owner )
 {
-
     /* Keep references */
     self->ofi = ofi;
     self->ep = ep;
@@ -180,13 +179,18 @@ void nn_sofi_init ( struct nn_sofi *self,
     /*  OFI Sub-Component Initialization   */
     /* ----------------------------------- */
 
+    /* Get options */
+    int rx_queue, tx_queue;
+    size_t opt_sz = sizeof(int);
+    nn_epbase_getopt (epbase, NN_OFI, NN_OFI_TX_QUEUE_SIZE, &rx_queue, &opt_sz);
+
     /* Initialize INPUT Sofi */
     nn_sofi_in_init( &self->sofi_in, ofi, ep, ng_direction, &self->pipebase,
         NN_SOFI_SRC_IN_FSM, &self->fsm );
 
     /* Initialize OUTPUT Sofi */
-    nn_sofi_out_init( &self->sofi_out, ofi, ep, ng_direction, &self->pipebase,
-        NN_SOFI_SRC_OUT_FSM, &self->fsm );
+    nn_sofi_out_init( &self->sofi_out, ofi, ep, ng_direction, rx_queue,
+        &self->pipebase, NN_SOFI_SRC_OUT_FSM, &self->fsm );
 
     /* ----------------------------------- */
     /*  Bootstrap FSM                      */

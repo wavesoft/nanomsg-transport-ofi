@@ -72,21 +72,6 @@
 #define FT_PROCESS_EQ_ERR(rd, eq, fn, str) \
 	FT_PROCESS_QUEUE_ERR(dbg_readerr, rd, eq, fn, str)
 
-#define FT_CLOSE_FID(fd)			\
-	do {					\
-		if ((fd)) {			\
-			int ret = fi_close(&(fd)->fid);	\
-			if (ret) { \
-				if (ret == -FI_EBUSY) { \
-					printf("OFI[H]: *** Error closing FD " #fd " (FI_EBUSY)\n"); \
-				} else { \
-					printf("OFI[H]: *** Error closing FD " #fd " caused error = %i\n", ret); \
-				} \
-			} \
-			fd = NULL;		\
-		}				\
-	} while (0)
-
 #define MAX(a,b) ((a>b) ? a : b)
 
 

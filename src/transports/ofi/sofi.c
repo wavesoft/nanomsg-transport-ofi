@@ -178,16 +178,18 @@ void nn_sofi_init ( struct nn_sofi *self,
     /* ----------------------------------- */
 
     /* Get options */
-    int rx_queue, tx_queue;
+    int rx_queue, tx_queue, rx_msg_size;
     size_t opt_sz = sizeof(int);
-    nn_epbase_getopt (epbase, NN_OFI, NN_OFI_TX_QUEUE_SIZE, &rx_queue, &opt_sz);
+    nn_epbase_getopt (epbase, NN_OFI, NN_OFI_TX_QUEUE_SIZE, &tx_queue, &opt_sz);
+    nn_epbase_getopt (epbase, NN_OFI, NN_OFI_RX_QUEUE_SIZE, &rx_queue, &opt_sz);
+    nn_epbase_getopt (epbase, NN_SOL_SOCKET, NN_RCVBUF, &rx_msg_size, &opt_sz);
 
     /* Initialize INPUT Sofi */
-    nn_sofi_in_init( &self->sofi_in, ofi, ep, ng_direction, &self->pipebase,
-        NN_SOFI_SRC_IN_FSM, &self->fsm );
+    nn_sofi_in_init( &self->sofi_in, ofi, ep, ng_direction, rx_queue, rx_msg_size,
+        &self->pipebase, NN_SOFI_SRC_IN_FSM, &self->fsm );
 
     /* Initialize OUTPUT Sofi */
-    nn_sofi_out_init( &self->sofi_out, ofi, ep, ng_direction, rx_queue,
+    nn_sofi_out_init( &self->sofi_out, ofi, ep, ng_direction, tx_queue,
         &self->pipebase, NN_SOFI_SRC_OUT_FSM, &self->fsm );
 
     /* ----------------------------------- */

@@ -29,7 +29,7 @@ extern "C" {
 
 #define NN_OFI -6
 
-#define NN_OFI_SLABMR_SIZE 1
+#define NN_OFI_RX_QUEUE_SIZE 1
 #define NN_OFI_TX_QUEUE_SIZE 2
 
 #ifdef __cplusplus

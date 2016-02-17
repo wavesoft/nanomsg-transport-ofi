@@ -48,6 +48,9 @@
 /* Timeout values */
 #define NN_SOFI_IN_TIMEOUT_ABORT        1000
 
+/* Incoming MR flags */
+#define NN_SOFI_IN_MR_FLAG_LOCKED       0x00000001
+
 /* Forward Declarations */
 static void nn_sofi_in_handler (struct nn_fsm *self, int src, int type, 
     void *srcptr);
@@ -58,15 +61,110 @@ static void nn_sofi_in_shutdown (struct nn_fsm *self, int src, int type,
 /*       HELPER FUNCTIONS         */
 /* ============================== */
 
+#include "../../utils/atomic.h"
+#include "../../utils/wire.h"
+
+/* Local copy of private API of `chunk.c` */
+typedef void (*nn_ofi_chunk_free_fn_copy) (void *p);
+struct nn_chunk_copy {
+    struct nn_atomic refcount;
+    size_t size;
+    nn_ofi_chunk_free_fn_copy ffn;
+};
+
+/* Hack-update chunk size 
+   WARNING: This code shares a major part with `nn_chunk_getptr`
+   TODO: Perhaps expose the private API from `chunk.c` ? */
+static void nn_sofi_in_set_chunk_size( void * p, size_t size )
+{
+    struct nn_chunk_copy* header;
+    uint32_t tag;
+    uint32_t off;
+
+    tag = nn_getl((uint8_t*) p - sizeof (uint32_t));
+    nn_assert ( (tag == 0xdeadcafe) || (tag == 0xdeadd00d) );
+
+    /* On user-pointer chunks the offset is virtual */
+    if (tag == 0xdeadd00d) {
+        off = 0;
+    } else {
+        off = nn_getl( (uint8_t*) p - 2 * sizeof (uint32_t) );
+    }
+
+    /* Get chunk head */
+    header = (struct nn_chunk_copy*)((uint8_t*) p - 2*sizeof (uint32_t) - off -
+        sizeof (struct nn_chunk_copy));
+
+    /* Update size */
+    header->size = size;
+
+}
+
 /* Post buffers */
 static int nn_sofi_in_post_buffers(struct nn_sofi_in *self)
 {
+    int ret;
+    void * desc[1];
+    struct iovec iov[1];
+    struct nn_sofi_in_chunk * pick_chunk = NULL;
+
+    /* Pick the first available free input chunk */
+    for (struct nn_sofi_in_chunk * chunk = self->mr_chunks, 
+            * chunk_end = self->mr_chunks + self->queue_size;
+         chunk < chunk_end; chunk++ ) {
+
+        /* If we found a free chunk, use it */
+        if (!(chunk->flags & NN_SOFI_IN_MR_FLAG_LOCKED)) {
+            pick_chunk = chunk;
+            break; 
+        }
+    }
+
+    /* If nothing found, we ran out of memory */
+    if (!pick_chunk)
+        return -ENOMEM;
+
+    /* Prepare IOV */
+    iov[0].iov_base = pick_chunk->chunk;
+    iov[0].iov_len = self->msg_size;
+
+    /* Prepare MR Desc */
+    desc[0] = fi_mr_desc( pick_chunk->mr );
+
+    /* Prepare fi_msg */
+    struct fi_msg msg = {
+        .msg_iov = iov,
+        .iov_count = 1,
+        .desc = desc,
+        .addr = self->ep->remote_fi_addr,
+        .context = pick_chunk,
+        .data = 0
+    };
+
+    /* Post receive buffers */
+    ret = fi_recvmsg(self->ep->ep, &msg, 0);
+    if (ret) {
+
+        /* If we are in a bad state, we were remotely disconnected */
+        if (ret == -FI_EOPBADSTATE) {
+            _ofi_debug("OFI[i]: fi_recvmsg() returned %i, considering shutdown.\n", ret);
+            return -EINTR;
+        }
+
+        /* Otherwise display error */
+        FT_PRINTERR("nn_sofi_in_post_buffers->fi_recvmsg", ret);
+        return -EBADF;
+    }
+
+    /* Lock chunk */
+    pick_chunk->flags |= NN_SOFI_IN_MR_FLAG_LOCKED;
+
     /* Successful */
     return 0;
 }
 
 /* Move buffers for pick-up by SOFI */
-static void nn_sofi_in_move_buffers(struct nn_sofi_in *self)
+static void nn_sofi_in_pop_buffers(struct nn_sofi_in *self)
 {
 
 }
@@ -78,11 +176,12 @@ static void nn_sofi_in_move_buffers(struct nn_sofi_in *self)
 /**
  * Initialize the state machine 
  */
-void nn_sofi_in_init (struct nn_sofi_in *self, 
+void nn_sofi_in_init ( struct nn_sofi_in *self, 
     struct ofi_resources *ofi, struct ofi_active_endpoint *ep,
-    const uint8_t ng_direction, struct nn_pipebase * pipebase,
-    int src, struct nn_fsm *owner)
+    const uint8_t ng_direction, int queue_size, size_t msg_size,
+    struct nn_pipebase * pipebase, int src, struct nn_fsm *owner )
 {
+    int ret, offset;
     _ofi_debug("OFI[i]: Initializing Input FSM\n");
 
     /* Reset properties */
@@ -90,6 +189,8 @@ void nn_sofi_in_init (struct nn_sofi_in *self,
     self->error = 0;
     self->ofi = ofi;
     self->ep = ep;
+    self->msg_size = msg_size;
+    self->queue_size = queue_size;
 
     /* Initialize events */
     nn_fsm_event_init (&self->event_started);
@@ -118,8 +219,39 @@ void nn_sofi_in_init (struct nn_sofi_in *self,
     ofi_mr_init( ep, &self->mr_small );
     ofi_mr_manage( ep, &self->mr_small, 
         nn_alloc(NN_OFI_SMALLMR_SIZE, "mr_small"), 
-        NN_OFI_SMALLMR_SIZE,
-        NN_SOFI_IN_MR_SMALL, MR_RECV );
+        NN_OFI_SMALLMR_SIZE, NN_SOFI_IN_MR_SMALL, MR_RECV );
+
+    /* Allocate chunk buffer */
+    self->mr_chunks = nn_alloc( sizeof (struct nn_sofi_in_chunk) * queue_size,
+        "mr chunks" );
+    nn_assert( self->mr_chunks );
+
+    /* Allocate the incoming buffers */
+    _ofi_debug("OFI[i]: Allocating buffers len=%i, size=%lu\n", queue_size, 
+        msg_size);
+
+    offset = 0;
+    for (struct nn_sofi_in_chunk * chunk = self->mr_chunks, 
+            * chunk_end = self->mr_chunks + queue_size;
+         chunk < chunk_end; chunk++ ) {
+
+        /* Init properties */
+        chunk->flags = 0;
+
+        /* Allocate message chunk */
+        ret = nn_chunk_alloc( msg_size, 0, &chunk->chunk );
+        nn_assert( ret == 0 );
+
+        /* Register this memory region */
+        ret = fi_mr_reg( ep->domain, chunk->chunk, msg_size, 
+            FI_RECV | FI_READ | FI_REMOTE_WRITE, 0, 
+            NN_SOFI_IN_MR_INPUT_BASE + (offset++), 0, &chunk->mr, NULL);
+        nn_assert( ret == 0 );
+
+        /* Increment reference counter so it never gets released */
+        nn_chunk_addref( chunk->chunk, 1 );
+
+    }
 
 }
 
@@ -141,6 +273,22 @@ void nn_sofi_in_term (struct nn_sofi_in *self)
     /* Free MR */
     nn_free( self->mr_small.ptr );
     ofi_mr_free( self->ep, &self->mr_small );
+
+    /* Free pointers */
+    for (struct nn_sofi_in_chunk * chunk = self->mr_chunks, 
+            * chunk_end = self->mr_chunks + self->queue_size;
+         chunk < chunk_end; chunk++ ) {
+
+        /* No chunk must not be locked at shutdown time */
+        nn_assert( (chunk->flags & NN_SOFI_IN_MR_FLAG_LOCKED) == 0 );
+
+        /* Free everything */
+        FT_CLOSE_FID( chunk->mr );
+        nn_chunk_addref( chunk->chunk, -1 );
+        nn_chunk_free( chunk->chunk );
+
+    }
+    nn_free( self->mr_chunks );
 
     /* Abort timer */
     nn_timer_term (&self->timer_abort);
@@ -346,7 +494,8 @@ static void nn_sofi_in_handler (struct nn_fsm *fsm, int src, int type,
             case NN_FSM_START:
 
                 /* Post buffers */
-                if (!nn_sofi_in_post_buffers( self )) {
+                self->error = nn_sofi_in_post_buffers( self );
+                if (!self->error) {
 
                     /* When successful switch to POSTED state */
                     _ofi_debug("OFI[i]: Input buffers posted\n");
@@ -393,7 +542,7 @@ static void nn_sofi_in_handler (struct nn_fsm *fsm, int src, int type,
 
                 /* Move data to rx buffer */
                 _ofi_debug("OFI[i]: Data Rx event\n");
-                nn_sofi_in_move_buffers( self );
+                nn_sofi_in_pop_buffers( self );
 
                 /* Switch into processing */
                 self->state = NN_SOFI_IN_STATE_PROCESSING;
@@ -446,7 +595,8 @@ static void nn_sofi_in_handler (struct nn_fsm *fsm, int src, int type,
 
                 /* Post buffers */
                 _ofi_debug("OFI[i]: Acknowledged receive event\n");
-                if (!nn_sofi_in_post_buffers( self )) {
+                self->error = nn_sofi_in_post_buffers( self );
+                if (!self->error) {
 
                     /* When successful switch to POSTED state */
                     _ofi_debug("OFI[i]: Input buffers posted\n");

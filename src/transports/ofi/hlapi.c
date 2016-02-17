@@ -1236,7 +1236,7 @@ int ofi_mr_manage( struct ofi_active_endpoint * EP, struct ofi_mr * mr, void * b
 		access_flags |= FI_SEND | FI_WRITE | FI_REMOTE_READ;
 	}
 	if (flags == MR_RECV) {
-		access_flags |= FI_RECV | FI_RECV | FI_REMOTE_WRITE;
+		access_flags |= FI_RECV | FI_READ | FI_REMOTE_WRITE;
 	}
 
 	/* Register buffer */

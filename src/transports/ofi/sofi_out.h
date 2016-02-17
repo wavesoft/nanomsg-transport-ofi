@@ -77,9 +77,6 @@ struct nn_sofi_out {
     int                         state;
     int                         error;
 
-    /* The outgoing message */
-    struct nn_msg               outmsg;
-
     /* References */
     struct nn_pipebase          * pipebase;
     struct ofi_resources        * ofi;

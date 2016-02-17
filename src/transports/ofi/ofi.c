@@ -35,7 +35,7 @@
 /* OFI-Specific socket options */
 struct nn_ofi_optset {
     struct nn_optset base;
-    int slab_mr_size;
+    int rx_queue_size;
     int tx_queue_size;
 };
 
@@ -100,8 +100,8 @@ static struct nn_optset *nn_ofi_optset (void)
     optset->base.vfptr = &nn_ofi_optset_vfptr;
 
     /*  Default values for OFI socket options. */
-    optset->slab_mr_size = NN_OFI_DEFAULT_SLABMR_SIZE;
-    optset->tx_queue_size = 5;
+    optset->rx_queue_size = 2;
+    optset->tx_queue_size = 4;
 
     return &optset->base;
 }
@@ -128,13 +128,16 @@ static int nn_ofi_optset_setopt (struct nn_optset *self, int option,
     val = *(int*) optval;
 
     switch (option) {
-    case NN_OFI_SLABMR_SIZE:
-        optset->slab_mr_size = val;
+    case NN_OFI_RX_QUEUE_SIZE:
+        if (nn_slow (val == 0))
+            return -EINVAL;
+        optset->rx_queue_size = val;
         return 0;
     case NN_OFI_TX_QUEUE_SIZE:
         if (nn_slow (val == 0))
             return -EINVAL;
         optset->tx_queue_size = val;
+        return 0;
     default:
         return -ENOPROTOOPT;
     }
@@ -149,8 +152,8 @@ static int nn_ofi_optset_getopt (struct nn_optset *self, int option,
     optset = nn_cont (self, struct nn_ofi_optset, base);
 
     switch (option) {
-    case NN_OFI_SLABMR_SIZE:
-        intval = optset->slab_mr_size;
+    case NN_OFI_RX_QUEUE_SIZE:
+        intval = optset->rx_queue_size;
         break;
     case NN_OFI_TX_QUEUE_SIZE:
         intval = optset->tx_queue_size;

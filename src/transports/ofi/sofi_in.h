@@ -24,6 +24,8 @@
 #define NN_SOFI_IN_INCLUDED
 
 #include "hlapi.h"
+#include "utils/mrm.h"
+
 #include "../../transport.h"
 #include "../../aio/fsm.h"
 #include "../../aio/timer.h"
@@ -68,6 +70,20 @@
  *
  */
 
+/* Incoming message chunk */
+struct nn_sofi_in_chunk {
+
+    /* The flags of this chunk */
+    uint32_t flags;
+
+    /* The nanomsg chunk for the body */
+    void * chunk;
+
+    /* The libfabric memory region */
+    struct fid_mr * mr;
+
+};
+
 /* Shared, Connected OFI FSM */
 struct nn_sofi_in {
 
@@ -75,9 +91,6 @@ struct nn_sofi_in {
     struct nn_fsm               fsm;
     int                         state;
     int                         error;
-
-    /* The received message */
-    struct nn_msg               inmsg;
 
     /* References */
     struct nn_pipebase          * pipebase;
@@ -99,6 +112,11 @@ struct nn_sofi_in {
 
     /* Buffers */
     struct ofi_mr               mr_small;
+    struct nn_sofi_in_chunk     * mr_chunks;
+
+    /* Buffer sizes  */
+    int                         queue_size;
+    size_t                      msg_size;
 
 };
 
@@ -109,8 +127,8 @@ struct nn_sofi_in {
 /*  Initialize the state machine */
 void nn_sofi_in_init ( struct nn_sofi_in *self, 
     struct ofi_resources *ofi, struct ofi_active_endpoint *ep,
-    const uint8_t ng_direction, struct nn_pipebase * pipebase,
-    int src, struct nn_fsm *owner );
+    const uint8_t ng_direction, int queue_size, size_t msg_size,
+    struct nn_pipebase * pipebase, int src, struct nn_fsm *owner );
 
 /* Check if FSM is idle */
 int nn_sofi_in_isidle (struct nn_sofi_in *self);

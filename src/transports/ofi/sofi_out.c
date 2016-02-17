@@ -53,17 +53,6 @@ static void nn_sofi_out_handler (struct nn_fsm *self, int src, int type,
 static void nn_sofi_out_shutdown (struct nn_fsm *self, int src, int type, 
     void *srcptr);
 
-/* Scheduled message for submission */
-struct nn_sofi_out_msg {
-
-    /* The outgoing header & body IOVs */
-    struct iovec iov[2];
-
-    /* The outgoing IOV MR descriptions */
-    void * desc[2];
-
-};
-
 /* ============================== */
 /*       HELPER FUNCTIONS         */
 /* ============================== */

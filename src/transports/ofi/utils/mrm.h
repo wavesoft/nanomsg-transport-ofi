@@ -96,8 +96,8 @@ int nn_ofi_mrm_term( struct nn_ofi_mrm * self );
 /* Check if there are no locked chunks */
 int nn_ofi_mrm_isidle( struct nn_ofi_mrm * self );
 
-/* Pick the appropriate memory region for the given chunk description and 
-   extract the pointers and memory region descriptions to use with tx/rx.
+/* Pick the appropriate memory region for the given chunk reference and 
+   extract the pointers and region descriptions to use with tx/rx operations.
    This function will also mark the memory region as 'in transit' and will
    not be released until the `nn_ofi_mrm_unlock` is called. */
 int nn_ofi_mrm_lock( struct nn_ofi_mrm * self, struct nn_ofi_mrm_chunk ** mrmc,

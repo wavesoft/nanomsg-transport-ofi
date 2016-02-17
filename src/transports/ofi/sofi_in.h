@@ -56,7 +56,7 @@
  *   + Will raise `NN_SOFI_IN_EVENT_RECEIVED` when a message is ready
  *
  * - When the buffer is processed you *MUST* call:
- *   + `nn_sofi_in_rx_error_ack` 
+ *   + `nn_sofi_in_rx_event_ack` 
  *
  * - You can force a shutdown by calling `nn_sofi_in_stop` function.
  *   The FSM will take care of cleanly shutting down everything and will
@@ -81,6 +81,9 @@ struct nn_sofi_in_chunk {
 
     /* The libfabric memory region */
     struct fid_mr * mr;
+
+    /* This chunk can also be part of queue */
+    struct nn_queue_item item;
 
 };
 
@@ -113,6 +116,10 @@ struct nn_sofi_in {
     /* Buffers */
     struct ofi_mr               mr_small;
     struct nn_sofi_in_chunk     * mr_chunks;
+
+    /* Ingress queue and pending item */
+    struct nn_sofi_in_chunk *   chunk_ingress;
+    struct nn_queue             queue_ingress;
 
     /* Buffer sizes  */
     int                         queue_size;
@@ -155,7 +162,7 @@ void nn_sofi_in_rx_error_event( struct nn_sofi_in *self,
     struct fi_cq_err_entry * cq_err );
 
 /* Acknowledge an rx event */
-void nn_sofi_in_rx_error_ack( struct nn_sofi_in *self );
+int nn_sofi_in_rx_event_ack( struct nn_sofi_in *self, struct nn_msg *msg );
 
 /* Synchronous (blocking) rx request */
 size_t nn_sofi_in_rx( struct nn_sofi_in *self, void * ptr, size_t max_sz, 

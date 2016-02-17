@@ -339,7 +339,7 @@ static void nn_sofi_poller_thread (void *arg)
         if (nn_slow(ret > 0)) {
 
             /* Trigger rx worker task */
-            _ofi_debug("OFI[p]: Rx CQ Event\n");
+            _ofi_debug("OFI[p]: Rx CQ Event (ret=%i)\n", ret);
             nn_sofi_in_rx_event( &self->sofi_in, &cq_entry );
 
         } else if (nn_slow(ret != -FI_EAGAIN)) {
@@ -360,7 +360,7 @@ static void nn_sofi_poller_thread (void *arg)
         if (nn_slow(ret > 0)) {
 
             /* Trigger tx worker task */
-            _ofi_debug("OFI[p]: Tx CQ Event\n");
+            _ofi_debug("OFI[p]: Tx CQ Event (ret=%i)\n", ret);
             nn_sofi_out_tx_event( &self->sofi_out, &cq_entry );
 
         } else if (nn_slow(ret != -FI_EAGAIN)) {
@@ -440,10 +440,9 @@ static int nn_sofi_recv (struct nn_pipebase *pb, struct nn_msg *msg)
     self = nn_cont (pb, struct nn_sofi, pipebase);
     _ofi_debug("SOFI[S]: NanoMsg RECV event\n");
 
-    /* TODO: Forward event to IN FSM */
+    /* Acknowledge event and pull msg from in FSM */
+    return nn_sofi_in_rx_event_ack( &self->sofi_in, msg );
 
-    /* Success */
-    return 0;
 }
 
 /**

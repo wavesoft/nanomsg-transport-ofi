@@ -28,11 +28,12 @@
 #include "../../utils/cont.h"
 #include "../../utils/err.h"
 #include "../../utils/fast.h"
+#include "../../utils/queue.h"
 
 /* FSM States */
 #define NN_SOFI_IN_STATE_IDLE           2001
-#define NN_SOFI_IN_STATE_POSTED         2002
-#define NN_SOFI_IN_STATE_PROCESSING     2003
+#define NN_SOFI_IN_STATE_READY          2002
+#define NN_SOFI_IN_STATE_RECEIVING      2003
 #define NN_SOFI_IN_STATE_ERROR          2004
 #define NN_SOFI_IN_STATE_CLOSED         2005
 #define NN_SOFI_IN_STATE_ABORTING       2006
@@ -61,6 +62,10 @@ static void nn_sofi_in_shutdown (struct nn_fsm *self, int src, int type,
 /* ============================== */
 /*       HELPER FUNCTIONS         */
 /* ============================== */
+
+/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+/* BEGIN DANGEROUPS REGION                                                   */
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
 #include "../../utils/atomic.h"
 #include "../../utils/wire.h"
@@ -100,6 +105,11 @@ static void nn_sofi_in_set_chunk_size( void * p, size_t size )
     header->size = size;
 
 }
+
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+/* END DANGEROUPS REGION                                                     */
+/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
 
 /* Post buffers */
 static int nn_sofi_in_post_buffers(struct nn_sofi_in *self)
@@ -168,6 +178,15 @@ static int nn_sofi_in_post_buffers(struct nn_sofi_in *self)
 /* Move buffers for pick-up by SOFI */
 static void nn_sofi_in_pop_buffers(struct nn_sofi_in *self)
 {
+    /* Pop egress item from queue */
+    struct nn_queue_item * item = nn_queue_pop( &self->queue_ingress );
+    if (!item) {
+        self->chunk_ingress = NULL;
+        return;
+    }
+
+    /* Post message and remove locked flag */
+    self->chunk_ingress = nn_cont(item, struct nn_sofi_in_chunk, item);
 
 }
 
@@ -217,6 +236,9 @@ void nn_sofi_in_init ( struct nn_sofi_in *self,
     nn_timer_init(&self->timer_abort, NN_SOFI_IN_SRC_TIMER, 
         &self->fsm);
 
+    /* Initialize queue */
+    nn_queue_init( &self->queue_ingress );
+
     /* Manage a new MR for small blocking calls */
     ofi_mr_init( ep, &self->mr_small );
     ofi_mr_manage( ep, &self->mr_small, 
@@ -253,6 +275,9 @@ void nn_sofi_in_init ( struct nn_sofi_in *self,
         /* Increment reference counter so it never gets released */
         nn_chunk_addref( chunk->chunk, 1 );
 
+        /* Initialize queue */
+        nn_queue_item_init( &chunk->item );
+
     }
 
 }
@@ -276,6 +301,9 @@ void nn_sofi_in_term (struct nn_sofi_in *self)
     nn_free( self->mr_small.ptr );
     ofi_mr_free( self->ep, &self->mr_small );
 
+    /* The queue must be empty by here */
+    nn_assert( nn_queue_pop( &self->queue_ingress) == NULL );
+
     /* Free pointers */
     for (struct nn_sofi_in_chunk * chunk = self->mr_chunks, 
             * chunk_end = self->mr_chunks + self->queue_size;
@@ -288,9 +316,13 @@ void nn_sofi_in_term (struct nn_sofi_in *self)
         FT_CLOSE_FID( chunk->mr );
         nn_chunk_addref( chunk->chunk, -1 );
         nn_chunk_free( chunk->chunk );
+        nn_queue_item_term( &chunk->item );
 
     }
     nn_free( self->mr_chunks );
+
+    /* Terminate queue */
+    nn_queue_term( &self->queue_ingress );
 
     /* Abort timer */
     nn_timer_term (&self->timer_abort);
@@ -333,7 +365,7 @@ void nn_sofi_in_stop (struct nn_sofi_in *self)
 
         /* This cases are safe to stop right away */
         case NN_SOFI_IN_STATE_IDLE:
-        case NN_SOFI_IN_STATE_POSTED:
+        case NN_SOFI_IN_STATE_READY:
 
             /* These are safe to become 'closed' */
             _ofi_debug("OFI[i]: Switching state=%i to closed\n", self->state);
@@ -348,7 +380,7 @@ void nn_sofi_in_stop (struct nn_sofi_in *self)
             break;
 
         /* Processing switches to abording */
-        case NN_SOFI_IN_STATE_PROCESSING:
+        case NN_SOFI_IN_STATE_RECEIVING:
 
             /* Start timeout and start abording */
             _ofi_debug("OFI[i]: Switching to ABORTING state\n");
@@ -377,22 +409,41 @@ void nn_sofi_in_stop (struct nn_sofi_in *self)
 void nn_sofi_in_rx_event( struct nn_sofi_in *self, 
     struct fi_cq_data_entry * cq_entry )
 {
+    nn_ctx_enter( self->fsm.ctx );
     struct nn_sofi_in_chunk * chunk = cq_entry->op_context;
-    _ofi_debug("OFI[o]: Got CQ event for the received frame, ctx=%p\n", cq_entry->op_context);
+    _ofi_debug("OFI[i]: Got CQ event for the received frame, ctx=%p\n", cq_entry->op_context);
 
-    /* The chunk is not posted any more, but it's now locked because the
-       contents of the buffer must perserved till acknowledged. */
+    /* The chunk is not posted any more */
     chunk->flags &= ~NN_SOFI_IN_MR_FLAG_POSTED;
-    chunk->flags |= NN_SOFI_IN_MR_FLAG_LOCKED;
 
-    /* We can only receive if we are in POSTED or SENDING state */
-    nn_assert( self->state != NN_SOFI_IN_STATE_POSTED );
-    nn_assert( self->state != NN_SOFI_IN_STATE_PROCESSING );
+    /* Update chunk size */
+    nn_assert( cq_entry->len <= self->msg_size );
+    nn_sofi_in_set_chunk_size( chunk->chunk, cq_entry->len );
+    _ofi_debug("OFI[i]: Got incoming len=%i, msg=%s\n", cq_entry->len, chunk->chunk);
 
-    /* TODO: Stage this message */
+    /* Continue according to state */
+    switch (self->state) {
+        case NN_SOFI_IN_STATE_READY:
+        case NN_SOFI_IN_STATE_RECEIVING:
+        case NN_SOFI_IN_STATE_ABORTING:
 
-    /* Trigger worker task */
-    nn_worker_execute (self->worker, &self->task_rx);
+            /* We are going to process this chunk, so lock it */
+            chunk->flags |= NN_SOFI_IN_MR_FLAG_LOCKED;
+
+            /* Stage this message */
+            self->state = NN_SOFI_IN_STATE_RECEIVING;
+            nn_queue_push( &self->queue_ingress, &chunk->item );
+
+            /* Trigger worker task */
+            nn_worker_execute (self->worker, &self->task_rx);
+            break;
+
+        default:
+            break;
+    }
+
+    nn_ctx_leave( self->fsm.ctx );
+
 }
 
 /**
@@ -402,23 +453,53 @@ void nn_sofi_in_rx_error_event( struct nn_sofi_in *self,
     struct fi_cq_err_entry * cq_err )
 {
     struct nn_sofi_in_chunk * chunk = cq_err->op_context;
-    _ofi_debug("OFI[o]: Got CQ error for the received frame, ctx=%p\n", cq_err->op_context);
+    _ofi_debug("OFI[i]: Got CQ error for the received frame, ctx=%p\n", cq_err->op_context);
 
-    /* The chunk is not posted any more, neither locked since we are not
-       going to process it further. */
+    /* The chunk is not posted any more. */
     chunk->flags &= ~NN_SOFI_IN_MR_FLAG_POSTED;
 
-    /* Trigger worker task */
-    nn_worker_execute (self->worker, &self->task_rx_error);
+    /* Continue according to state */
+    switch (self->state) {
+        case NN_SOFI_IN_STATE_READY:
+        case NN_SOFI_IN_STATE_RECEIVING:
+
+            /* Stay in processing state */
+            self->state = NN_SOFI_IN_STATE_ERROR;
+
+        case NN_SOFI_IN_STATE_ABORTING:
+
+            /* TODO: Stage this message IN */
+
+            /* Trigger worker task */
+            nn_worker_execute (self->worker, &self->task_rx);
+            break;
+
+        default:
+            return;
+    }
+
 }
 
 /**
  * Acknowledge an rx event
  */
-void nn_sofi_in_rx_error_ack( struct nn_sofi_in *self )
+int nn_sofi_in_rx_event_ack( struct nn_sofi_in *self, struct nn_msg *msg )
 {
+
+    /* If there is no message, return error */
+    if (self->chunk_ingress == NULL)
+        return -EFSM;
+
+    /* Initialize and unlock message */
+    nn_msg_init_chunk ( msg, self->chunk_ingress->chunk );
+    self->chunk_ingress->flags &= ~NN_SOFI_IN_MR_FLAG_LOCKED;
+    self->chunk_ingress= NULL;
+
     /* Trigger worker task */
     nn_worker_execute (self->worker, &self->task_rx_ack);
+
+    /* Works good */
+    return 0;
 }
 
 /**
@@ -522,7 +603,7 @@ static void nn_sofi_in_handler (struct nn_fsm *fsm, int src, int type,
 
                     /* When successful switch to POSTED state */
                     _ofi_debug("OFI[i]: Input buffers posted\n");
-                    self->state = NN_SOFI_IN_STATE_POSTED;
+                    self->state = NN_SOFI_IN_STATE_READY;
 
                     /* That's the first acknowledement event */
                     nn_fsm_raise(&self->fsm, &self->event_started, 
@@ -553,7 +634,17 @@ static void nn_sofi_in_handler (struct nn_fsm *fsm, int src, int type,
 /*  polling thread that runs in sofi. It triggers events through worker tasks */
 /*  in order to traverse threads.                                             */
 /******************************************************************************/
-    case NN_SOFI_IN_STATE_POSTED:
+    case NN_SOFI_IN_STATE_READY:
+
+        /* This is never handled, that's an intermediate state */    
+        nn_fsm_bad_state (self->state, src, type);
+
+/******************************************************************************/
+/*  PROCESSING state.                                                         */
+/*  We are waiting for an acknowledgement from SOFI when it's ready for us    */
+/*  to reuse the rx buffers.                                                  */
+/******************************************************************************/
+    case NN_SOFI_IN_STATE_RECEIVING:
         switch (src) {
 
         /* ========================= */
@@ -567,13 +658,44 @@ static void nn_sofi_in_handler (struct nn_fsm *fsm, int src, int type,
                 _ofi_debug("OFI[i]: Data Rx event\n");
                 nn_sofi_in_pop_buffers( self );
 
-                /* Switch into processing */
-                self->state = NN_SOFI_IN_STATE_PROCESSING;
-
-                /* Notify SOFI for this fact */
+                /* Notify SOFI for this fact that a message is waiting */
                 nn_fsm_raise(&self->fsm, &self->event_received, 
                     NN_SOFI_IN_EVENT_RECEIVED);
 
+                /* We are waiting for an ACK */
+                return;
+
+            default:
+                nn_fsm_bad_action (self->state, src, type);
+            }
+
+        /* ========================= */
+        /*  TASK : Rx Ack Event      */
+        /* ========================= */
+        case NN_SOFI_IN_SRC_TASK_RX_ACK:
+            switch (type) {
+            case NN_WORKER_TASK_EXECUTE:
+
+                /* Post buffers */
+                _ofi_debug("OFI[i]: Acknowledged receive event\n");
+                self->error = nn_sofi_in_post_buffers( self );
+                if (!self->error) {
+
+                    /* Don't switch state if there are items pending */
+                    if (!nn_queue_empty( &self->queue_ingress )) return;
+
+                    /* When successful switch to POSTED state */
+                    _ofi_debug("OFI[i]: Input buffers posted\n");
+                    self->state = NN_SOFI_IN_STATE_READY;
+
+                } else {
+
+                    /* When unsuccessful, raise ERROR event */
+                    _ofi_debug("OFI[i]: Error trying to post input buffers\n");
+                    self->state = NN_SOFI_IN_STATE_ERROR;
+                    nn_sofi_in_stop( self );
+
+                }
                 return;
 
             default:
@@ -602,48 +724,6 @@ static void nn_sofi_in_handler (struct nn_fsm *fsm, int src, int type,
         }
 
 /******************************************************************************/
-/*  PROCESSING state.                                                         */
-/*  We are waiting for an acknowledgement from SOFI when it's ready for us    */
-/*  to reuse the rx buffers.                                                  */
-/******************************************************************************/
-    case NN_SOFI_IN_STATE_PROCESSING:
-        switch (src) {
-
-        /* ========================= */
-        /*  TASK : Rx Ack Event      */
-        /* ========================= */
-        case NN_SOFI_IN_SRC_TASK_RX_ACK:
-            switch (type) {
-            case NN_WORKER_TASK_EXECUTE:
-
-                /* Post buffers */
-                _ofi_debug("OFI[i]: Acknowledged receive event\n");
-                self->error = nn_sofi_in_post_buffers( self );
-                if (!self->error) {
-
-                    /* When successful switch to POSTED state */
-                    _ofi_debug("OFI[i]: Input buffers posted\n");
-                    self->state = NN_SOFI_IN_STATE_POSTED;
-
-                } else {
-
-                    /* When unsuccessful, raise ERROR event */
-                    _ofi_debug("OFI[i]: Error trying to post input buffers\n");
-                    self->state = NN_SOFI_IN_STATE_ERROR;
-                    nn_sofi_in_stop( self );
-
-                }
-                return;
-
-            default:
-                nn_fsm_bad_action (self->state, src, type);
-            }
-
-        default:
-            nn_fsm_bad_source (self->state, src, type);
-        }
-
-/******************************************************************************/
 /*  ABORTING state.                                                           */
 /*  We are waiting for receive completion or for timeout events.              */
 /******************************************************************************/
@@ -660,6 +740,11 @@ static void nn_sofi_in_handler (struct nn_fsm *fsm, int src, int type,
                 /* Stop timer, we are good to cleanup */
                 _ofi_debug("OFI[i]: Acknowledged receive event, continuing "
                             "abort\n");
+
+                /* Don't switch state if there are items pending */
+                if (!nn_queue_empty( &self->queue_ingress )) return;
+
+                /* Clean-up if there are no messages left */
                 self->state = NN_SOFI_IN_STATE_ABORT_CLEANUP;
                 nn_timer_stop( &self->timer_abort );
 

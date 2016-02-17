@@ -366,7 +366,7 @@ static void nn_sofi_poller_thread (void *arg)
         } else if (nn_slow(ret != -FI_EAGAIN)) {
 
             /* Get error details */
-            ret = fi_cq_readerr( self->ep->rx_cq, &err_entry, 0 );
+            ret = fi_cq_readerr( self->ep->tx_cq, &err_entry, 0 );
             _ofi_debug("OFI[p]: Tx CQ Error (ret=%i)\n", err_entry.err );
 
             /* Trigger tx error worker task */

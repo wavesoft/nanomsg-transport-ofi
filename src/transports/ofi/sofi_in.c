@@ -147,7 +147,8 @@ static int nn_sofi_in_post_buffers(struct nn_sofi_in *self)
 
         /* If we are in a bad state, we were remotely disconnected */
         if (ret == -FI_EOPBADSTATE) {
-            _ofi_debug("OFI[i]: fi_recvmsg() returned %i, considering shutdown.\n", ret);
+            _ofi_debug("OFI[i]: fi_recvmsg() returned %i, considering "
+                "shutdown.\n", ret);
             return -EINTR;
         }
 
@@ -375,6 +376,18 @@ void nn_sofi_in_stop (struct nn_sofi_in *self)
 void nn_sofi_in_rx_event( struct nn_sofi_in *self, 
     struct fi_cq_data_entry * cq_entry )
 {
+    struct nn_sofi_in_chunk * chunk = cq_entry->op_context;
+    _ofi_debug("OFI[o]: Got CQ event for the received frame, ctx=%p\n", cq_entry->op_context);
+
+    /* Unlock mrm chunk */
+    chunk->flags &= ~NN_SOFI_IN_MR_FLAG_LOCKED;
+
+    /* We can only receive if we are in POSTED or SENDING state */
+    nn_assert( self->state != NN_SOFI_IN_STATE_POSTED );
+    nn_assert( self->state != NN_SOFI_IN_STATE_PROCESSING );
+
+    /* TODO: Stage this message */
+
     /* Trigger worker task */
     nn_worker_execute (self->worker, &self->task_rx);
 }
@@ -385,6 +398,12 @@ void nn_sofi_in_rx_event( struct nn_sofi_in *self,
 void nn_sofi_in_rx_error_event( struct nn_sofi_in *self, 
     struct fi_cq_err_entry * cq_err )
 {
+    struct nn_sofi_in_chunk * chunk = cq_entry->op_context;
+    _ofi_debug("OFI[o]: Got CQ error for the received frame, ctx=%p\n", cq_entry->op_context);
+
+    /* Unlock mrm chunk */
+    chunk->flags &= ~NN_SOFI_IN_MR_FLAG_LOCKED;
+
     /* Trigger worker task */
     nn_worker_execute (self->worker, &self->task_rx_error);
 }

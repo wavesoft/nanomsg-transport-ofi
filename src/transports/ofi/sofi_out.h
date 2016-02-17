@@ -134,7 +134,8 @@ void nn_sofi_out_term (struct nn_sofi_out *self);
 int nn_sofi_out_tx_event_send( struct nn_sofi_out *self, struct nn_msg *msg );
 
 /* Trigger an rx event */
-void nn_sofi_out_tx_event( struct nn_sofi_out *self );
+void nn_sofi_out_tx_event( struct nn_sofi_out *self, 
+    struct fi_cq_data_entry * cq_entry );
 
 /* Trigger an rx erro event */
 void nn_sofi_out_tx_error_event( struct nn_sofi_out *self, int err_number );

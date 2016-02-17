@@ -26,6 +26,7 @@
 
 #include "../hlapi.h"
 #include "../../../utils/chunk.h"
+#include "../../../utils/chunkref.h"
 
 /* How many bytes to allocate for ancillary data for every chunk */
 #define NN_OFI_MRM_ANCILLARY_SIZE   64
@@ -86,18 +87,22 @@ struct nn_ofi_mrm {
 };
 
 /* Initialize the memory region manager */
-int nn_ofi_mrm_init( struct nn_ofi_mrm * mrm, struct ofi_active_endpoint * ep, 
+int nn_ofi_mrm_init( struct nn_ofi_mrm * self, struct ofi_active_endpoint * ep, 
     size_t len, int base_key, uint64_t access_flags );
 
 /* Free the memory region manager and it's managed MRs */
-int nn_ofi_mrm_term( struct nn_ofi_mrm * mrm );
+int nn_ofi_mrm_term( struct nn_ofi_mrm * self );
+
+/* Check if there are no locked chunks */
+int nn_ofi_mrm_isidle( struct nn_ofi_mrm * self );
 
 /* Pick the appropriate memory region for the given chunk description and 
    extract the pointers and memory region descriptions to use with tx/rx.
    This function will also mark the memory region as 'in transit' and will
    not be released until the `nn_ofi_mrm_unlock` is called. */
-int nn_ofi_mrm_lock( struct nn_ofi_mrm * mrm, struct nn_ofi_mrm_chunk * mrmc,
-    void *data, void **data_desc, void **aux, void **aux_desc );
+int nn_ofi_mrm_lock( struct nn_ofi_mrm * self, struct nn_ofi_mrm_chunk ** mrmc,
+    struct nn_chunkref * chunkref, void **data, void **data_desc, 
+    void **aux, void **aux_desc );
 
 /* Release the memory region chunk */
 int nn_ofi_mrm_unlock( struct nn_ofi_mrm_chunk * mrmc );

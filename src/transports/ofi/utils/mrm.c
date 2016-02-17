@@ -119,22 +119,28 @@ int nn_ofi_mrm_term( struct nn_ofi_mrm * self )
 }
 
 /* Pick and set-up appropriate MR */
-int nn_ofi_mrm_lock( struct nn_ofi_mrm * self, struct nn_ofi_mrm_chunk * mrmc,
-    void *data, void **data_desc, void **aux, void **aux_desc )
+int nn_ofi_mrm_lock( struct nn_ofi_mrm * self, struct nn_ofi_mrm_chunk ** mrmc,
+    struct nn_chunkref * chunkref, void **data, void **data_desc, 
+    void **aux, void **aux_desc )
 {
     struct nn_ofi_mrm_chunk * chunk;
 
     /* Pick most appropriate chunk */
-    chunk = pick_chunk( self, data );
+    chunk = pick_chunk( self, nn_chunkref_getchunk(chunkref) );
     if (!chunk)
         return -ENOMEM;
 
     /* Populate pointers */
+    *data = nn_chunkref_data( chunkref );
     *data_desc = fi_mr_desc( chunk->mr );
     *aux = chunk->ancillary;
     *aux_desc = fi_mr_desc( self->mr_ancillary );
 
+    /* Lock chunk */
+    chunk->flags |= NN_OFI_MRM_FLAG_LOCKED;
+
     /* Success */
+    *mrmc = chunk;
     return 0;
 }
 
@@ -147,21 +153,41 @@ int nn_ofi_mrm_unlock( struct nn_ofi_mrm_chunk * chunk )
     return 0;
 }
 
+/* Check if there are no locked chunks */
+int nn_ofi_mrm_isidle( struct nn_ofi_mrm * self )
+{
+    /* Iterate over chunks and free allocated */
+    for (struct nn_ofi_mrm_chunk * mr = self->chunks, 
+            * mr_end = self->chunks + self->len;
+         mr < mr_end; mr++ ) {
+
+        /* Found at least one locked chunk, we are not idle */
+        if (mr->flags & NN_OFI_MRM_FLAG_LOCKED)
+            return 0;
+
+    }
+
+    /* We are idle */
+    return 1;
+}
+
 /* Manage memory region */
 static int nn_ofi_mrm_manage ( struct nn_ofi_mrm * self, 
     struct nn_ofi_mrm_chunk * chunk, struct nn_chunk_desc * desc )
 {
     int ret;
     int offset;
-    _ofi_debug("OFI[-]: Managing MRM chunk=%p\n", chunk);
 
     /* Calculate key offset */
-    offset = (chunk - self->chunks) + 1;
-    nn_assert( offset > 1 );
+    offset = (self->chunks - chunk) + 1;
+    _ofi_debug("OFI[-]: Managing MRM chunk=%p index=%i\n", chunk, offset);
+    nn_assert( offset > 0 );
 
     /* Register memory region */
     nn_assert( desc->base );
     nn_assert( desc->len > 0 );
+    _ofi_debug("OFI[-]: Registering ptr=%p, len=%lu, key=0x%08x\n", 
+        desc->base, desc->len, self->base_key + offset);
     ret = fi_mr_reg( self->ep->domain, desc->base, desc->len, 
         self->access_flags, 0, self->base_key + offset, 0, &chunk->mr, NULL);
     if (ret) {
@@ -239,10 +265,10 @@ static struct nn_ofi_mrm_chunk * pick_chunk( struct nn_ofi_mrm * self,
 
     /* Check if we have a free slot */
     if (free_mr) {
+        _ofi_debug("OFI[-]: Found MRM free chunk=%p\n", free_mr);
 
         /* Manage memory region */
         nn_ofi_mrm_manage( self, free_mr, &desc );
-        _ofi_debug("OFI[-]: Found MRM free chunk=%p\n", free_mr);
         return free_mr;
 
     }

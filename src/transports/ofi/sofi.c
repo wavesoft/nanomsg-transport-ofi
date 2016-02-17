@@ -55,8 +55,6 @@
 
 /* Local flags */
 #define NN_SOFI_FLAGS_THREAD_ACTIVE      0x01
-#define NN_SOFI_FLAGS_PIPEBASE_ACTIVE    0x02
-#define NN_SOFI_FLAGS_SEND_PENDING       0x04
 
 /* Forward Declarations */
 static void nn_sofi_handler (struct nn_fsm *self, int src, int type, 
@@ -270,9 +268,6 @@ void nn_sofi_stop (struct nn_sofi *self)
     int fsm_state = self->state;
     self->state = NN_SOFI_STATE_CLOSING;
 
-    /* Stop thread */
-    self->flags &= ~NN_SOFI_FLAGS_THREAD_ACTIVE;
-
     /* Stop components according to state */
     switch (fsm_state) {
     case NN_SOFI_STATE_IDLE:
@@ -291,8 +286,6 @@ void nn_sofi_stop (struct nn_sofi *self)
         break;
 
     case NN_SOFI_STATE_RUNNING:
-        nn_thread_term (&self->thread_worker);
-
     case NN_SOFI_STATE_ERROR:
         _ofi_debug("OFI[S]: Stopping [fsm_in, fsm_out, timer_keepalive, "
             "worker]\n");
@@ -365,7 +358,7 @@ static void nn_sofi_poller_thread (void *arg)
 
             /* Trigger tx worker task */
             _ofi_debug("OFI[p]: Tx CQ Event\n");
-            nn_sofi_out_tx_event( &self->sofi_out );
+            nn_sofi_out_tx_event( &self->sofi_out, &cq_entry );
 
         } else if (nn_slow(ret != -FI_EAGAIN)) {
 
@@ -428,10 +421,9 @@ static int nn_sofi_send (struct nn_pipebase *pb, struct nn_msg *msg)
         return -EFSM;
     }
 
-    /* TODO: Forward event to OUT FSM */
+    /* Forward event to Output FSM */
+    return nn_sofi_out_tx_event_send( &self->sofi_out, msg );
 
-    /* Success */
-    return 0;
 }
 
 /**
@@ -484,6 +476,13 @@ static void nn_sofi_shutdown (struct nn_fsm *fsm, int src, int type,
 
     /* If closed, clean-up */
     if (self->state == NN_SOFI_STATE_CLOSED) {
+
+        /* Wait for thread to stop */
+        if (self->flags & NN_SOFI_FLAGS_THREAD_ACTIVE) {
+            _ofi_debug("OFI[S]: Stopping worker thread\n");
+            self->flags &= ~NN_SOFI_FLAGS_THREAD_ACTIVE;
+            nn_thread_term (&self->thread_worker);
+        }
 
         /*  Stop endpoint and wait for worker. */
         _ofi_debug("OFI[S]: Stopping OFI endpoint\n");
@@ -751,7 +750,7 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
             case NN_WORKER_TASK_EXECUTE:
 
                 /* Socket was disconnected, close */
-                _ofi_debug("OFI[S]: Disconnectingn from to socket event\n");
+                _ofi_debug("OFI[S]: Disconnectingn from socket event\n");
                 self->error = 0;
                 nn_sofi_stop(self);
 
@@ -808,7 +807,7 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
             case NN_WORKER_TASK_EXECUTE:
 
                 /* Socket was disconnected, close */
-                _ofi_debug("OFI[S]: Disconnectingn from to socket event\n");
+                _ofi_debug("OFI[S]: Disconnectingn from socket event\n");
                 nn_sofi_stop(self);
 
                 return;

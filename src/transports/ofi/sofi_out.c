@@ -31,7 +31,7 @@
 /* FSM States */
 #define NN_SOFI_OUT_STATE_IDLE          3001
 #define NN_SOFI_OUT_STATE_READY         3002
-#define NN_SOFI_OUT_STATE_POSTED        3003
+#define NN_SOFI_OUT_STATE_SENDING       3003
 #define NN_SOFI_OUT_STATE_ERROR         3004
 #define NN_SOFI_OUT_STATE_CLOSED        3005
 #define NN_SOFI_OUT_STATE_ABORTING      3006
@@ -53,6 +53,16 @@ static void nn_sofi_out_handler (struct nn_fsm *self, int src, int type,
 static void nn_sofi_out_shutdown (struct nn_fsm *self, int src, int type, 
     void *srcptr);
 
+/* Scheduled message for submission */
+struct nn_sofi_out_msg {
+
+    /* The outgoing header & body IOVs */
+    struct iovec iov[2];
+
+    /* The outgoing IOV MR descriptions */
+    void * desc[2];
+
+};
 
 /* ============================== */
 /*       HELPER FUNCTIONS         */
@@ -161,7 +171,7 @@ void nn_sofi_out_start (struct nn_sofi_out *self)
 /*  Stop the state machine */
 void nn_sofi_out_stop (struct nn_sofi_out *self)
 {
-    _ofi_debug("OFI[o]: Stopping Input FSM\n");
+    _ofi_debug("OFI[o]: Stopping Output FSM\n");
 
     /* Handle stop according to state */
     switch (self->state) {
@@ -182,8 +192,8 @@ void nn_sofi_out_stop (struct nn_sofi_out *self)
             nn_fsm_stop( &self->fsm );
             break;
 
-        /* Pending state switches to abording */
-        case NN_SOFI_OUT_STATE_POSTED:
+        /* Sending state switches to abording */
+        case NN_SOFI_OUT_STATE_SENDING:
 
             /* Start timeout and start abording */
             _ofi_debug("OFI[o]: Switching to ABORTING state\n");
@@ -200,9 +210,6 @@ void nn_sofi_out_stop (struct nn_sofi_out *self)
 
     };
 
-
-    _ofi_debug("OFI[o]: Stopping Output FSM\n");
-    nn_fsm_stop( &self->fsm );
 }
 
 /* ============================== */
@@ -212,8 +219,15 @@ void nn_sofi_out_stop (struct nn_sofi_out *self)
 /**
  * Trigger a tx event
  */
-void nn_sofi_out_tx_event( struct nn_sofi_out *self )
+void nn_sofi_out_tx_event( struct nn_sofi_out *self, 
+    struct fi_cq_data_entry * cq_entry )
 {
+    struct nn_ofi_mrm_chunk * chunk = cq_entry->op_context;
+    _ofi_debug("OFI[o]: Got CQ event for the sent frame, ctx=%p\n", cq_entry->op_context);
+
+    /* Unlock mrm chunk */
+    nn_ofi_mrm_unlock( chunk );
+
     /* Trigger worker task */
     nn_worker_execute (self->worker, &self->task_tx);
 }
@@ -232,10 +246,92 @@ void nn_sofi_out_tx_error_event( struct nn_sofi_out *self, int err_number )
  */
 int nn_sofi_out_tx_event_send( struct nn_sofi_out *self, struct nn_msg *msg )
 {
-    /* Check if this is already in queue */
+    int ret;
+    int iov_count;
+    size_t sz_sphdr, sz_hdrs;
+    struct nn_ofi_mrm_chunk * chunk;
+    struct iovec iov[2];
+    void * desc[2];
+
+    /* We can only send if we are in POSTED or SENDING state */
+    if ( ( self->state != NN_SOFI_OUT_STATE_READY ) &&
+         ( self->state != NN_SOFI_OUT_STATE_SENDING ) ) {
+        return -ETERM;
+    }
+
+    /* Populate size fields */
+    iov[1].iov_len = nn_chunkref_size( &msg->body );
+    sz_hdrs = nn_chunkref_size( &msg->hdrs );
+    sz_sphdr = nn_chunkref_size( &msg->sphdr );
+
+    _ofi_debug("OFI[o]: Sending frame sphdr=%lu, hdr=%lu, body=%lu\n",
+        sz_sphdr, sz_hdrs, iov[1].iov_len);
+
+    /* Acquire an MRM lock & get pointers */
+    ret = nn_ofi_mrm_lock( &self->mrm, &chunk, &msg->body,
+        &iov[1].iov_base, &desc[1], 
+        &iov[0].iov_base, &desc[0] );
+    if (ret) return ret;
+
+    /* If no header exists, skip population of iov[0] */
+    if (sz_hdrs + sz_sphdr == 0) {
+
+        /* Move iov[1] to iov[0] */
+        iov[0].iov_base = iov[1].iov_base;
+        iov[0].iov_len = iov[1].iov_len;
+
+        /* We have 1 iov */
+        iov_count = 1;
+
+    } else {
+
+        /* Copy headers in the ancillary buffer */
+        nn_assert( (sz_hdrs + sz_sphdr) <= NN_OFI_MRM_ANCILLARY_SIZE );
+        iov[0].iov_len = sz_hdrs + sz_sphdr;
+        memcpy( iov[0].iov_base, nn_chunkref_data( &msg->sphdr ), sz_sphdr );
+        memcpy( iov[0].iov_base + sz_sphdr, 
+            nn_chunkref_data( &msg->hdrs ), sz_hdrs );
+
+        /* We have 2 iovs */
+        iov_count = 2;
+
+    }
+
+    /* Increment body reference counter so it doesn't get disposed */
+    nn_chunk_addref( nn_chunkref_getchunk(&msg->body), 1 );
+
+    /* Prepare fi_msg */
+    struct fi_msg egress_msg = {
+        .msg_iov = iov,
+        .iov_count = iov_count,
+        .desc = desc,
+        .addr = self->ep->remote_fi_addr,
+        .context = chunk,
+        .data = 0
+    };
+
+    /* We are now sending */
+    self->state = NN_SOFI_OUT_STATE_SENDING;
+
+    /* Send data and return when buffer can be reused */
+    _ofi_debug("OFI[o]: Send context=%p\n", chunk);
+    ret = fi_sendmsg( self->ep->ep, &egress_msg, FI_INJECT_COMPLETE);
+    if (ret) {
+
+        /* If we are in a bad state, we were remotely disconnected */
+        if (ret == -FI_EOPBADSTATE) {
+            _ofi_debug("OFI[H]: ofi_tx_msg() returned -FI_EOPBADSTATE, "
+                "considering shutdown.\n");
+            return -EINTR;           
+        }
+
+        /* Otherwise display error */
+        FT_PRINTERR("ofi_tx_msg", ret);
+        return -EBADF;
+    }
 
     /* Trigger worker task */
-    nn_worker_execute (self->worker, &self->task_tx_send);
+    // nn_worker_execute (self->worker, &self->task_tx_send);
 
     /* We are good */
     return 0;
@@ -351,34 +447,16 @@ static void nn_sofi_out_handler (struct nn_fsm *fsm, int src, int type,
 /*  We are ready to send data to the remote endpoint.                         */
 /******************************************************************************/
     case NN_SOFI_OUT_STATE_READY:
-        switch (src) {
 
-        /* ========================= */
-        /*  TASK: Send Data          */
-        /* ========================= */
-        case NN_SOFI_OUT_SRC_TASK_TX_SEND:
-            switch (type) {
-            case NN_WORKER_TASK_EXECUTE:
-
-                /* We have posted the buffers */
-                self->state = NN_SOFI_OUT_STATE_POSTED;
-
-                return;
-
-            default:
-                nn_fsm_bad_action (self->state, src, type);
-            }
-
-        default:
-            nn_fsm_bad_source (self->state, src, type);
-        }
+        /* This is never handled, that's an intermediate state */    
+        nn_fsm_bad_state (self->state, src, type);
 
 /******************************************************************************/
-/*  POSTED state.                                                             */
-/*  Data are posted to the NIC, we are waiting for a send acknowledgement     */
-/*  or for a send error.                                                      */
+/*  SENDING state.                                                            */
+/*  There are outgoing data on the NIC, wait until there are no more data     */
+/*  pending or a timeout occurs.                                              */
 /******************************************************************************/
-    case NN_SOFI_OUT_STATE_POSTED:
+    case NN_SOFI_OUT_STATE_SENDING:
         switch (src) {
 
         /* ========================= */
@@ -388,13 +466,19 @@ static void nn_sofi_out_handler (struct nn_fsm *fsm, int src, int type,
             switch (type) {
             case NN_WORKER_TASK_EXECUTE:
 
-                /* The posted buffers are sent */
-                self->state = NN_SOFI_OUT_STATE_READY;
-
                 /* Notify that data are sent */
                 _ofi_debug("OFI[o]: Acknowledged sent event\n");
                 nn_fsm_raise(&self->fsm, &self->event_sent, 
                     NN_SOFI_OUT_EVENT_SENT);
+
+                /* Wait until all mrm buffers are unlocked, meaning
+                   that there are no pending outgoing operations. */
+                if (!nn_ofi_mrm_isidle(&self->mrm)) {
+                    _ofi_debug("OFI[o]: MRM not idle, waiting for it\n");
+                    return;
+                }
+                self->state = NN_SOFI_OUT_STATE_READY;
+                nn_sofi_out_stop( self );
 
                 return;
 
@@ -439,8 +523,19 @@ static void nn_sofi_out_handler (struct nn_fsm *fsm, int src, int type,
             switch (type) {
             case NN_WORKER_TASK_EXECUTE:
 
+                /* Notify that data are sent */
+                _ofi_debug("OFI[o]: Acknowledged sent event, cleaning-up\n");
+                nn_fsm_raise(&self->fsm, &self->event_sent, 
+                    NN_SOFI_OUT_EVENT_SENT);
+
+                /* Wait until all mrm buffers are unlocked, meaning
+                   that there are no pending outgoing operations. */
+                if (!nn_ofi_mrm_isidle(&self->mrm)) {
+                    _ofi_debug("OFI[o]: MRM not idle, waiting for it\n");
+                    return;
+                }
+
                 /* We got acknowledgement, continue with abort cleanup */
-                _ofi_debug("OFI[o]: Acknowledged sent event\n");
                 self->state = NN_SOFI_OUT_STATE_ABORT_CLEANUP;
                 nn_timer_stop (&self->timer_abort);
 
@@ -468,10 +563,88 @@ static void nn_sofi_out_handler (struct nn_fsm *fsm, int src, int type,
                 nn_fsm_bad_action (self->state, src, type);
             }
 
+        /* ========================= */
+        /*  Abort Timer Timeout      */
+        /* ========================= */
+        case NN_SOFI_OUT_SRC_TIMER:
+            switch (type) {
+            case NN_TIMER_TIMEOUT:
+
+                /* Stop timer, there was an error */
+                _ofi_debug("OFI[o]: Acknowledgement timed out, waiting for "
+                            "timer to stop\n");
+                self->state = NN_SOFI_OUT_STATE_ABORT_TIMEOUT;
+                nn_timer_stop( &self->timer_abort );
+
+                return;
+
+            default:
+                nn_fsm_bad_action (self->state, src, type);
+            }
+
         default:
             nn_fsm_bad_source (self->state, src, type);
         }
 
+/******************************************************************************/
+/*  ABORT TIMEOUT state.                                                      */
+/*  We are waiting for timer to stop before rising error.                     */
+/******************************************************************************/
+    case NN_SOFI_OUT_STATE_ABORT_TIMEOUT:
+        switch (src) {
+
+        /* ========================= */
+        /*  Abort Timer Timeout      */
+        /* ========================= */
+        case NN_SOFI_OUT_SRC_TIMER:
+            switch (type) {
+            case NN_TIMER_STOPPED:
+
+                /* Timer stopped, but there was an error */
+                _ofi_debug("OFI[o]: Timeout timer stopped, going for error\n");
+                self->state = NN_SOFI_OUT_STATE_ERROR;
+                nn_sofi_out_stop( self );
+
+                return;
+
+            default:
+                nn_fsm_bad_action (self->state, src, type);
+            }
+
+
+        default:
+            nn_fsm_bad_source (self->state, src, type);
+        }
+
+/******************************************************************************/
+/*  ABORT CLEANUP state.                                                      */
+/*  We are waiting for timer to stop before closing.                          */
+/******************************************************************************/
+    case NN_SOFI_OUT_STATE_ABORT_CLEANUP:
+        switch (src) {
+
+        /* ========================= */
+        /*  Abort Timer Timeout      */
+        /* ========================= */
+        case NN_SOFI_OUT_SRC_TIMER:
+            switch (type) {
+            case NN_TIMER_STOPPED:
+
+                /* Timer stopped, and we are good */
+                _ofi_debug("OFI[o]: Timeout timer stopped, closed\n");
+                self->state = NN_SOFI_OUT_STATE_CLOSED;
+                nn_sofi_out_stop( self );
+
+                return;
+
+            default:
+                nn_fsm_bad_action (self->state, src, type);
+            }
+
+
+        default:
+            nn_fsm_bad_source (self->state, src, type);
+        }
 
 /******************************************************************************/
 /*  Invalid state.                                                            */

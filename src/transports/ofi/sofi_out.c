@@ -344,7 +344,6 @@ int nn_sofi_out_tx_event_send( struct nn_sofi_out *self, struct nn_msg *msg )
 size_t nn_sofi_out_tx( struct nn_sofi_out *self, void * ptr, 
     size_t max_sz, int timeout )
 {
-    struct fi_context context;
     struct fi_cq_data_entry entry;
     int ret;
 
@@ -360,7 +359,7 @@ size_t nn_sofi_out_tx( struct nn_sofi_out *self, void * ptr,
     /* Send data */
     ret = fi_send( self->ep->ep, self->mr_small.ptr, max_sz,
         OFI_MR_DESC(self->mr_small), self->ep->remote_fi_addr,
-        &context );
+        &self->context );
     if (ret) {
         FT_PRINTERR("fi_send", ret);
         return ret;

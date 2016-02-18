@@ -128,6 +128,9 @@ struct nn_sofi_in {
     int                         queue_size;
     size_t                      msg_size;
 
+    /* Context for synchronous Rx operations */
+    struct fi_context           context;
+
 };
 
 /* ============================== */

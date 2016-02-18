@@ -75,6 +75,7 @@ struct nn_sofi {
     /* Asynchronous communication with the worker thread */
     struct nn_worker            * worker;
     struct nn_worker_task       task_disconnect;
+    struct nn_worker_task       task_stop;
 
     /* The worker thread */
     struct nn_thread            thread_worker;

@@ -145,16 +145,16 @@ static int nn_sofi_in_post_buffers(struct nn_sofi_in *self)
     /* Prepare fi_msg */
     struct fi_msg msg = {
         .msg_iov = iov,
-        .iov_count = 1,
         .desc = desc,
+        .iov_count = 1,
         .addr = self->ep->remote_fi_addr,
         .context = &pick_chunk->context,
         .data = 0
     };
 
     /* Post receive buffers */
-    _ofi_debug("OFI[i]: Posting buffers from RxMR chunk=%p (ctx=%p)\n", pick_chunk, 
-        &pick_chunk->context );
+    _ofi_debug("OFI[i]: Posting buffers from RxMR chunk=%p (ctx=%p, buf=%p)\n", 
+        pick_chunk, &pick_chunk->context, pick_chunk->chunk );
     ret = fi_recvmsg(self->ep->ep, &msg, 0);
     if (ret) {
 
@@ -510,9 +510,10 @@ int nn_sofi_in_rx_event_ack( struct nn_sofi_in *self, struct nn_msg *msg )
 size_t nn_sofi_in_rx( struct nn_sofi_in *self, void * ptr, 
     size_t max_sz, int timeout )
 {
-    struct fi_context context;
     struct fi_cq_data_entry entry;
     size_t rx_size;
+    struct iovec iov[1];
+    void * desc[1];
     int ret;
 
     _ofi_debug("OFI[i]: Blocking RX max_sz=%lu, timeout=%i\n", max_sz, timeout);
@@ -524,11 +525,23 @@ size_t nn_sofi_in_rx( struct nn_sofi_in *self, void * ptr,
     /* Move data to small MR */
     memcpy( self->mr_small.ptr, ptr, max_sz );
 
-    /* Send data */
-    ret = fi_recv( self->ep->ep, self->mr_small.ptr, max_sz,
-        OFI_MR_DESC(self->mr_small), self->ep->remote_fi_addr, &context );
+    /* Prepare msg structure */
+    iov[0].iov_base = self->mr_small.ptr;
+    iov[0].iov_len = max_sz;
+    desc[0] = OFI_MR_DESC(self->mr_small);
+    struct fi_msg msg = {
+        .msg_iov = iov,
+        .desc = desc,
+        .iov_count = 1,
+        .addr = self->ep->remote_fi_addr,
+        .context = &self->context,
+        .data = 0
+    };
+
+    /* Receive data */
+    ret = fi_recvmsg( self->ep->ep, &msg, 0 );
     if (ret) {
-        FT_PRINTERR("fi_recv", ret);
+        FT_PRINTERR("fi_recvmsg", ret);
         // return ret;
         return 0;
     }
@@ -546,7 +559,7 @@ size_t nn_sofi_in_rx( struct nn_sofi_in *self, void * ptr,
         return 0;
     }
 
-    _ofi_debug("OFI[i]: Blocking RX Completed, len=%zu\n", entry.len);
+    _ofi_debug("OFI[i]: Blocking RX Completed, len=%zu, ctx=%p\n", entry.len, &self->context);
 
     /* Move data to ptr */
     rx_size = entry.len;

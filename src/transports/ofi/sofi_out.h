@@ -99,6 +99,9 @@ struct nn_sofi_out {
     struct ofi_mr               mr_small;
     struct nn_ofi_mrm           mrm;
 
+    /* Context for synchronous Tx operations */
+    struct fi_context           context;
+
 };
 
 /* ============================== */

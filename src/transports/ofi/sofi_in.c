@@ -148,11 +148,13 @@ static int nn_sofi_in_post_buffers(struct nn_sofi_in *self)
         .iov_count = 1,
         .desc = desc,
         .addr = self->ep->remote_fi_addr,
-        .context = pick_chunk,
+        .context = &pick_chunk->context,
         .data = 0
     };
 
     /* Post receive buffers */
+    _ofi_debug("OFI[i]: Posting buffers from RxMR chunk=%p (ctx=%p)\n", pick_chunk, 
+        &pick_chunk->context );
     ret = fi_recvmsg(self->ep->ep, &msg, 0);
     if (ret) {
 
@@ -267,6 +269,8 @@ void nn_sofi_in_init ( struct nn_sofi_in *self,
         nn_assert( ret == 0 );
 
         /* Register this memory region */
+        _ofi_debug("OFI[i]: Allocated RxMR chunk=%p, key=%i\n", chunk, 
+            NN_SOFI_IN_MR_INPUT_BASE + offset);
         ret = fi_mr_reg( ep->domain, chunk->chunk, msg_size, 
             FI_RECV | FI_READ | FI_REMOTE_WRITE, 0, 
             NN_SOFI_IN_MR_INPUT_BASE + (offset++), 0, &chunk->mr, NULL);
@@ -317,6 +321,7 @@ void nn_sofi_in_term (struct nn_sofi_in *self)
         nn_chunk_addref( chunk->chunk, -1 );
         nn_chunk_free( chunk->chunk );
         nn_queue_item_term( &chunk->item );
+        _ofi_debug("OFI[i]: Released RxMR chunk=%p\n", chunk);
 
     }
     nn_free( self->mr_chunks );
@@ -409,9 +414,9 @@ void nn_sofi_in_stop (struct nn_sofi_in *self)
 void nn_sofi_in_rx_event( struct nn_sofi_in *self, 
     struct fi_cq_data_entry * cq_entry )
 {
-    nn_ctx_enter( self->fsm.ctx );
-    struct nn_sofi_in_chunk * chunk = cq_entry->op_context;
-    _ofi_debug("OFI[i]: Got CQ event for the received frame, ctx=%p\n", cq_entry->op_context);
+    struct nn_sofi_in_chunk * chunk = 
+        nn_cont (cq_entry->op_context, struct nn_sofi_in_chunk, context);
+    _ofi_debug("OFI[i]: Got CQ event for the received frame, ctx=%p (ptr=%p)\n", chunk, cq_entry->op_context);
 
     /* The chunk is not posted any more */
     chunk->flags &= ~NN_SOFI_IN_MR_FLAG_POSTED;
@@ -419,7 +424,7 @@ void nn_sofi_in_rx_event( struct nn_sofi_in *self,
     /* Update chunk size */
     nn_assert( cq_entry->len <= self->msg_size );
     nn_sofi_in_set_chunk_size( chunk->chunk, cq_entry->len );
-    _ofi_debug("OFI[i]: Got incoming len=%i, msg=%s\n", cq_entry->len, chunk->chunk);
+    _ofi_debug("OFI[i]: Got incoming len=%lu, msg=%s\n", cq_entry->len, chunk->chunk);
 
     /* Continue according to state */
     switch (self->state) {
@@ -431,18 +436,16 @@ void nn_sofi_in_rx_event( struct nn_sofi_in *self,
             chunk->flags |= NN_SOFI_IN_MR_FLAG_LOCKED;
 
             /* Stage this message */
-            self->state = NN_SOFI_IN_STATE_RECEIVING;
             nn_queue_push( &self->queue_ingress, &chunk->item );
 
             /* Trigger worker task */
+            self->state = NN_SOFI_IN_STATE_RECEIVING;
             nn_worker_execute (self->worker, &self->task_rx);
             break;
 
         default:
             break;
     }
-
-    nn_ctx_leave( self->fsm.ctx );
 
 }
 
@@ -452,8 +455,9 @@ void nn_sofi_in_rx_event( struct nn_sofi_in *self,
 void nn_sofi_in_rx_error_event( struct nn_sofi_in *self, 
     struct fi_cq_err_entry * cq_err )
 {
-    struct nn_sofi_in_chunk * chunk = cq_err->op_context;
-    _ofi_debug("OFI[i]: Got CQ error for the received frame, ctx=%p\n", cq_err->op_context);
+    struct nn_sofi_in_chunk * chunk = 
+        nn_cont (cq_err->op_context, struct nn_sofi_in_chunk, context);
+    _ofi_debug("OFI[i]: Got CQ error for the received frame, ctx=%p\n", chunk);
 
     /* The chunk is not posted any more. */
     chunk->flags &= ~NN_SOFI_IN_MR_FLAG_POSTED;
@@ -462,16 +466,14 @@ void nn_sofi_in_rx_error_event( struct nn_sofi_in *self,
     switch (self->state) {
         case NN_SOFI_IN_STATE_READY:
         case NN_SOFI_IN_STATE_RECEIVING:
-
-            /* Stay in processing state */
-            self->state = NN_SOFI_IN_STATE_ERROR;
-
         case NN_SOFI_IN_STATE_ABORTING:
 
-            /* TODO: Stage this message IN */
+            /* Keep error */
+            self->error = cq_err->err;
 
-            /* Trigger worker task */
-            nn_worker_execute (self->worker, &self->task_rx);
+            /* Trigger error */
+            self->state = NN_SOFI_IN_STATE_RECEIVING;
+            nn_worker_execute (self->worker, &self->task_rx_error);
             break;
 
         default:
@@ -508,22 +510,46 @@ int nn_sofi_in_rx_event_ack( struct nn_sofi_in *self, struct nn_msg *msg )
 size_t nn_sofi_in_rx( struct nn_sofi_in *self, void * ptr, 
     size_t max_sz, int timeout )
 {
+    struct fi_context context;
+    struct fi_cq_data_entry entry;
     size_t rx_size;
     int ret;
+
+    _ofi_debug("OFI[i]: Blocking RX max_sz=%lu, timeout=%i\n", max_sz, timeout);
 
     /* Check if message does not fit in the buffer */
     if (max_sz > NN_OFI_SMALLMR_SIZE)
         return -ENOMEM;
 
-    /* Receive data synchronously */
-    ret = ofi_rx_data( self->ep, self->mr_small.ptr, max_sz, 
-        OFI_MR_DESC(self->mr_small), &rx_size, timeout );
+    /* Move data to small MR */
+    memcpy( self->mr_small.ptr, ptr, max_sz );
 
-    /* Return on error */
-    if (ret)
-        return ret;
+    /* Send data */
+    ret = fi_recv( self->ep->ep, self->mr_small.ptr, max_sz,
+        OFI_MR_DESC(self->mr_small), self->ep->remote_fi_addr, &context );
+    if (ret) {
+        FT_PRINTERR("fi_recv", ret);
+        // return ret;
+        return 0;
+    }
+
+    /* Wait for synchronous event */
+    ret = fi_cq_sread( self->ep->rx_cq, &entry, 1, NULL, timeout );
+    if ((ret == 0) || (ret == -FI_EAGAIN)) {
+        _ofi_debug("OFI[i]: Rx operation timed out\n");
+        // return -ETIMEDOUT;
+        return 0;
+    }
+    if (ret < 0) {
+        FT_PRINTERR("fi_cq_sread", ret);
+        // return ret;
+        return 0;
+    }
+
+    _ofi_debug("OFI[i]: Blocking RX Completed, len=%zu\n", entry.len);
 
     /* Move data to ptr */
+    rx_size = entry.len;
     memcpy( ptr, self->mr_small.ptr, rx_size );
 
     /* Return bytes read */
@@ -554,7 +580,8 @@ static void nn_sofi_in_shutdown (struct nn_fsm *fsm, int src, int type,
             nn_fsm_stopped(&self->fsm, NN_SOFI_IN_EVENT_CLOSE);
 
         } else if (self->state == NN_SOFI_IN_STATE_ERROR) {
-            _ofi_debug("OFI[i]: Stopping FSM with ERROR event\n");
+            _ofi_debug("OFI[i]: Stopping FSM with ERROR (error=%i) "
+                "event\n", self->error);
             nn_fsm_stopped(&self->fsm, NN_SOFI_IN_EVENT_ERROR);
 
         } else {
@@ -731,8 +758,9 @@ static void nn_sofi_in_handler (struct nn_fsm *fsm, int src, int type,
         switch (src) {
 
         /* ========================= */
-        /*  TASK : Rx Ack Event      */
+        /*  TASK : Rx Ack or Error   */
         /* ========================= */
+        case NN_SOFI_IN_SRC_TASK_RX_ERROR:
         case NN_SOFI_IN_SRC_TASK_RX_ACK:
             switch (type) {
             case NN_WORKER_TASK_EXECUTE:

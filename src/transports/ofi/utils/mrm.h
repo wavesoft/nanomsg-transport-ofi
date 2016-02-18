@@ -56,6 +56,9 @@ struct nn_ofi_mrm_chunk {
     /* The pointer to the shared MR for ancillary data */
     void * ancillary;
 
+    /* The libfabric context for putting the chunk as Rx/Tx context parameter */
+    struct fi_context context;
+
 };
 
 /* Memory region manager structure that tracks registered MRs with the NIC */

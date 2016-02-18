@@ -83,6 +83,9 @@ struct ofi_active_endpoint
 	struct fid_cq 		*tx_cq, *rx_cq;
 	struct fi_context 	tx_ctx, rx_ctx;
 
+	/* CQ & EQ Waitset */
+	struct fid_wait		*waitset;
+
 	/* Addresses */
 	fi_addr_t 			remote_fi_addr;
 
@@ -112,7 +115,6 @@ struct ofi_resources
 {
 	/* Hints and attributes */
 	struct fi_info 		*hints;
-	uint64_t			flags;
 
 	/* Fabric core structures */
 	struct fi_info 		*fi;

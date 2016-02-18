@@ -105,6 +105,8 @@ int nn_ofi_mrm_term( struct nn_ofi_mrm * self )
         if (mr->flags & NN_OFI_MRM_FLAG_ASSIGNED)
             nn_ofi_mrm_unmanage( self, mr );
 
+        _ofi_debug("OFI[-]: Released MRM chunk=%p\n", mr);
+
     }
 
     /* Close ascillary MR */

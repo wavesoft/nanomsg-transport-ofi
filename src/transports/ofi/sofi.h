@@ -33,6 +33,7 @@
 #include "../../aio/worker.h"
 #include "../../utils/thread.h"
 #include "../../utils/efd.h"
+#include "../../utils/mutex.h"
 
 /* Outgoing FSM events towards FSM IN/OUT */
 #define NN_SOFI_EVENT_RX_EVENT          1201
@@ -51,7 +52,10 @@
 /* Handshake information */
 struct nn_sofi_handshake
 {
-    /* data */
+
+    /* Protocol version */
+    uint32_t version;
+
 };
 
 /* Shared, Connected OFI FSM */
@@ -90,6 +94,9 @@ struct nn_sofi {
     struct nn_timer             timer_keepalive;
     struct nn_sofi_handshake    hs_local;
     struct nn_sofi_handshake    hs_remote;
+
+    /* Mutext for fabric operations */
+    struct nn_mutex             mutex_fabric;
 
 };
 

@@ -85,6 +85,9 @@ struct nn_sofi_in_chunk {
     /* This chunk can also be part of queue */
     struct nn_queue_item item;
 
+    /* This chunk can also be used as a context to libfabric */
+    struct fi_context context;
+
 };
 
 /* Shared, Connected OFI FSM */

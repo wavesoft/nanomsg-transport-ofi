@@ -717,13 +717,19 @@ int ofi_alloc( struct ofi_resources * R, enum fi_ep_type ep_type )
 		return 255;
 	}
 
-	/* Setup hints capabilities and more */
+	/* Domains */
+	R->hints->domain_attr->mr_mode 		= FI_MR_BASIC;
+	R->hints->domain_attr->threading 	= FI_THREAD_SAFE;
+
+	/* Rx Attr */
+	R->hints->rx_attr->comp_order 		= FI_ORDER_STRICT;
+
+	/* Endpoints */
 	R->hints->ep_attr->type	= ep_type;
+
+	/* Fabric */
 	R->hints->caps			= FI_MSG;
 	R->hints->mode			= FI_CONTEXT | FI_LOCAL_MR;
-
-	/* Prepare flags */
-	R->flags = 0;
 
 	/* Success */
 	return 0;
@@ -812,22 +818,44 @@ int ofi_open_active_ep( struct ofi_resources * R, struct ofi_active_endpoint * E
 		return ret;
 	}
 
+	/* ==== Open Wait Set ======================== */
+
+	/* Setup properties */
+	struct fi_wait_attr wait_attr = {
+		.wait_obj = FI_WAIT_UNSPEC,
+		.flags = 0
+	};
+
+	/* Open waitset */
+	ret = fi_wait_open(R->fabric, &wait_attr, &EP->waitset);
+	if (ret) {
+		FT_PRINTERR("fi_wait_open", ret);
+		return ret;
+	}
+
 	/* ==== Open Completion Queues =============== */
 
 	/* Create a Tx completion queue */
-	struct fi_cq_attr cq_attr = {
-		.wait_obj = FI_WAIT_NONE,
+	struct fi_cq_attr tx_cq_attr = {
+		.wait_obj = FI_WAIT_SET,
 		.format = FI_CQ_FORMAT_DATA,
-		.size = fi->tx_attr->size
+		.size = fi->tx_attr->size,
+		.wait_set = EP->waitset
 	};
-	ret = fi_cq_open(EP->domain, &cq_attr, &EP->tx_cq, &EP->tx_ctx);
+	ret = fi_cq_open(EP->domain, &tx_cq_attr, &EP->tx_cq, &EP->tx_ctx);
 	if (ret) {
 		FT_PRINTERR("fi_cq_open<tx_cq>", ret);
 		return ret;
 	}
 
 	/* Create a Rx completion queue */
-	ret = fi_cq_open(EP->domain, &cq_attr, &EP->rx_cq, &EP->rx_ctx);
+	struct fi_cq_attr rx_cq_attr = {
+		.wait_obj = FI_WAIT_SET,
+		.format = FI_CQ_FORMAT_DATA,
+		.size = fi->rx_attr->size,
+		.wait_set = EP->waitset
+	};
+	ret = fi_cq_open(EP->domain, &rx_cq_attr, &EP->rx_cq, &EP->rx_ctx);
 	if (ret) {
 		FT_PRINTERR("fi_cq_open<rx_cq>", ret);
 		return ret;
@@ -876,8 +904,10 @@ int ofi_open_active_ep( struct ofi_resources * R, struct ofi_active_endpoint * E
 
 		/* Prepare structure */
 		struct fi_eq_attr eq_attr = {
-			.wait_obj = FI_WAIT_UNSPEC,
-			.flags = FI_WRITE
+			.size = 1,
+			.wait_obj = FI_WAIT_SET,
+			.flags = FI_WRITE,
+			.wait_set = EP->waitset,
 		};
 
 		/* Open event queue */
@@ -1407,6 +1437,7 @@ int ofi_free_ep( struct ofi_active_endpoint * ep )
 	FT_CLOSE_FID( ep->ep );
 	
 	/* Free structures */
+	FT_CLOSE_FID( ep->waitset );
 	FT_CLOSE_FID( ep->tx_cq );
 	FT_CLOSE_FID( ep->rx_cq );
 	FT_CLOSE_FID( ep->eq );

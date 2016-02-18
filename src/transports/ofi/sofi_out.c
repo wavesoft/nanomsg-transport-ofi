@@ -211,8 +211,9 @@ void nn_sofi_out_stop (struct nn_sofi_out *self)
 void nn_sofi_out_tx_event( struct nn_sofi_out *self, 
     struct fi_cq_data_entry * cq_entry )
 {
-    struct nn_ofi_mrm_chunk * chunk = cq_entry->op_context;
-    _ofi_debug("OFI[o]: Got CQ event for the sent frame, ctx=%p\n", cq_entry->op_context);
+    struct nn_ofi_mrm_chunk * chunk = 
+        nn_cont (cq_entry->op_context, struct nn_ofi_mrm_chunk, context);
+    _ofi_debug("OFI[o]: Got CQ event for the sent frame, ctx=%p\n", chunk);
 
     /* Unlock mrm chunk */
     nn_ofi_mrm_unlock( chunk );
@@ -227,11 +228,15 @@ void nn_sofi_out_tx_event( struct nn_sofi_out *self,
 void nn_sofi_out_tx_error_event( struct nn_sofi_out *self, 
     struct fi_cq_err_entry * cq_err )
 {
-    struct nn_ofi_mrm_chunk * chunk = cq_err->op_context;
-    _ofi_debug("OFI[o]: Got CQ event for the sent frame, ctx=%p\n", cq_err->op_context);
+    struct nn_ofi_mrm_chunk * chunk = 
+        nn_cont (cq_err->op_context, struct nn_ofi_mrm_chunk, context);
+    _ofi_debug("OFI[o]: Got CQ event for the sent frame, ctx=%p\n", chunk);
 
     /* Unlock mrm chunk */
     nn_ofi_mrm_unlock( chunk );
+
+    /* Keep error */
+    self->error = cq_err->err;
 
     /* Trigger worker task */
     nn_worker_execute (self->worker, &self->task_tx_error);
@@ -302,7 +307,7 @@ int nn_sofi_out_tx_event_send( struct nn_sofi_out *self, struct nn_msg *msg )
         .iov_count = iov_count,
         .desc = desc,
         .addr = self->ep->remote_fi_addr,
-        .context = chunk,
+        .context = &chunk->context,
         .data = 0
     };
 
@@ -339,7 +344,11 @@ int nn_sofi_out_tx_event_send( struct nn_sofi_out *self, struct nn_msg *msg )
 size_t nn_sofi_out_tx( struct nn_sofi_out *self, void * ptr, 
     size_t max_sz, int timeout )
 {
+    struct fi_context context;
+    struct fi_cq_data_entry entry;
     int ret;
+
+    _ofi_debug("OFI[o]: Blocking TX max_sz=%lu, timeout=%i\n", max_sz, timeout);
 
     /* Check if message does not fit in the buffer */
     if (max_sz > NN_OFI_SMALLMR_SIZE)
@@ -348,12 +357,31 @@ size_t nn_sofi_out_tx( struct nn_sofi_out *self, void * ptr,
     /* Move data to small MR */
     memcpy( self->mr_small.ptr, ptr, max_sz );
 
-    /* Receive data synchronously */
-    ret = ofi_tx_data( self->ep, self->mr_small.ptr, max_sz, 
-        OFI_MR_DESC(self->mr_small), timeout );
+    /* Send data */
+    ret = fi_send( self->ep->ep, self->mr_small.ptr, max_sz,
+        OFI_MR_DESC(self->mr_small), self->ep->remote_fi_addr,
+        &context );
+    if (ret) {
+        FT_PRINTERR("fi_send", ret);
+        return ret;
+    }
 
-    /* Return result */
-    return ret;
+    /* Wait for synchronous event */
+    ret = fi_cq_sread( self->ep->tx_cq, &entry, 1, NULL, timeout );
+    if ((ret == 0) || (ret == -FI_EAGAIN)) {
+        _ofi_debug("OFI[o]: Tx operation timed out\n");
+        return -ETIMEDOUT;
+    }
+    if (ret < 0) {
+        FT_PRINTERR("fi_cq_sread", ret);
+        return ret;
+    }
+
+    _ofi_debug("OFI[o]: Blocking TX completed\n");
+
+    /* Success */
+    return 0;
+
 }
 
 /* ============================== */
@@ -379,7 +407,8 @@ static void nn_sofi_out_shutdown (struct nn_fsm *fsm, int src, int type,
             nn_fsm_stopped(&self->fsm, NN_SOFI_OUT_EVENT_CLOSE);
 
         } else if (self->state == NN_SOFI_OUT_STATE_ERROR) {
-            _ofi_debug("OFI[o]: Stopping FSM with ERROR event\n");
+            _ofi_debug("OFI[o]: Stopping FSM with ERROR (error=%i) "
+                "event\n", self->error);
             nn_fsm_stopped(&self->fsm, NN_SOFI_OUT_EVENT_ERROR);
 
         } else {

@@ -81,9 +81,7 @@ const struct nn_pipebase_vfptr nn_sofi_pipebase_vfptr = {
 static void nn_sofi_send_handshake( struct nn_sofi *self )
 {
     _ofi_debug("OFI[S]: Sending handshake\n");
-
-    /* Don't do anything on an invalid state */
-    if (self->state != NN_SOFI_STATE_HANDSHAKE) return;
+    nn_assert (self->state == NN_SOFI_STATE_HANDSHAKE);
 
     /* Synchronous send */
     self->error = nn_sofi_out_tx( &self->sofi_out, &self->hs_local, 
@@ -101,14 +99,16 @@ static void nn_sofi_send_handshake( struct nn_sofi *self )
  */
 static void nn_sofi_recv_handshake( struct nn_sofi *self )
 {
+    size_t sz;
     _ofi_debug("OFI[S]: Receiving handshake\n");
-
-    /* Don't do anything on an invalid state */
-    if (self->state != NN_SOFI_STATE_HANDSHAKE) return;
+    nn_assert (self->state == NN_SOFI_STATE_HANDSHAKE);
 
     /* Synchronous receive */
-    self->error = nn_sofi_out_tx( &self->sofi_out, &self->hs_remote, 
+    sz = nn_sofi_in_rx( &self->sofi_in, &self->hs_remote, 
         sizeof(self->hs_remote), NN_SOFI_TIMEOUT_HANDSHAKE );
+
+    /* Validate size of received data */
+    if (sz != sizeof(self->hs_remote)) self->error = -EIO;
 
     /* Switch state if an error occured */
     if (self->error != 0) {
@@ -140,6 +140,9 @@ void nn_sofi_init ( struct nn_sofi *self,
     /*  libFabric/HLAPI Initialization     */
     /* ----------------------------------- */
 
+    /* Set-up local handshake information */
+    self->hs_local.version = 0x01;
+
     /* ----------------------------------- */
     /*  NanoMSG Core Initialization        */
     /* ----------------------------------- */
@@ -161,6 +164,9 @@ void nn_sofi_init ( struct nn_sofi *self,
     /* ----------------------------------- */
     /*  NanoMsg Component Initialization   */
     /* ----------------------------------- */
+
+    /* Initialize mutex */
+    nn_mutex_init( &self->mutex_fabric );
 
     /* Initialize timers */
     nn_timer_init(&self->timer_keepalive, NN_SOFI_SRC_KEEPALIVE_TIMER,
@@ -220,6 +226,9 @@ void nn_sofi_term (struct nn_sofi *self)
     /* ----------------------------------- */
     /*  NanoMsg Component Termination      */
     /* ----------------------------------- */
+
+    /* Term mutex */
+    nn_mutex_term( &self->mutex_fabric );
 
     /* Stop timers */
     nn_timer_term (&self->timer_keepalive);
@@ -327,15 +336,35 @@ static void nn_sofi_poller_thread (void *arg)
     uint32_t event;
     int ret;
 
+    /* Open a polling set */
+    struct fid_poll * poll_set;
+    struct fi_poll_attr poll_attr = {
+        .flags = 0
+    };
+    ret = fi_poll_open( self->ep->domain, &poll_attr, &poll_set );
+    if (ret) {
+        FT_PRINTERR("fi_poll_open", ret);
+        return;
+    }
+
     _ofi_debug("OFI[p]: Starting poller thread\n");
 
     /* Keep thread alive while the THREAD_ACTIVE flag is set  */
     while ( self->flags & NN_SOFI_FLAGS_THREAD_ACTIVE ) {
 
+        /* Wait for completion events on CQs */
+        _ofi_debug("OFI[p]: Waiting for CQ/EQ event\n");
+        ret = fi_wait( self->ep->waitset, -1);
+        if (ret < 0) {
+            FT_PRINTERR("fi_wait", ret);
+            break;
+        }
+
         /* ========================================= */
         /* Wait for Rx CQ event */
         /* ========================================= */
         ret = fi_cq_read( self->ep->rx_cq, &cq_entry, 1 );
+        _ofi_debug("OFI[p]: fi_cq_read<rx> = %i\n", ret);
         if (nn_slow(ret > 0)) {
 
             /* Trigger rx worker task */
@@ -346,7 +375,7 @@ static void nn_sofi_poller_thread (void *arg)
 
             /* Get error details */
             ret = fi_cq_readerr( self->ep->rx_cq, &err_entry, 0 );
-            _ofi_debug("OFI[p]: Rx CQ Error (ret=%i)\n", err_entry.err );
+            _ofi_debug("OFI[p]: Rx CQ Error (%s)\n", fi_strerror((int) -err_entry.err) );
 
             /* Trigger rx error worker task */
             nn_sofi_in_rx_error_event( &self->sofi_in, &err_entry );
@@ -357,6 +386,7 @@ static void nn_sofi_poller_thread (void *arg)
         /* Wait for Tx CQ event */
         /* ========================================= */
         ret = fi_cq_read( self->ep->tx_cq, &cq_entry, 1 );
+        _ofi_debug("OFI[p]: fi_cq_read<tx> = %i\n", ret);
         if (nn_slow(ret > 0)) {
 
             /* Trigger tx worker task */
@@ -367,7 +397,7 @@ static void nn_sofi_poller_thread (void *arg)
 
             /* Get error details */
             ret = fi_cq_readerr( self->ep->tx_cq, &err_entry, 0 );
-            _ofi_debug("OFI[p]: Tx CQ Error (ret=%i)\n", err_entry.err );
+            _ofi_debug("OFI[p]: Tx CQ Error (%s)\n", fi_strerror((int) -err_entry.err) );
 
             /* Trigger tx error worker task */
             nn_sofi_out_tx_error_event( &self->sofi_out, &err_entry );
@@ -378,6 +408,7 @@ static void nn_sofi_poller_thread (void *arg)
         /* Wait for EQ events */
         /* ========================================= */
         ret = fi_eq_read( self->ep->eq, &event, &eq_entry, sizeof eq_entry, 0);
+        _ofi_debug("OFI[p]: fi_eq_read = %i\n", ret);
         if (nn_fast(ret != -FI_EAGAIN)) {
             _ofi_debug("OFI[p]: Endpoint EQ Event (event=%i)\n", event);
 
@@ -391,13 +422,17 @@ static void nn_sofi_poller_thread (void *arg)
 
         }
 
-        /* Microsleep for lessen the CPU load */
+        /* Microsleep for lessen the CPU load on 
+           providers with no fi_wait support */
         if (!--fastpoller) {
             usleep(10);
             fastpoller = 200;
         }
 
     }
+
+    /* Clenaup */
+    FT_CLOSE_FID( poll_set );
     _ofi_debug("OFI[p]: Exited poller thread\n");
 
 }

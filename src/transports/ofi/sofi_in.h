@@ -96,7 +96,6 @@ struct nn_sofi_in {
 
     /* The state machine. */
     struct nn_fsm               fsm;
-    struct nn_mutex             mutex_state;
     int                         state;
     int                         error;
 
@@ -125,6 +124,7 @@ struct nn_sofi_in {
     /* Ingress queue and pending item */
     struct nn_sofi_in_chunk *   chunk_ingress;
     struct nn_queue             queue_ingress;
+    struct nn_mutex             mutex_ingress;
 
     /* Buffer sizes  */
     int                         queue_size;

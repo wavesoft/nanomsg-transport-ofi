@@ -125,6 +125,7 @@ struct nn_sofi_in {
     struct nn_sofi_in_chunk *   chunk_ingress;
     struct nn_queue             queue_ingress;
     struct nn_mutex             mutex_ingress;
+    struct nn_efd               efd_underrun;
 
     /* Buffer sizes  */
     int                         queue_size;

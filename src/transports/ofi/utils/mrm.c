@@ -181,8 +181,8 @@ static int nn_ofi_mrm_manage ( struct nn_ofi_mrm * self,
     int offset;
 
     /* Calculate key offset */
-    offset = (self->chunks - chunk) + 1;
-    _ofi_debug("OFI[-]: Managing MRM chunk=%p index=%i\n", chunk, offset);
+    offset = (int)(chunk - self->chunks) + 1;
+    _ofi_debug("OFI[-]: Managing MRM base=%p chunk=%p index=%i\n", self->chunks, chunk, offset);
     nn_assert( offset > 0 );
 
     /* Register memory region */

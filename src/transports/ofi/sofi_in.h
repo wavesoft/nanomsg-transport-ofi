@@ -29,6 +29,7 @@
 #include "../../transport.h"
 #include "../../aio/fsm.h"
 #include "../../aio/timer.h"
+#include "../../utils/mutex.h"
 
 /* FSM Events */
 #define NN_SOFI_IN_EVENT_STARTED        2201
@@ -95,6 +96,7 @@ struct nn_sofi_in {
 
     /* The state machine. */
     struct nn_fsm               fsm;
+    struct nn_mutex             mutex_state;
     int                         state;
     int                         error;
 

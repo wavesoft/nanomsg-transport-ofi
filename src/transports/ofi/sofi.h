@@ -54,7 +54,7 @@ struct nn_sofi_handshake
 {
 
     /* Protocol version */
-    uint32_t version;
+    uint32_t                    version;
 
 };
 

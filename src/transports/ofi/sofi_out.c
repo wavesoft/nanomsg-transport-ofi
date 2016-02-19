@@ -502,7 +502,6 @@ static void nn_sofi_out_handler (struct nn_fsm *fsm, int src, int type,
                     return;
                 }
                 self->state = NN_SOFI_OUT_STATE_READY;
-                nn_sofi_out_stop( self );
 
                 return;
 

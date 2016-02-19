@@ -444,7 +444,7 @@ static int nn_sofi_send (struct nn_pipebase *pb, struct nn_msg *msg)
 
     /* Return error codes on erroreus states */
     if (nn_slow(self->state != NN_SOFI_STATE_RUNNING))
-        return -EFSM;
+        return 0;
 
     /* Forward event to Output FSM */
     return nn_sofi_out_tx_event_send( &self->sofi_out, msg );
@@ -801,7 +801,7 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
             case NN_WORKER_TASK_EXECUTE:
 
                 /* Socket was disconnected, close */
-                _ofi_debug("OFI[S]: Disconnectingn from socket event\n");
+                _ofi_debug("OFI[S]: Disconnecting from socket event\n");
                 self->error = 0;
                 nn_sofi_stop(self);
 

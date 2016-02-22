@@ -66,8 +66,8 @@ int64_t get_elapsed(const struct timespec *b, const struct timespec *a)
  */
 int run_tests( int sock, int direction )
 {
-	char *buf = NULL;
 	struct timespec t0, t1;
+	void * msg;
 	int iterations = ITERATIONS;
 	int sz_n, i;
 
@@ -81,16 +81,22 @@ int run_tests( int sock, int direction )
 		// Send or receive
 		if (direction == DIRECTION_OUT) {
 
+			// Alloc message
+			msg = nn_allocmsg( MSG_LEN, 0 );
+
 			// Send message
-			sz_n = nn_send (sock, msg_buffer, MSG_LEN, 0);
+			printf("--Sending--\n");
+			sz_n = nn_send (sock, &msg, NN_MSG, 0);
 			assert( sz_n == MSG_LEN );
+			printf("--Sent--\n");
 
 		} else {
 
 			// Receive message
-			sz_n = nn_recv (sock, &buf, NN_MSG, 0);
+			sz_n = nn_recv (sock, &msg, NN_MSG, 0);
 			assert( sz_n == MSG_LEN );
-			nn_freemsg (buf);
+			nn_freemsg (msg);
+			printf("--Received--\n");
 
 			// When receiving, start counting after first receive
 			if (i == 0)

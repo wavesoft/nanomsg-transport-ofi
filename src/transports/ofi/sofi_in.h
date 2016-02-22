@@ -77,17 +77,20 @@ struct nn_sofi_in_chunk {
     /* The flags of this chunk */
     uint32_t flags;
 
+    /* Age of the chunk in order to dispose the oldest one */
+    uint32_t age;
+
     /* The nanomsg chunk for the body */
     void * chunk;
 
     /* The libfabric memory region */
     struct fid_mr * mr;
 
-    /* This chunk can also be part of queue */
-    struct nn_queue_item item;
-
     /* This chunk can also be used as a context to libfabric */
     struct fi_context context;
+
+    /* This chunk can also be part of queue */
+    struct nn_queue_item item;
 
 };
 
@@ -122,10 +125,11 @@ struct nn_sofi_in {
     struct nn_sofi_in_chunk     * mr_chunks;
 
     /* Ingress queue and pending item */
-    struct nn_sofi_in_chunk *   chunk_ingress;
+    struct nn_sofi_in_chunk     * chunk_ingress;
     struct nn_queue             queue_ingress;
     struct nn_mutex             mutex_ingress;
-    struct nn_efd               efd_underrun;
+    uint32_t                    age_ingress;
+    int                         underrun_ingress;
 
     /* Buffer sizes  */
     int                         queue_size;

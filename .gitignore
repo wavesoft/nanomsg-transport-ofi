@@ -40,3 +40,5 @@ test/test_nanmsg_timing
 test/test_msg_timed
 
 *.dia~
+
+test/test_nanomsg_timing

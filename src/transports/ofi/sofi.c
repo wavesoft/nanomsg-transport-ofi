@@ -535,6 +535,8 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
     /* Get pointer to sofi structure */
     struct nn_sofi *self;
     self = nn_cont (fsm, struct nn_sofi, fsm);
+    _ofi_debug("OFI[S]: nn_sofi_handler state=%i, src=%i, type=%i\n", 
+        self->state, src, type);
 
     /* Handle state transitions */
     switch (self->state) {
@@ -683,7 +685,7 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
 
                 /* Start poller thread */
                 self->flags |= NN_SOFI_FLAGS_THREAD_ACTIVE;
-                nn_thread_init (&self->thread_worker, nn_sofi_poller_thread, 
+                nn_thread_init (&self->thread_worker, &nn_sofi_poller_thread, 
                     self);
 
                 /* Start keepalive timer */

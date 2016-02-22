@@ -40,6 +40,7 @@
         char msg[1024]; \
         sprintf(msg, __VA_ARGS__); \
         printf("[%012i] %s", (int)pthread_self(), msg); \
+        fflush(stdout); \
     };
     // #define _ofi_debug(...)     printf(__VA_ARGS__)
 #else

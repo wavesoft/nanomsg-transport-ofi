@@ -59,6 +59,11 @@ struct nn_ofi_mrm_chunk {
     /* The libfabric context for putting the chunk as Rx/Tx context parameter */
     struct fi_context context;
 
+    /* OMG My EYES!! Get these two out of here!!! Make this generic, not specific
+       only to sofi_out! */
+    struct iovec iov[2];
+    void * mr_desc[2];
+
 };
 
 /* Memory region manager structure that tracks registered MRs with the NIC */

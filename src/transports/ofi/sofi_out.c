@@ -251,8 +251,6 @@ int nn_sofi_out_tx_event_send( struct nn_sofi_out *self, struct nn_msg *msg )
     int iov_count;
     size_t sz_sphdr, sz_hdrs;
     struct nn_ofi_mrm_chunk * chunk;
-    struct iovec iov[2];
-    void * desc[2];
 
     /* We can only send if we are in POSTED or SENDING state */
     if ( ( self->state != NN_SOFI_OUT_STATE_READY ) &&
@@ -261,25 +259,25 @@ int nn_sofi_out_tx_event_send( struct nn_sofi_out *self, struct nn_msg *msg )
     }
 
     /* Populate size fields */
-    iov[1].iov_len = nn_chunkref_size( &msg->body );
+    chunk->iov[1].iov_len = nn_chunkref_size( &msg->body );
     sz_hdrs = nn_chunkref_size( &msg->hdrs );
     sz_sphdr = nn_chunkref_size( &msg->sphdr );
 
     _ofi_debug("OFI[o]: Sending frame sphdr=%lu, hdr=%lu, body=%lu\n",
-        sz_sphdr, sz_hdrs, iov[1].iov_len);
+        sz_sphdr, sz_hdrs, chunk->iov[1].iov_len);
 
     /* Acquire an MRM lock & get pointers */
     ret = nn_ofi_mrm_lock( &self->mrm, &chunk, &msg->body,
-        &iov[1].iov_base, &desc[1], 
-        &iov[0].iov_base, &desc[0] );
+        &chunk->iov[1].iov_base, &chunk->mr_desc[1], 
+        &chunk->iov[0].iov_base, &chunk->mr_desc[0] );
     if (ret) return ret;
 
     /* If no header exists, skip population of iov[0] */
     if (sz_hdrs + sz_sphdr == 0) {
 
         /* Move iov[1] to iov[0] */
-        iov[0].iov_base = iov[1].iov_base;
-        iov[0].iov_len = iov[1].iov_len;
+        chunk->iov[0].iov_base = chunk->iov[1].iov_base;
+        chunk->iov[0].iov_len = chunk->iov[1].iov_len;
 
         /* We have 1 iov */
         iov_count = 1;
@@ -288,9 +286,9 @@ int nn_sofi_out_tx_event_send( struct nn_sofi_out *self, struct nn_msg *msg )
 
         /* Copy headers in the ancillary buffer */
         nn_assert( (sz_hdrs + sz_sphdr) <= NN_OFI_MRM_ANCILLARY_SIZE );
-        iov[0].iov_len = sz_hdrs + sz_sphdr;
-        memcpy( iov[0].iov_base, nn_chunkref_data( &msg->sphdr ), sz_sphdr );
-        memcpy( iov[0].iov_base + sz_sphdr, 
+        chunk->iov[0].iov_len = sz_hdrs + sz_sphdr;
+        memcpy( chunk->iov[0].iov_base, nn_chunkref_data( &msg->sphdr ), sz_sphdr );
+        memcpy( chunk->iov[0].iov_base + sz_sphdr, 
             nn_chunkref_data( &msg->hdrs ), sz_hdrs );
 
         /* We have 2 iovs */
@@ -303,9 +301,9 @@ int nn_sofi_out_tx_event_send( struct nn_sofi_out *self, struct nn_msg *msg )
 
     /* Prepare fi_msg */
     struct fi_msg egress_msg = {
-        .msg_iov = iov,
+        .msg_iov = (struct iovec*) &chunk->iov,
         .iov_count = iov_count,
-        .desc = desc,
+        .desc = (void**)&chunk->mr_desc,
         .addr = self->ep->remote_fi_addr,
         .context = &chunk->context,
         .data = 0
@@ -434,6 +432,8 @@ static void nn_sofi_out_handler (struct nn_fsm *fsm, int src, int type,
     /* Get pointer to sofi structure */
     struct nn_sofi_out *self;
     self = nn_cont (fsm, struct nn_sofi_out, fsm);
+    _ofi_debug("OFI[o]: nn_sofi_out_handler state=%i, src=%i, type=%i\n", 
+        self->state, src, type);
 
     /* Handle state transitions */
     switch (self->state) {

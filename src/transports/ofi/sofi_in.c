@@ -666,9 +666,10 @@ static void nn_sofi_in_handler (struct nn_fsm *fsm, int src, int type,
     /* Get pointer to sofi structure */
     struct nn_sofi_in *self;
     self = nn_cont (fsm, struct nn_sofi_in, fsm);
+    _ofi_debug("OFI[i]: nn_sofi_in_handler state=%i, src=%i, type=%i\n", 
+        self->state, src, type);
 
     /* Handle state transitions */
-    _ofi_debug("--[H]-- state=%i, src=%i, type=%i\n", self->state, src, type);
     switch (self->state) {
 
 /******************************************************************************/

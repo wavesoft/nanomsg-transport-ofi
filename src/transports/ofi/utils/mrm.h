@@ -27,6 +27,7 @@
 #include "../hlapi.h"
 #include "../../../utils/chunk.h"
 #include "../../../utils/chunkref.h"
+#include "../../../utils/mutex.h"
 
 /* How many bytes to allocate for ancillary data for every chunk */
 #define NN_OFI_MRM_ANCILLARY_SIZE   64
@@ -59,10 +60,12 @@ struct nn_ofi_mrm_chunk {
     /* The libfabric context for putting the chunk as Rx/Tx context parameter */
     struct fi_context context;
 
-    /* OMG My EYES!! Get these two out of here!!! Make this generic, not specific
-       only to sofi_out! */
-    struct iovec iov[2];
-    void * mr_desc[2];
+    /* Piggyback data, used by other operations, exploiting the fact that the 
+       memory is already allocated. */
+    struct {
+        struct iovec    mr_iov[2];
+        void *          mr_desc[2];
+    } data;
 
 };
 
@@ -87,6 +90,9 @@ struct nn_ofi_mrm {
     /* Base key to use for MRs. Each new MR gets a number after it */
     int base_key;
 
+    /* Mutex for synchronisation */
+    struct nn_mutex sync;
+
     /* A memory region given to each chunk for ancillary data 
        (ex. protocol headers) */
     struct fid_mr *mr_ancillary;
@@ -104,15 +110,17 @@ int nn_ofi_mrm_term( struct nn_ofi_mrm * self );
 /* Check if there are no locked chunks */
 int nn_ofi_mrm_isidle( struct nn_ofi_mrm * self );
 
+/* Check if there are no unlocked chunks */
+int nn_ofi_mrm_isfull( struct nn_ofi_mrm * self );
+
 /* Pick the appropriate memory region for the given chunk reference and 
    extract the pointers and region descriptions to use with tx/rx operations.
    This function will also mark the memory region as 'in transit' and will
    not be released until the `nn_ofi_mrm_unlock` is called. */
 int nn_ofi_mrm_lock( struct nn_ofi_mrm * self, struct nn_ofi_mrm_chunk ** mrmc,
-    struct nn_chunkref * chunkref, void **data, void **data_desc, 
-    void **aux, void **aux_desc );
+    struct nn_chunkref * chunkref );
 
 /* Release the memory region chunk */
-int nn_ofi_mrm_unlock( struct nn_ofi_mrm_chunk * mrmc );
+int nn_ofi_mrm_unlock( struct nn_ofi_mrm * self, struct nn_ofi_mrm_chunk * mrmc );
 
 #endif

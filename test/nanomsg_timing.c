@@ -85,18 +85,20 @@ int run_tests( int sock, int direction )
 			msg = nn_allocmsg( MSG_LEN, 0 );
 
 			// Send message
-			printf("--Sending--\n");
+			size_t sz = nn_chunk_size( msg );
+			printf("-- Sending %i\n", i);
 			sz_n = nn_send (sock, &msg, NN_MSG, 0);
 			assert( sz_n == MSG_LEN );
-			printf("--Sent--\n");
+			printf("-- Sent %i\n", i);
 
 		} else {
 
 			// Receive message
+			printf("-- Receiving %i\n", i);
 			sz_n = nn_recv (sock, &msg, NN_MSG, 0);
 			assert( sz_n == MSG_LEN );
 			nn_freemsg (msg);
-			printf("--Received--\n");
+			printf("-- Received %i\n", i);
 
 			// When receiving, start counting after first receive
 			if (i == 0)

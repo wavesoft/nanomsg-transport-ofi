@@ -187,7 +187,6 @@ static int nn_sofi_in_post_buffers(struct nn_sofi_in *self)
     /* Post receive buffers */
     _ofi_debug("OFI[i]: Posting buffers from RxMR chunk=%p (ctx=%p, buf=%p)\n", 
         pick_chunk, &pick_chunk->context, pick_chunk->chunk );
-    _ofi_debug("--DEBUG-- 0) Posting buffers %p\n", pick_chunk);
     ret = fi_recvmsg(self->ep->ep, &msg, 0);
     if (ret) {
 
@@ -266,6 +265,9 @@ void nn_sofi_in_init ( struct nn_sofi_in *self,
 
     /* Initialize mutex */
     nn_mutex_init( &self->mutex_ingress );
+    nn_mutex_init( &self->mutex_rx );
+    nn_mutex_init( &self->mutex_rx_ack );
+    nn_mutex_init( &self->mutex_rx_error );
 
     /* Initialize timer */
     nn_timer_init(&self->timer_abort, NN_SOFI_IN_SRC_TIMER, 
@@ -358,6 +360,9 @@ void nn_sofi_in_term (struct nn_sofi_in *self)
 
     /* Terminate mutex */
     nn_mutex_term( &self->mutex_ingress );
+    nn_mutex_term( &self->mutex_rx );
+    nn_mutex_term( &self->mutex_rx_ack );
+    nn_mutex_term( &self->mutex_rx_error );
 
     /* Abort timer */
     nn_timer_term (&self->timer_abort);
@@ -435,12 +440,11 @@ void nn_sofi_in_stop (struct nn_sofi_in *self)
 void nn_sofi_in_rx_event( struct nn_sofi_in *self, 
     struct fi_cq_data_entry * cq_entry )
 {
-    nn_mutex_lock( &self->mutex_ingress );
+    nn_mutex_lock( &self->mutex_rx );
     struct nn_sofi_in_chunk * chunk = 
         nn_cont (cq_entry->op_context, struct nn_sofi_in_chunk, context);
     _ofi_debug("OFI[i]: Got CQ event for the received frame, ctx=%p (ptr=%p)\n", 
         chunk, cq_entry->op_context);
-    _ofi_debug("--DEBUG-- 1) Incoming Rx Event %p\n", chunk);
 
     /* The chunk is not posted any more */
     chunk->flags &= ~NN_SOFI_IN_MR_FLAG_POSTED;
@@ -457,33 +461,22 @@ void nn_sofi_in_rx_event( struct nn_sofi_in *self,
         case NN_SOFI_IN_STATE_ACKNOWLEGING:
 
             /* Lock and stage message */
-            {
-                /* Lock mutex */
-                // nn_mutex_lock( &self->mutex_ingress );
-
-                chunk->flags |= NN_SOFI_IN_MR_FLAG_LOCKED;
-                _ofi_debug("OFI[i]: PUSHING --> item in queue (item=%p)\n", &chunk->item);
-                nn_queue_item_init( &chunk->item );
-                nn_queue_push( &self->queue_ingress, &chunk->item );
-
-                /* Unlock mutex */
-                // nn_mutex_unlock( &self->mutex_ingress );
-
-            }
+            chunk->flags |= NN_SOFI_IN_MR_FLAG_LOCKED;
+            _ofi_debug("OFI[i]: PUSHING --> item in queue (item=%p)\n", &chunk->item);
+            nn_queue_item_init( &chunk->item );
+            nn_queue_push( &self->queue_ingress, &chunk->item );
     
             /* Trigger worker task */
-            _ofi_debug("--DEBUG-- 2) Calling Rx Worker\n");
             nn_worker_execute (self->worker, &self->task_rx);
 
             break;
 
         default:
-            _ofi_debug("--DEBUG-- 1) Incoming Rx Event (DISCARDED)\n");
             _ofi_debug("OFI[i]: Discarding incoming event because state=%i\n", 
                 self->state);
             break;
     }
-    nn_mutex_unlock( &self->mutex_ingress );
+    nn_mutex_unlock( &self->mutex_rx );
 }
 
 /**
@@ -492,7 +485,7 @@ void nn_sofi_in_rx_event( struct nn_sofi_in *self,
 void nn_sofi_in_rx_error_event( struct nn_sofi_in *self, 
     struct fi_cq_err_entry * cq_err )
 {
-    nn_mutex_lock( &self->mutex_ingress );
+    nn_mutex_lock( &self->mutex_rx_error );
     struct nn_sofi_in_chunk * chunk = 
         nn_cont (cq_err->op_context, struct nn_sofi_in_chunk, context);
     _ofi_debug("OFI[i]: Got CQ error for the received frame, ctx=%p\n", chunk);
@@ -516,7 +509,7 @@ void nn_sofi_in_rx_error_event( struct nn_sofi_in *self,
         default:
             return;
     }
-    nn_mutex_unlock( &self->mutex_ingress );
+    nn_mutex_unlock( &self->mutex_rx_error );
 }
 
 /**
@@ -524,22 +517,21 @@ void nn_sofi_in_rx_error_event( struct nn_sofi_in *self,
  */
 int nn_sofi_in_rx_event_ack( struct nn_sofi_in *self, struct nn_msg *msg )
 {
-    nn_mutex_lock( &self->mutex_ingress );
+    nn_mutex_lock( &self->mutex_rx_ack );
 
     /* If there is no message, return error */
     // nn_mutex_lock( &self->mutex_ingress );
     struct nn_sofi_in_chunk * chunk = nn_sofi_in_pop_buffers( self );
     // nn_mutex_unlock( &self->mutex_ingress );
-    _ofi_debug("--DEBUG-- 7) nn_sofi_in_rx_event_ack (chunk=%p)\n", chunk);
     if (chunk == NULL) {
         _ofi_debug("OFI[i]: Acknowledging an Rx event without one pending!\n");
-        nn_mutex_unlock( &self->mutex_ingress );
+        nn_mutex_unlock( &self->mutex_rx_ack );
         return -EFSM;
     }
 
     /* Initialize and unlock message */
     _ofi_debug("OFI[i]: Acknowledged rx chunk=%p\n",chunk )
-    nn_chunk_addref( chunk->chunk, 1 );
+    nn_chunk_addref( chunk->chunk, 2 );
     nn_msg_init_chunk ( msg, chunk->chunk );
 
     /* Release chunk */
@@ -550,7 +542,7 @@ int nn_sofi_in_rx_event_ack( struct nn_sofi_in *self, struct nn_msg *msg )
     nn_worker_execute (self->worker, &self->task_rx_ack);
 
     /* Works good */
-    nn_mutex_unlock( &self->mutex_ingress );
+    nn_mutex_unlock( &self->mutex_rx_ack );
     return nn_chunk_size( chunk->chunk );
 }
 
@@ -732,9 +724,9 @@ static void nn_sofi_in_handler (struct nn_fsm *fsm, int src, int type,
         case NN_SOFI_IN_SRC_TASK_RX:
             switch (type) {
             case NN_WORKER_TASK_EXECUTE:
+                nn_mutex_lock( &self->mutex_rx );
 
                 _ofi_debug("OFI[i]: Rx event on empty queue\n");
-                _ofi_debug("--DEBUG-- 3) Rx Worker Kicked-in on empty queue\n");
 
                 /* Post another rx buffer */                
                 self->error = nn_sofi_in_post_buffers( self );
@@ -755,7 +747,6 @@ static void nn_sofi_in_handler (struct nn_fsm *fsm, int src, int type,
 
                     /* Notify SOFI for this fact that a message is waiting */
                     _ofi_debug("OFI[i]: Notifying nanomsg for pending event (rx)\n");
-                    _ofi_debug("--DEBUG-- 4) nn_fsm_raise(NN_SOFI_IN_EVENT_RECEIVED)\n");
                     nn_fsm_raise(&self->fsm, &self->event_received, 
                         NN_SOFI_IN_EVENT_RECEIVED);
 
@@ -767,6 +758,7 @@ static void nn_sofi_in_handler (struct nn_fsm *fsm, int src, int type,
 
                 }
 
+                nn_mutex_unlock( &self->mutex_rx );
                 return;
 
             default:
@@ -779,12 +771,15 @@ static void nn_sofi_in_handler (struct nn_fsm *fsm, int src, int type,
         case NN_SOFI_IN_SRC_TASK_RX_ERROR:
             switch (type) {
             case NN_WORKER_TASK_EXECUTE:
+                nn_mutex_lock( &self->mutex_rx_error );
 
                 _ofi_debug("OFI[i]: Rx Error event on empty queue\n");
 
                 /* Nothing to wait for, close */
                 NN_SOFI_IN_SET_STATE( self, NN_SOFI_IN_STATE_CLOSED );
                 nn_sofi_in_stop( self );
+
+                nn_mutex_unlock( &self->mutex_rx_error );
                 return;
 
             default:
@@ -809,16 +804,15 @@ static void nn_sofi_in_handler (struct nn_fsm *fsm, int src, int type,
         case NN_SOFI_IN_SRC_TASK_RX_ACK:
             switch (type) {
             case NN_WORKER_TASK_EXECUTE:
+                nn_mutex_lock( &self->mutex_rx_ack );
 
                 /* Was the item popped the last in the queue? */
-                // nn_mutex_lock( &self->mutex_ingress );
                 if (!nn_queue_empty( &self->queue_ingress )) {
                     // nn_mutex_unlock( &self->mutex_ingress );
 
                     /* Notify SOFI for this fact that a message is waiting */
                     _ofi_debug("OFI[i]: Notifying nanomsg for pending event "
                         "(rx)\n");
-                    _ofi_debug("--DEBUG-- 4) nn_fsm_raise(NN_SOFI_IN_EVENT_RECEIVED) (DELAYED)\n");
                     nn_fsm_raise(&self->fsm, &self->event_received, 
                         NN_SOFI_IN_EVENT_RECEIVED);
 
@@ -844,6 +838,7 @@ static void nn_sofi_in_handler (struct nn_fsm *fsm, int src, int type,
                             NN_SOFI_IN_TIMEOUT_ABORT);
 
                         /* Don't continue */
+                        nn_mutex_unlock( &self->mutex_rx_ack );
                         return;
 
                     } else {
@@ -854,6 +849,7 @@ static void nn_sofi_in_handler (struct nn_fsm *fsm, int src, int type,
                     }
                 }
 
+                nn_mutex_unlock( &self->mutex_rx_ack );
                 return;
 
             default:
@@ -866,8 +862,8 @@ static void nn_sofi_in_handler (struct nn_fsm *fsm, int src, int type,
         case NN_SOFI_IN_SRC_TASK_RX:
             switch (type) {
             case NN_WORKER_TASK_EXECUTE:
+                nn_mutex_lock( &self->mutex_rx );
 
-                _ofi_debug("--DEBUG-- 3) Rx Worker Kicked-in on populated queue (DELAYED)\n");
                 _ofi_debug("OFI[i]: Rx event on populated queue\n");
 
                 /* Post another rx buffer & check for errors */
@@ -895,6 +891,7 @@ static void nn_sofi_in_handler (struct nn_fsm *fsm, int src, int type,
 
                 }
 
+                nn_mutex_unlock( &self->mutex_rx );
                 return;
 
             default:
@@ -907,6 +904,7 @@ static void nn_sofi_in_handler (struct nn_fsm *fsm, int src, int type,
         case NN_SOFI_IN_SRC_TASK_RX_ERROR:
             switch (type) {
             case NN_WORKER_TASK_EXECUTE:
+                nn_mutex_lock( &self->mutex_rx_error );
 
                 _ofi_debug("OFI[i]: Error Rx event on conditioned queue\n");
 
@@ -914,6 +912,7 @@ static void nn_sofi_in_handler (struct nn_fsm *fsm, int src, int type,
                 NN_SOFI_IN_SET_STATE( self, NN_SOFI_IN_STATE_ABORTING );
                 nn_timer_start (&self->timer_abort, NN_SOFI_IN_TIMEOUT_ABORT);
 
+                nn_mutex_unlock( &self->mutex_rx_error );
                 return;
 
             default:
@@ -937,6 +936,7 @@ static void nn_sofi_in_handler (struct nn_fsm *fsm, int src, int type,
         case NN_SOFI_IN_SRC_TASK_RX_ACK:
             switch (type) {
             case NN_WORKER_TASK_EXECUTE:
+                nn_mutex_lock( &self->mutex_rx_ack );
 
                 /* Stop timer, we are good to cleanup */
                 _ofi_debug("OFI[i]: Acknowledged receive event, waiting for "
@@ -955,6 +955,7 @@ static void nn_sofi_in_handler (struct nn_fsm *fsm, int src, int type,
                 NN_SOFI_IN_SET_STATE( self, NN_SOFI_IN_STATE_ABORT_CLEANUP );
                 nn_timer_stop( &self->timer_abort );
 
+                nn_mutex_unlock( &self->mutex_rx_ack );
                 return;
 
             default:

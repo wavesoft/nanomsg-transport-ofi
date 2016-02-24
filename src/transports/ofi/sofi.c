@@ -463,7 +463,6 @@ static int nn_sofi_recv (struct nn_pipebase *pb, struct nn_msg *msg)
     _ofi_debug("SOFI[S]: NanoMsg RECV event\n");
 
     /* Acknowledge event and pull msg from in FSM */
-    _ofi_debug("--DEBUG-- 6) nn_sofi_recv\n");
     return nn_sofi_in_rx_event_ack( &self->sofi_in, msg );
 
 }
@@ -752,7 +751,6 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
 
                 /* Notify socket base that data are available */
                 _ofi_debug("OFI[S]: Data are available\n");
-                _ofi_debug("--DEBUG-- 5) nn_pipebase_received\n");
                 nn_pipebase_received (&self->pipebase);
 
                 return;

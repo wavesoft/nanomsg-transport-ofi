@@ -85,12 +85,18 @@ struct nn_sofi_out {
     /* Outgoing : Events */
     struct nn_fsm_event         event_started;
     struct nn_fsm_event         event_sent;
+    int                         pend_sent;
+    int                         pend_ack;
 
     /* Incoming : Events through worker tasks */
     struct nn_worker            * worker;
-    struct nn_worker_task       task_tx;
-    struct nn_worker_task       task_tx_error;
-    struct nn_worker_task       task_tx_send;
+    struct nn_worker_task       task_cntr;
+    struct nn_mutex             mutex_cntr;
+    int                         cntr_pending;
+    int                         cntr_task_tx;
+    int                         cntr_task_tx_error;
+    int                         cntr_task_tx_send;
+    int                         cntr_event_send;
 
     /* Abort cleanup timeout */
     struct nn_timer             timer_abort;

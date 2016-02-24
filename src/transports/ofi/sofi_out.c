@@ -27,6 +27,8 @@
 #include "../../utils/cont.h"
 #include "../../utils/err.h"
 #include "../../utils/fast.h"
+#include "../../utils/msg.h"
+#include "../../utils/chunkref.h"
 
 /* FSM States */
 #define NN_SOFI_OUT_STATE_IDLE          3001
@@ -40,9 +42,7 @@
 
 /* FSM Sources */
 #define NN_SOFI_OUT_SRC_TIMER           3101
-#define NN_SOFI_OUT_SRC_TASK_TX         3102
-#define NN_SOFI_OUT_SRC_TASK_TX_ERROR   3103
-#define NN_SOFI_OUT_SRC_TASK_TX_SEND    3104
+#define NN_SOFI_OUT_SRC_TASK_CNTR       3102
 
 /* Timeout values */
 #define NN_SOFI_OUT_TIMEOUT_ABORT       1000
@@ -52,6 +52,14 @@ static void nn_sofi_out_handler (struct nn_fsm *self, int src, int type,
     void *srcptr);
 static void nn_sofi_out_shutdown (struct nn_fsm *self, int src, int type, 
     void *srcptr);
+
+/* Schedule a task */
+#define NN_SOFI_OUT_SCHED_CNTR(self,task) \
+    (self)-> task ++; \
+    _ofi_debug("OFI[o]: >> %s >> (tx=%i, tx_send=%i, tx_error=%i)\n", #task, \
+        (self)->cntr_task_tx, (self)->cntr_task_tx_send, (self)->cntr_task_tx_error ); \
+    if ((self)->cntr_pending++ == 0) \
+        nn_worker_execute ((self)->worker, &(self)->task_cntr); \
 
 /* ============================== */
 /*       HELPER FUNCTIONS         */
@@ -75,6 +83,7 @@ void nn_sofi_out_init ( struct nn_sofi_out *self,
     self->error = 0;
     self->ofi = ofi;
     self->ep = ep;
+    self->pend_sent = 0;
 
     /* Initialize events */
     nn_fsm_event_init (&self->event_started);
@@ -87,13 +96,15 @@ void nn_sofi_out_init ( struct nn_sofi_out *self,
     /*  Choose a worker thread to handle this socket. */
     self->worker = nn_fsm_choose_worker (&self->fsm);
 
-    /* Initialize worker tasks */
-    nn_worker_task_init (&self->task_tx_send, NN_SOFI_OUT_SRC_TASK_TX_SEND,
+    /* Initialize worker tasks for handling multiple events */
+    nn_mutex_init (&self->mutex_cntr);
+    nn_worker_task_init (&self->task_cntr, NN_SOFI_OUT_SRC_TASK_CNTR,
         &self->fsm);
-    nn_worker_task_init (&self->task_tx, NN_SOFI_OUT_SRC_TASK_TX,
-        &self->fsm);
-    nn_worker_task_init (&self->task_tx_error, NN_SOFI_OUT_SRC_TASK_TX_ERROR,
-        &self->fsm);
+    self->cntr_pending = 0;
+    self->cntr_task_tx = 0;
+    self->cntr_task_tx_error = 0;
+    self->cntr_task_tx_send = 0;
+    self->cntr_event_send = 0;
 
     /* Initialize timer */
     nn_timer_init(&self->timer_abort, NN_SOFI_OUT_SRC_TIMER, 
@@ -138,12 +149,9 @@ void nn_sofi_out_term (struct nn_sofi_out *self)
     nn_fsm_event_term (&self->event_sent);
 
     /* Cleanup worker tasks */
-    nn_worker_cancel (self->worker, &self->task_tx_error);
-    nn_worker_cancel (self->worker, &self->task_tx_send);
-    nn_worker_cancel (self->worker, &self->task_tx);
-    nn_worker_task_term (&self->task_tx_error);
-    nn_worker_task_term (&self->task_tx_send);
-    nn_worker_task_term (&self->task_tx);
+    nn_worker_cancel (self->worker, &self->task_cntr);
+    nn_worker_task_term (&self->task_cntr);
+    nn_mutex_term (&self->mutex_cntr);
 
     /* Terminate fsm */
     nn_fsm_term (&self->fsm);
@@ -211,15 +219,17 @@ void nn_sofi_out_stop (struct nn_sofi_out *self)
 void nn_sofi_out_tx_event( struct nn_sofi_out *self, 
     struct fi_cq_data_entry * cq_entry )
 {
+    nn_mutex_lock(&self->mutex_cntr);
     struct nn_ofi_mrm_chunk * chunk = 
         nn_cont (cq_entry->op_context, struct nn_ofi_mrm_chunk, context);
     _ofi_debug("OFI[o]: Got CQ event for the sent frame, ctx=%p\n", chunk);
 
     /* Unlock mrm chunk */
-    nn_ofi_mrm_unlock( chunk );
+    nn_ofi_mrm_unlock( &self->mrm, chunk );
 
-    /* Trigger worker task */
-    nn_worker_execute (self->worker, &self->task_tx);
+    /* Hack to have only one worker task in queue */
+    NN_SOFI_OUT_SCHED_CNTR( self, cntr_task_tx );
+    nn_mutex_unlock(&self->mutex_cntr);
 }
 
 /**
@@ -228,18 +238,20 @@ void nn_sofi_out_tx_event( struct nn_sofi_out *self,
 void nn_sofi_out_tx_error_event( struct nn_sofi_out *self, 
     struct fi_cq_err_entry * cq_err )
 {
+    nn_mutex_lock(&self->mutex_cntr);
     struct nn_ofi_mrm_chunk * chunk = 
         nn_cont (cq_err->op_context, struct nn_ofi_mrm_chunk, context);
     _ofi_debug("OFI[o]: Got CQ event for the sent frame, ctx=%p\n", chunk);
 
     /* Unlock mrm chunk */
-    nn_ofi_mrm_unlock( chunk );
+    nn_ofi_mrm_unlock( &self->mrm, chunk );
 
     /* Keep error */
     self->error = cq_err->err;
 
     /* Trigger worker task */
-    nn_worker_execute (self->worker, &self->task_tx_error);
+    NN_SOFI_OUT_SCHED_CNTR( self, cntr_task_tx_error );
+    nn_mutex_unlock(&self->mutex_cntr);
 }
 
 /**
@@ -251,33 +263,37 @@ int nn_sofi_out_tx_event_send( struct nn_sofi_out *self, struct nn_msg *msg )
     int iov_count;
     size_t sz_sphdr, sz_hdrs;
     struct nn_ofi_mrm_chunk * chunk;
+    nn_mutex_lock(&self->mutex_cntr);
 
     /* We can only send if we are in POSTED or SENDING state */
     if ( ( self->state != NN_SOFI_OUT_STATE_READY ) &&
          ( self->state != NN_SOFI_OUT_STATE_SENDING ) ) {
+        nn_mutex_unlock(&self->mutex_cntr);
         return -ETERM;
     }
 
+    /* Acquire an MRM lock & get pointers */
+    ret = nn_ofi_mrm_lock( &self->mrm, &chunk, &msg->body );
+    if (ret) {
+        nn_mutex_unlock(&self->mutex_cntr);
+        return ret;
+    }
+
     /* Populate size fields */
-    chunk->iov[1].iov_len = nn_chunkref_size( &msg->body );
+    chunk->data.mr_iov[1].iov_len = nn_chunkref_size( &msg->body );
     sz_hdrs = nn_chunkref_size( &msg->hdrs );
     sz_sphdr = nn_chunkref_size( &msg->sphdr );
 
     _ofi_debug("OFI[o]: Sending frame sphdr=%lu, hdr=%lu, body=%lu\n",
-        sz_sphdr, sz_hdrs, chunk->iov[1].iov_len);
-
-    /* Acquire an MRM lock & get pointers */
-    ret = nn_ofi_mrm_lock( &self->mrm, &chunk, &msg->body,
-        &chunk->iov[1].iov_base, &chunk->mr_desc[1], 
-        &chunk->iov[0].iov_base, &chunk->mr_desc[0] );
-    if (ret) return ret;
+        sz_sphdr, sz_hdrs, chunk->data.mr_iov[1].iov_len);
 
     /* If no header exists, skip population of iov[0] */
     if (sz_hdrs + sz_sphdr == 0) {
 
         /* Move iov[1] to iov[0] */
-        chunk->iov[0].iov_base = chunk->iov[1].iov_base;
-        chunk->iov[0].iov_len = chunk->iov[1].iov_len;
+        chunk->data.mr_iov[0].iov_base = chunk->data.mr_iov[1].iov_base;
+        chunk->data.mr_iov[0].iov_len = chunk->data.mr_iov[1].iov_len;
+        chunk->data.mr_desc[0] = chunk->data.mr_desc[1];
 
         /* We have 1 iov */
         iov_count = 1;
@@ -286,9 +302,9 @@ int nn_sofi_out_tx_event_send( struct nn_sofi_out *self, struct nn_msg *msg )
 
         /* Copy headers in the ancillary buffer */
         nn_assert( (sz_hdrs + sz_sphdr) <= NN_OFI_MRM_ANCILLARY_SIZE );
-        chunk->iov[0].iov_len = sz_hdrs + sz_sphdr;
-        memcpy( chunk->iov[0].iov_base, nn_chunkref_data( &msg->sphdr ), sz_sphdr );
-        memcpy( chunk->iov[0].iov_base + sz_sphdr, 
+        chunk->data.mr_iov[0].iov_len = sz_hdrs + sz_sphdr;
+        memcpy( chunk->data.mr_iov[0].iov_base, nn_chunkref_data( &msg->sphdr ), sz_sphdr );
+        memcpy( chunk->data.mr_iov[0].iov_base + sz_sphdr, 
             nn_chunkref_data( &msg->hdrs ), sz_hdrs );
 
         /* We have 2 iovs */
@@ -301,16 +317,13 @@ int nn_sofi_out_tx_event_send( struct nn_sofi_out *self, struct nn_msg *msg )
 
     /* Prepare fi_msg */
     struct fi_msg egress_msg = {
-        .msg_iov = (struct iovec*) &chunk->iov,
+        .msg_iov = (struct iovec*) &chunk->data.mr_iov,
         .iov_count = iov_count,
-        .desc = (void**)&chunk->mr_desc,
+        .desc = (void**)&chunk->data.mr_desc,
         .addr = self->ep->remote_fi_addr,
         .context = &chunk->context,
         .data = 0
     };
-
-    /* We are now sending */
-    self->state = NN_SOFI_OUT_STATE_SENDING;
 
     /* Send data and return when buffer can be reused */
     _ofi_debug("OFI[o]: Send context=%p\n", chunk);
@@ -321,19 +334,24 @@ int nn_sofi_out_tx_event_send( struct nn_sofi_out *self, struct nn_msg *msg )
         if (ret == -FI_EOPBADSTATE) {
             _ofi_debug("OFI[H]: ofi_tx_msg() returned -FI_EOPBADSTATE, "
                 "considering shutdown.\n");
-            return -EINTR;           
+            nn_mutex_unlock(&self->mutex_cntr);
+            return -EINTR;
         }
 
         /* Otherwise display error */
         FT_PRINTERR("ofi_tx_msg", ret);
+        nn_mutex_unlock(&self->mutex_cntr);
         return -EBADF;
     }
 
-    /* Trigger worker task */
-    // nn_worker_execute (self->worker, &self->task_tx_send);
+    /* Notify FSM that a send confirmation must be sent */
+    NN_SOFI_OUT_SCHED_CNTR( self, cntr_task_tx_send );
+    self->state = NN_SOFI_OUT_STATE_SENDING;
 
     /* We are good */
+    nn_mutex_unlock(&self->mutex_cntr);
     return 0;
+
 }
 
 /**
@@ -471,9 +489,33 @@ static void nn_sofi_out_handler (struct nn_fsm *fsm, int src, int type,
 /*  We are ready to send data to the remote endpoint.                         */
 /******************************************************************************/
     case NN_SOFI_OUT_STATE_READY:
+        switch (src) {
 
-        /* This is never handled, that's an intermediate state */    
-        nn_fsm_bad_state (self->state, src, type);
+        /* ========================= */
+        /*  TASK: Task counter tick  */
+        /* ========================= */
+        case NN_SOFI_OUT_SRC_TASK_CNTR:
+            switch (type) {
+            case NN_WORKER_TASK_EXECUTE:
+
+                nn_assert( self->cntr_task_tx == 0 );
+                nn_assert( self->cntr_task_tx_send == 0 );
+                nn_assert( self->cntr_task_tx_error == 0 );
+                nn_assert( self->cntr_event_send == 0 );
+                nn_assert( self->cntr_pending == 0 );
+
+                return;
+
+            default:
+                nn_fsm_bad_action (self->state, src, type);
+            }
+
+        default:
+            nn_fsm_bad_source (self->state, src, type);
+        }
+
+        /* Intermediate state, should not be reachable */
+        // nn_fsm_bad_source (self->state, src, type);
 
 /******************************************************************************/
 /*  SENDING state.                                                            */
@@ -484,43 +526,95 @@ static void nn_sofi_out_handler (struct nn_fsm *fsm, int src, int type,
         switch (src) {
 
         /* ========================= */
-        /*  TASK: Send Completed     */
+        /*  TASK: Task counter tick  */
         /* ========================= */
-        case NN_SOFI_OUT_SRC_TASK_TX:
+        case NN_SOFI_OUT_SRC_TASK_CNTR:
             switch (type) {
             case NN_WORKER_TASK_EXECUTE:
 
-                /* Notify that data are sent */
-                _ofi_debug("OFI[o]: Acknowledged sent event\n");
-                nn_fsm_raise(&self->fsm, &self->event_sent, 
-                    NN_SOFI_OUT_EVENT_SENT);
+                nn_mutex_lock(&self->mutex_cntr);
+                if (self->cntr_pending > 0) {
 
-                /* Wait until all mrm buffers are unlocked, meaning
-                   that there are no pending outgoing operations. */
-                if (!nn_ofi_mrm_isidle(&self->mrm)) {
-                    _ofi_debug("OFI[o]: MRM not idle, waiting for it\n");
-                    return;
+                    /* =================================== */
+                    /*  Tx CQ Event                        */
+                    if (self->cntr_task_tx > 0) {
+                    /* =================================== */
+                        _ofi_debug("OFI[o]: << cntr_task_tx <<\n");
+                        self->cntr_task_tx--;
+                        self->cntr_pending--;
+
+                        /* Notify that data are sent */
+                        _ofi_debug("OFI[o]: Acknowledged sent event\n");
+
+                        /* If there are send() requests left, send them now */
+                        if (self->pend_sent) {
+
+                            /* Check for late send events */
+                            _ofi_debug("OFI[o]: Pending %i sends\n", self->pend_sent);
+                            self->pend_sent--;
+
+                            /* Send delayed send event */
+                            _ofi_debug("OFI[o]: Delayed return from send()\n");
+                            nn_fsm_raise(&self->fsm, &self->event_sent, 
+                                NN_SOFI_OUT_EVENT_SENT);
+
+                        }
+                    }
+
+                    /* =================================== */
+                    /*  Tx Error Event                     */
+                    if (self->cntr_task_tx_error > 0) {
+                    /* =================================== */
+                        _ofi_debug("OFI[o]: << cntr_task_tx_error <<\n");
+                        self->cntr_task_tx_error--;
+                        self->cntr_pending--;
+
+                        /* There was an acknowledgement error */
+                        _ofi_debug("OFI[o]: Error acknowledging the send event\n");
+                        self->state = NN_SOFI_OUT_STATE_ERROR;
+                        nn_sofi_out_stop( self );
+
+                        /* Do not do anything */
+                        return;
+
+                    }
+
+                    /* =================================== */
+                    /*  Tx Send Request Event              */
+                    if (self->cntr_task_tx_send > 0) {
+                    /* =================================== */
+                        _ofi_debug("OFI[o]: << cntr_task_tx_send <<\n");
+                        self->cntr_task_tx_send--;
+                        self->cntr_pending--;
+
+                        /* Send acknowledgement if mrm are not full */
+                        if (nn_ofi_mrm_isfull(&self->mrm)) {
+                            _ofi_debug("OFI[o]: Delaying send() return MRM found free\n");
+                            self->pend_sent++;
+                        } else {
+                            _ofi_debug("OFI[o]: Returning from send()\n");
+                            nn_fsm_raise(&self->fsm, &self->event_sent, 
+                                NN_SOFI_OUT_EVENT_SENT);
+                        }
+                    }
+
+                    /* Check if we should re-schedule */
+                    if (self->cntr_pending) {
+                        _ofi_debug("OFI[o]: More counters pending, queuing-up\n");
+                        nn_worker_execute ((self)->worker, &(self)->task_cntr);
+                    }
+
                 }
-                self->state = NN_SOFI_OUT_STATE_READY;
 
-                return;
+                /* If there are no pending tasks, exit now */
+                _ofi_debug("OFI[o]: CNTR: (tx=%i, tx_send=%i, tx_error=%i)\n",
+                    self->cntr_task_tx, self->cntr_task_tx_send, self->cntr_task_tx_error );
+                if ((self->cntr_pending == 0) && nn_ofi_mrm_isidle(&self->mrm)) {
+                    _ofi_debug("OFI[o]: No pending CNTRs and all MRMs are idle\n");
+                    self->state = NN_SOFI_OUT_STATE_READY;
+                }
 
-            default:
-                nn_fsm_bad_action (self->state, src, type);
-            }
-
-        /* ========================= */
-        /*  TASK: Send Error         */
-        /* ========================= */
-        case NN_SOFI_OUT_SRC_TASK_TX_ERROR:
-            switch (type) {
-            case NN_WORKER_TASK_EXECUTE:
-
-                /* There was an acknowledgement error */
-                _ofi_debug("OFI[o]: Error acknowledging the send event\n");
-                self->state = NN_SOFI_OUT_STATE_ERROR;
-                nn_sofi_out_stop( self );
-
+                nn_mutex_unlock(&self->mutex_cntr);
                 return;
 
             default:
@@ -540,51 +634,57 @@ static void nn_sofi_out_handler (struct nn_fsm *fsm, int src, int type,
         switch (src) {
 
         /* ========================= */
-        /*  TASK: Send Acknowledged  */
+        /*  TASK: Task counter tick  */
         /* ========================= */
-        case NN_SOFI_OUT_SRC_TASK_TX:
+        case NN_SOFI_OUT_SRC_TASK_CNTR:
             switch (type) {
             case NN_WORKER_TASK_EXECUTE:
 
-                /* Notify that data are sent */
-                _ofi_debug("OFI[o]: Acknowledged sent event, cleaning-up\n");
-                nn_fsm_raise(&self->fsm, &self->event_sent, 
-                    NN_SOFI_OUT_EVENT_SENT);
+                nn_mutex_lock(&self->mutex_cntr);
+                while (self->cntr_pending > 0) {
 
-                /* Wait until all mrm buffers are unlocked, meaning
-                   that there are no pending outgoing operations. */
-                if (!nn_ofi_mrm_isidle(&self->mrm)) {
-                    _ofi_debug("OFI[o]: MRM not idle, waiting for it\n");
-                    return;
+                    /* =================================== */
+                    /*  Tx CQ Event                        */
+                    if (self->cntr_task_tx > 0) {
+                    /* =================================== */
+                        self->cntr_task_tx--;
+
+                        /* Notify that data are sent */
+                        _ofi_debug("OFI[o]: Acknowledged sent event, cleaning-up\n");
+
+                        /* Check for idle MRM */
+                        if (nn_ofi_mrm_isidle(&self->mrm)) {
+                            _ofi_debug("OFI[o]: MRM is idle, cleaning-up\n");
+
+                            /* We got acknowledgement, continue with abort cleanup */
+                            self->state = NN_SOFI_OUT_STATE_ABORT_CLEANUP;
+                            nn_timer_stop (&self->timer_abort);
+                            return;
+
+                        };
+
+                    /* =================================== */
+                    /*  Tx Error Event                     */
+                    } else if (self->cntr_task_tx_error > 0) {
+                    /* =================================== */
+                        self->cntr_task_tx_error--;
+
+                        /* Send error, cleanup */
+                        self->state = NN_SOFI_OUT_STATE_ABORT_CLEANUP;
+                        nn_timer_stop (&self->timer_abort);
+                        return;
+
+                    }
+
+                    self->cntr_pending--;
                 }
-
-                /* We got acknowledgement, continue with abort cleanup */
-                self->state = NN_SOFI_OUT_STATE_ABORT_CLEANUP;
-                nn_timer_stop (&self->timer_abort);
-
+                nn_mutex_unlock(&self->mutex_cntr);
                 return;
 
             default:
                 nn_fsm_bad_action (self->state, src, type);
             }
 
-        /* ========================= */
-        /*  TASK: Send Error         */
-        /* ========================= */
-        case NN_SOFI_OUT_SRC_TASK_TX_ERROR:
-            switch (type) {
-            case NN_WORKER_TASK_EXECUTE:
-
-                /* We got acknowledgement, continue with abort cleanup */
-                _ofi_debug("OFI[o]: Acknowledged sent event\n");
-                self->state = NN_SOFI_OUT_STATE_ABORT_CLEANUP;
-                nn_timer_stop (&self->timer_abort);
-
-                return;
-
-            default:
-                nn_fsm_bad_action (self->state, src, type);
-            }
 
         /* ========================= */
         /*  Abort Timer Timeout      */

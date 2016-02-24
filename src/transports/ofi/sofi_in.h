@@ -114,8 +114,11 @@ struct nn_sofi_in {
     /* Incoming : Events through worker tasks */
     struct nn_worker            * worker;
     struct nn_worker_task       task_rx;
+    struct nn_mutex             mutex_rx;
     struct nn_worker_task       task_rx_error;
+    struct nn_mutex             mutex_rx_error;
     struct nn_worker_task       task_rx_ack;
+    struct nn_mutex             mutex_rx_ack;
 
     /* Abort cleanup timeout */
     struct nn_timer             timer_abort;

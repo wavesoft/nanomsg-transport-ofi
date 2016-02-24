@@ -718,11 +718,11 @@ int ofi_alloc( struct ofi_resources * R, enum fi_ep_type ep_type )
 	}
 
 	/* Domains */
-	R->hints->domain_attr->mr_mode 		= FI_MR_BASIC;
-	R->hints->domain_attr->threading 	= FI_THREAD_SAFE;
+	// R->hints->domain_attr->mr_mode 		= FI_MR_BASIC;
+	// R->hints->domain_attr->threading 	= FI_THREAD_SAFE;
 
 	/* Rx Attr */
-	R->hints->rx_attr->comp_order 		= FI_ORDER_STRICT;
+	// R->hints->rx_attr->comp_order 		= FI_ORDER_STRICT;
 
 	/* Endpoints */
 	R->hints->ep_attr->type	= ep_type;

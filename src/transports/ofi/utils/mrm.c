@@ -47,6 +47,9 @@ int nn_ofi_mrm_init( struct nn_ofi_mrm * self, struct ofi_active_endpoint * ep,
     self->access_flags = access_flags;
     self->base_key = base_key;
 
+    /* Init mutex */
+    nn_mutex_init( &self->sync );
+
     /* Allocate ancillary pointer */
     ancillary_len = NN_OFI_MRM_ANCILLARY_SIZE * len;
     self->ptr_ancillary = nn_alloc( ancillary_len, "mrm ancillary" );
@@ -109,6 +112,9 @@ int nn_ofi_mrm_term( struct nn_ofi_mrm * self )
 
     }
 
+    /* Term mutex */
+    nn_mutex_term( &self->sync );
+
     /* Close ascillary MR */
     FT_CLOSE_FID( self->mr_ancillary );
 
@@ -122,56 +128,88 @@ int nn_ofi_mrm_term( struct nn_ofi_mrm * self )
 
 /* Pick and set-up appropriate MR */
 int nn_ofi_mrm_lock( struct nn_ofi_mrm * self, struct nn_ofi_mrm_chunk ** mrmc,
-    struct nn_chunkref * chunkref, void **data, void **data_desc, 
-    void **aux, void **aux_desc )
+    struct nn_chunkref * chunkref )
 {
     struct nn_ofi_mrm_chunk * chunk;
+    nn_mutex_lock( &self->sync );
 
     /* Pick most appropriate chunk */
     chunk = pick_chunk( self, nn_chunkref_getchunk(chunkref) );
-    if (!chunk)
+    if (!chunk) {
+        nn_mutex_unlock( &self->sync );
         return -ENOMEM;
+    }
 
-    /* Populate pointers */
-    *data = nn_chunkref_data( chunkref );
-    *data_desc = fi_mr_desc( chunk->mr );
-    *aux = chunk->ancillary;
-    *aux_desc = fi_mr_desc( self->mr_ancillary );
+    /* First populate mrmc pointer because it's referred later */
+    *mrmc = chunk;
+
+    /* Populate chunk details */
+    chunk->data.mr_iov[0].iov_base = chunk->ancillary;
+    chunk->data.mr_iov[1].iov_base = nn_chunkref_data( chunkref );
+    chunk->data.mr_desc[0] = fi_mr_desc( self->mr_ancillary );
+    chunk->data.mr_desc[1] = fi_mr_desc( chunk->mr );
 
     /* Lock chunk */
     chunk->flags |= NN_OFI_MRM_FLAG_LOCKED;
-
-    /* Success */
-    *mrmc = chunk;
+    nn_mutex_unlock( &self->sync );
     return 0;
 }
 
 /* Release the memory region chunk */
-int nn_ofi_mrm_unlock( struct nn_ofi_mrm_chunk * chunk )
+int nn_ofi_mrm_unlock( struct nn_ofi_mrm * self, struct nn_ofi_mrm_chunk * chunk )
 {
+    nn_mutex_lock( &self->sync );
     /* Unlock memory region */
     nn_assert( chunk->flags & NN_OFI_MRM_FLAG_LOCKED );    
     chunk->flags &= ~NN_OFI_MRM_FLAG_LOCKED;
+    nn_mutex_unlock( &self->sync );
     return 0;
 }
 
 /* Check if there are no locked chunks */
 int nn_ofi_mrm_isidle( struct nn_ofi_mrm * self )
 {
+    nn_mutex_lock( &self->sync );
     /* Iterate over chunks and free allocated */
     for (struct nn_ofi_mrm_chunk * mr = self->chunks, 
             * mr_end = self->chunks + self->len;
          mr < mr_end; mr++ ) {
 
         /* Found at least one locked chunk, we are not idle */
-        if (mr->flags & NN_OFI_MRM_FLAG_LOCKED)
+        if (mr->flags & NN_OFI_MRM_FLAG_LOCKED) {
+            nn_mutex_unlock( &self->sync );
             return 0;
+        }
 
     }
 
     /* We are idle */
+    nn_mutex_unlock( &self->sync );
     return 1;
 }
+
+/* Check if there are no unlocked chunks */
+int nn_ofi_mrm_isfull( struct nn_ofi_mrm * self )
+{
+    nn_mutex_lock( &self->sync );
+    /* Iterate over chunks and free allocated */
+    for (struct nn_ofi_mrm_chunk * mr = self->chunks, 
+            * mr_end = self->chunks + self->len;
+         mr < mr_end; mr++ ) {
+
+        /* Found at least one locked chunk, we are not idle */
+        if (!(mr->flags & NN_OFI_MRM_FLAG_LOCKED)) {
+            nn_mutex_unlock( &self->sync );
+            return 0;
+        }
+
+    }
+
+    /* We are idle */
+    nn_mutex_unlock( &self->sync );
+    return 1;
+}
+
 
 /* Manage memory region */
 static int nn_ofi_mrm_manage ( struct nn_ofi_mrm * self, 

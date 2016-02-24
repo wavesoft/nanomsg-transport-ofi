@@ -31,14 +31,10 @@
 # Debug files
 *.dSYM/
 
+test/test_nanomsg_timing
 test/test_dgram
-
-test/test_msg
-
-test/test_nanmsg_timing
-
 test/test_msg_timed
+test/test_msg
 
 *.dia~
 
-test/test_nanomsg_timing

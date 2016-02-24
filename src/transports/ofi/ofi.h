@@ -37,9 +37,9 @@
     #include <pthread.h>
     /* Enable debug */
     #define _ofi_debug(...)   { \
-        char msg[1024]; \
-        sprintf(msg, __VA_ARGS__); \
-        printf("[%012i] %s", (int)pthread_self(), msg); \
+        char __msg[1024]; \
+        sprintf(__msg, __VA_ARGS__); \
+        printf("[%012i] %s", (int)pthread_self(), __msg); \
         fflush(stdout); \
     };
     // #define _ofi_debug(...)     printf(__VA_ARGS__)

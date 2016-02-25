@@ -330,17 +330,6 @@ static void nn_sofi_poller_thread (void *arg)
     uint32_t event;
     int ret;
 
-    /* Open a polling set */
-    struct fid_poll * poll_set;
-    struct fi_poll_attr poll_attr = {
-        .flags = 0
-    };
-    ret = fi_poll_open( self->ep->domain, &poll_attr, &poll_set );
-    if (ret) {
-        FT_PRINTERR("fi_poll_open", ret);
-        return;
-    }
-
     _ofi_debug("OFI[p]: Starting poller thread\n");
 
     /* Keep thread alive while the THREAD_ACTIVE flag is set  */
@@ -430,7 +419,6 @@ static void nn_sofi_poller_thread (void *arg)
     }
 
     /* Clenaup */
-    FT_CLOSE_FID( poll_set );
     _ofi_debug("OFI[p]: Exited poller thread\n");
 
 }
@@ -600,6 +588,7 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
 
                     /* Stop FSM through worker in order to allow other tasks,
                        such as pending nn_send events, to complete */
+                    self->state = NN_SOFI_STATE_IDLE;
                     nn_worker_execute (self->worker, &self->task_stop);
 
                 } else {

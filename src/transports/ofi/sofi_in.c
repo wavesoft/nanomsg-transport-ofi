@@ -187,6 +187,7 @@ static int nn_sofi_in_post_buffers(struct nn_sofi_in *self)
     /* Post receive buffers */
     _ofi_debug("OFI[i]: Posting buffers from RxMR chunk=%p (ctx=%p, buf=%p)\n", 
         pick_chunk, &pick_chunk->context, pick_chunk->chunk );
+    _ofi_debug("OFI[i] ### POSTING RECEIVE BUFFER len=%lu\n", iov[0].iov_len);
     ret = fi_recvmsg(self->ep->ep, &msg, 0);
     if (ret) {
 
@@ -582,6 +583,7 @@ size_t nn_sofi_in_rx( struct nn_sofi_in *self, void * ptr,
     };
 
     /* Receive data */
+    _ofi_debug("OFI[i] ### POSTING RECEIVE BUFFER len=%lu\n", iov[0].iov_len);
     ret = fi_recvmsg( self->ep->ep, &msg, 0 );
     if (ret) {
         FT_PRINTERR("fi_recvmsg", ret);

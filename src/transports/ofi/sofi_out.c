@@ -327,6 +327,7 @@ int nn_sofi_out_tx_event_send( struct nn_sofi_out *self, struct nn_msg *msg )
 
     /* Send data and return when buffer can be reused */
     _ofi_debug("OFI[o]: Send context=%p\n", chunk);
+    _ofi_debug("OFI[i] ### POSTING SEND BUFFER len=%lu\n", egress_msg.msg_iov[0].iov_len);
     ret = fi_sendmsg( self->ep->ep, &egress_msg, FI_INJECT_COMPLETE);
     if (ret) {
 

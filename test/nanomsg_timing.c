@@ -34,8 +34,11 @@
 
 /* Platform-specific customisations */
 #ifdef __APPLE__
+#include <libc.h>
 #include "../src/transports/ofi/platf/osx.h"
 /* (Implementation in libfabric) */
+#else
+#include <inttypes.h>
 #endif
 
 #define MSG_LEN 	10240

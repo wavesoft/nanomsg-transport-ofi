@@ -19,16 +19,22 @@ LIBFABRIC_INCLUDE_DIR=$(LIBFABRIC_DIR)/include
 OFI_DIR=../src/transports/ofi
 
 # Flags for nanomsg tests
-CFLAGS_NN=-I$(NANOMSG_INCLUDE_DIR) -I$(LIBFABRIC_INCLUDE_DIR)
+CCFLAGS_NN=-I$(NANOMSG_INCLUDE_DIR) -I$(LIBFABRIC_INCLUDE_DIR)
 LDFLAGS_NN=-L$(NANOMSG_LIB_DIR) -L$(LIBFABRIC_LIB_DIR)
 
 # Flags for ofi tests
-CFLAGS_OFI=-D__STANDALONE_TESTS -I$(LIBFABRIC_INCLUDE_DIR) -I$(OFI_DIR)
+CCFLAGS_OFI=-D__STANDALONE_TESTS -I$(LIBFABRIC_INCLUDE_DIR) -I$(OFI_DIR)
 LDFLAGS_OFI=-L$(LIBFABRIC_LIB_DIR)
 
 # Common flags
-CFLAGS=-O0 -g
+CCFLAGS=-O0 -g
 LDFLAGS=-lfabric
+
+# Patches for linux
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Linux)
+    CCFLAGS += -lpthread -lanl
+endif
 
 .PHONY: all clean test fabric nanomsg
 
@@ -47,7 +53,7 @@ nanomsg: test_nanomsg_timing
 # ================================================
 
 hlapi.o: $(OFI_DIR)/hlapi.c
-	gcc $(CFLAGS_OFI) $(CFLAGS) -I$(PWD) $(OFI_DIR)/hlapi.c -c -o $@
+	gcc $(CCFLAGS_OFI) $(CCFLAGS) -I$(PWD) $(OFI_DIR)/hlapi.c -c -o $@
 
 # ================================================
 #  Target binaries
@@ -55,17 +61,17 @@ hlapi.o: $(OFI_DIR)/hlapi.c
 
 # Fabric tests
 test_fabric_dgram: fabric_dgram.c hlapi.o
-	gcc $(CFLAGS_OFI) $(CFLAGS) $^ $(LDFLAGS_OFI) $(LDFLAGS) -o $@
+	gcc $(CCFLAGS_OFI) $(CCFLAGS) $^ $(LDFLAGS_OFI) $(LDFLAGS) -o $@
 
 test_fabric_msg: fabric_msg.c hlapi.o
-	gcc $(CFLAGS_OFI) $(CFLAGS) $^ $(LDFLAGS_OFI) $(LDFLAGS) -o $@
+	gcc $(CCFLAGS_OFI) $(CCFLAGS) $^ $(LDFLAGS_OFI) $(LDFLAGS) -o $@
 
 test_fabric_msg_timed: fabric_msg_timed.c hlapi.o
-	gcc $(CFLAGS_OFI) $(CFLAGS) $^ $(LDFLAGS_OFI) $(LDFLAGS) -o $@
+	gcc $(CCFLAGS_OFI) $(CCFLAGS) $^ $(LDFLAGS_OFI) $(LDFLAGS) -o $@
 
 # Nanomsg tests
 test_nanomsg_timing: nanomsg_timing.c $(NANOMSG_LIB_DIR)/libnanomsg.a
-	gcc $(CFLAGS_NN) $(CFLAGS) $^ $(LDFLAGS_NN) $(LDFLAGS) -o $@
+	gcc $(CCFLAGS_NN) $(CCFLAGS) $^ $(LDFLAGS_NN) $(LDFLAGS) -o $@
 
 # ================================================
 #  Phony targets

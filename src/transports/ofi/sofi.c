@@ -572,8 +572,11 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
                     self->error = nn_sofi_send_handshake( self );
 
                     /* Receive if no error occured */
-                    if (!self->error)
+                    if (!self->error) {
                        self->error = nn_sofi_recv_handshake( self );
+                    } else {
+                        _ofi_debug("OFI[S]: Error sending handshake (error=%i)\n", self->error);
+                    }
 
                 } else if (self->ng_direction == NN_SOFI_NG_RECV) {
 
@@ -581,8 +584,11 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
                     self->error = nn_sofi_recv_handshake( self );
 
                     /* Send if no error occured */
-                    if (!self->error)
+                    if (!self->error) {
                        self->error = nn_sofi_send_handshake( self );
+                    } else {
+                        _ofi_debug("OFI[S]: Error receiving handshake (error=%i)\n", self->error);
+                    }
 
                 }
 

@@ -23,7 +23,6 @@
 
 #include <unistd.h>
 #include <assert.h>
-#include <libc.h>
 #include <stdio.h>
 
 #include <time.h>

@@ -1033,33 +1033,6 @@ int ofi_open_passive_ep( struct ofi_resources * R, struct ofi_passive_endpoint *
 	return 0;
 }
 
-/**
- * Open a passive endpoint
- */
-int ofi_restart_passive_ep( struct ofi_resources * R, struct ofi_passive_endpoint * PEP )
-{
-	int ret;
-
-	/* Drain event queue */
-	struct fi_eq_cm_entry entry;
-	uint32_t event;
-	ssize_t rd;
-	do {
-		rd = fi_eq_read(PEP->eq, &event, &entry, sizeof entry, 0);
-	} while ((int)rd == 0);
-
-	/* Re-open passive endpoint */
-	_ofi_debug("OFI[H]: Restarting passive endpoint\n");
-	FT_CLOSE_FID( PEP->pep );
-	FT_CLOSE_FID( PEP->eq );
-	ret = ofi_open_passive_ep( R, PEP );
-	if (ret)
-		return ret;
-
-	/* Success */
-	return 0;
-}
-
 //////////////////////////////////////////////////////////////////////////////////////////
 // OFI High-Level Function - Connected
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -1086,11 +1059,6 @@ int ofi_init_server( struct ofi_resources * R, struct ofi_passive_endpoint * PEP
 	if (ret)
 		return ret;
 
-	/* Open passive endpoint */
-	ret = ofi_open_passive_ep( R, PEP );
-	if (ret)
-		return ret;
-
 	/* Success */
 	return 0;
 }
@@ -1105,6 +1073,11 @@ int ofi_server_accept( struct ofi_resources * R, struct ofi_passive_endpoint * P
 	struct fi_info *info = NULL;
 	ssize_t rd;
 	int ret;
+
+	/* Start passive endpoint */
+	ret = ofi_open_passive_ep( R, PEP );
+	if (ret)
+		return ret;
 
 	/* Listen for incoming connection */
 	ret = fi_listen(PEP->pep);
@@ -1159,10 +1132,14 @@ int ofi_server_accept( struct ofi_resources * R, struct ofi_passive_endpoint * P
 		goto err;
 	}
 
-	/* Re-open passive endpoint */
-	ret = ofi_restart_passive_ep( R, PEP );
-	if (ret)
-		return ret;
+	/* Drain event queue */
+	do {
+		rd = fi_eq_read(PEP->eq, &event, &entry, sizeof entry, 0);
+	} while ((int)rd == 0);
+
+	/* Close passive endpoint */
+	FT_CLOSE_FID( PEP->pep );
+	FT_CLOSE_FID( PEP->eq );
 
 	/* Success */
 	fi_freeinfo(info);

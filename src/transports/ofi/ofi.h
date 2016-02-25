@@ -57,7 +57,7 @@
 #define NN_OFI_SMALLMR_SIZE         1024
 
 /* SOFI Source */
-#define NN_OFI_SRC_SOFI             1000
+#define NN_OFI_SRC_SOFI             4000
 
 extern struct nn_transport *nn_ofi;
 

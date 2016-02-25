@@ -307,6 +307,7 @@ static void nn_bofi_accept_thread (void *arg)
     }
 
     /* Notify FSM that we have accepted a connection */
+    _ofi_debug("OFI[B]: bofi_accept_thread: Accepted connection, exiting\n");
     nn_worker_execute (self->worker, &self->task_accept);
 
 }

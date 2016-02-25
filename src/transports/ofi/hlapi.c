@@ -820,6 +820,7 @@ int ofi_open_active_ep( struct ofi_resources * R, struct ofi_active_endpoint * E
 
 	/* ==== Open Wait Set ======================== */
 
+#ifdef OFI_USE_WAITSET
 	/* Setup properties */
 	struct fi_wait_attr wait_attr = {
 		.wait_obj = FI_WAIT_UNSPEC,
@@ -832,15 +833,20 @@ int ofi_open_active_ep( struct ofi_resources * R, struct ofi_active_endpoint * E
 		FT_PRINTERR("fi_wait_open", ret);
 		return ret;
 	}
+#endif
 
 	/* ==== Open Completion Queues =============== */
 
 	/* Create a Tx completion queue */
 	struct fi_cq_attr tx_cq_attr = {
-		.wait_obj = FI_WAIT_SET,
 		.format = FI_CQ_FORMAT_DATA,
 		.size = fi->tx_attr->size,
+#ifdef OFI_USE_WAITSET
+		.wait_obj = FI_WAIT_SET,
 		.wait_set = EP->waitset
+#else
+		.wait_obj = FI_WAIT_NONE
+#endif
 	};
 	ret = fi_cq_open(EP->domain, &tx_cq_attr, &EP->tx_cq, &EP->tx_ctx);
 	if (ret) {
@@ -850,10 +856,14 @@ int ofi_open_active_ep( struct ofi_resources * R, struct ofi_active_endpoint * E
 
 	/* Create a Rx completion queue */
 	struct fi_cq_attr rx_cq_attr = {
-		.wait_obj = FI_WAIT_SET,
 		.format = FI_CQ_FORMAT_DATA,
 		.size = fi->rx_attr->size,
+#ifdef OFI_USE_WAITSET
+		.wait_obj = FI_WAIT_SET,
 		.wait_set = EP->waitset
+#else
+		.wait_obj = FI_WAIT_NONE
+#endif
 	};
 	ret = fi_cq_open(EP->domain, &rx_cq_attr, &EP->rx_cq, &EP->rx_ctx);
 	if (ret) {
@@ -905,9 +915,13 @@ int ofi_open_active_ep( struct ofi_resources * R, struct ofi_active_endpoint * E
 		/* Prepare structure */
 		struct fi_eq_attr eq_attr = {
 			.size = 1,
-			.wait_obj = FI_WAIT_SET,
 			.flags = FI_WRITE,
+#ifdef OFI_USE_WAITSET
+			.wait_obj = FI_WAIT_SET,
 			.wait_set = EP->waitset,
+#else
+			.wait_obj = FI_WAIT_UNSPEC,
+#endif
 		};
 
 		/* Open event queue */
@@ -1414,7 +1428,9 @@ int ofi_free_ep( struct ofi_active_endpoint * ep )
 	FT_CLOSE_FID( ep->ep );
 	
 	/* Free structures */
+#ifdef OFI_USE_WAITSET
 	FT_CLOSE_FID( ep->waitset );
+#endif
 	FT_CLOSE_FID( ep->tx_cq );
 	FT_CLOSE_FID( ep->rx_cq );
 	FT_CLOSE_FID( ep->eq );

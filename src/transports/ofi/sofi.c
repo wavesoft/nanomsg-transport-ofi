@@ -346,12 +346,16 @@ static void nn_sofi_poller_thread (void *arg)
     /* Keep thread alive while the THREAD_ACTIVE flag is set  */
     while ( self->flags & NN_SOFI_FLAGS_THREAD_ACTIVE ) {
 
+#ifdef OFI_USE_WAITSET
+
         /* Wait for completion events on CQs */
         ret = fi_wait( self->ep->waitset, -1);
         if (ret < 0) {
             FT_PRINTERR("fi_wait", ret);
             break;
         }
+
+#endif
 
         /* ========================================= */
         /* Wait for Rx CQ event */
@@ -412,12 +416,16 @@ static void nn_sofi_poller_thread (void *arg)
 
         }
 
+#ifndef OFI_USE_WAITSET
+
         /* Microsleep for lessen the CPU load on 
            providers with no fi_wait support */
         if (!--fastpoller) {
             usleep(10);
             fastpoller = 200;
         }
+
+#endif
 
     }
 

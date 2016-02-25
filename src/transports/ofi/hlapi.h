@@ -83,8 +83,12 @@ struct ofi_active_endpoint
 	struct fid_cq 		*tx_cq, *rx_cq;
 	struct fi_context 	tx_ctx, rx_ctx;
 
+#ifdef OFI_USE_WAITSET
+
 	/* CQ & EQ Waitset */
 	struct fid_wait		*waitset;
+
+#endif
 
 	/* Addresses */
 	fi_addr_t 			remote_fi_addr;

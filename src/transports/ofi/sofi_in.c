@@ -594,7 +594,15 @@ size_t nn_sofi_in_rx( struct nn_sofi_in *self, void * ptr,
         return 0;
     }
     if (ret < 0) {
-        FT_PRINTERR("fi_cq_sread", ret);
+
+        /* read CQ Error */
+        struct fi_cq_err_entry err_entry;
+        ret = fi_cq_readerr(self->ep->rx_cq, &err_entry, 0);
+        _ofi_debug("OFI[i]: %s (%s)\n",
+            fi_strerror(err_entry.err),
+            fi_cq_strerror(self->ep->rx_cq, err_entry.prov_errno, err_entry.err_data, NULL, 0)
+        );
+
         // return ret;
         return 0;
     }

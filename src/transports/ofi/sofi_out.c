@@ -393,8 +393,18 @@ size_t nn_sofi_out_tx( struct nn_sofi_out *self, void * ptr,
         return -ETIMEDOUT;
     }
     if (ret < 0) {
-        FT_PRINTERR("fi_cq_sread", ret);
-        return ret;
+
+        /* read CQ Error */
+        struct fi_cq_err_entry err_entry;
+        ret = fi_cq_readerr(self->ep->rx_cq, &err_entry, 0);
+        _ofi_debug("OFI[i]: %s (%s)\n",
+            fi_strerror(err_entry.err),
+            fi_cq_strerror(self->ep->rx_cq, err_entry.prov_errno, err_entry.err_data, NULL, 0)
+        );
+
+        /* Return CQ Error */
+        return -err_entry.prov_errno;
+
     }
 
     _ofi_debug("OFI[o]: Blocking TX completed\n");

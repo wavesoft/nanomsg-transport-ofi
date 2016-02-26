@@ -25,6 +25,8 @@
 #include "sofi.h"
 #include "hlapi.h"
 
+#include <string.h>
+
 #include "../../core/ep.h"
 #include "../../utils/err.h"
 #include "../../utils/cont.h"
@@ -87,6 +89,7 @@ int nn_cofi_create (void *hint, struct nn_epbase **epbase)
     /*  Allocate the new endpoint object. */
     self = nn_alloc (sizeof (struct nn_cofi), "cofi");
     alloc_assert (self);
+    memset( self, 0, sizeof (struct nn_cofi));
 
     /*  Initalise the endpoint. */
     nn_epbase_init (&self->epbase, &nn_cofi_epbase_vfptr, hint);

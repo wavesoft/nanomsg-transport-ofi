@@ -60,11 +60,12 @@ struct nn_ofi_mrm_chunk {
     /* The libfabric context for putting the chunk as Rx/Tx context parameter */
     struct fi_context context;
 
-    /* Piggyback data, used by other operations, exploiting the fact that the 
-       memory is already allocated. */
+    /* Piggyback data, used by other operations (ex. the transmission), exploiting the 
+        fact that the memory allocated on heap. */
     struct {
         struct iovec    mr_iov[2];
         void *          mr_desc[2];
+        struct nn_msg * msg;
     } data;
 
 };

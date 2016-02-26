@@ -231,6 +231,9 @@ void nn_sofi_out_tx_event( struct nn_sofi_out *self,
     /* Unlock mrm chunk */
     nn_ofi_mrm_unlock( &self->mrm, chunk );
 
+    /* Free message */
+    nn_msg_term( chunk->data.msg );
+
     /* Hack to have only one worker task in queue */
     NN_SOFI_OUT_SCHED_CNTR( self, cntr_task_tx );
     nn_mutex_unlock(&self->mutex_cntr);
@@ -259,7 +262,7 @@ void nn_sofi_out_tx_error_event( struct nn_sofi_out *self,
 }
 
 /**
- * Trigger the transmission of a packet
+ * Trigger the transmission of a message
  */
 int nn_sofi_out_tx_event_send( struct nn_sofi_out *self, struct nn_msg *msg )
 {
@@ -282,6 +285,9 @@ int nn_sofi_out_tx_event_send( struct nn_sofi_out *self, struct nn_msg *msg )
         nn_mutex_unlock(&self->mutex_cntr);
         return ret;
     }
+
+    /* Keep the msg in the piggy-back data */
+    chunk->data.msg = msg;
 
     /* Populate size fields */
     chunk->data.mr_iov[1].iov_len = nn_chunkref_size( &msg->body );

@@ -378,6 +378,7 @@ size_t nn_sofi_out_tx( struct nn_sofi_out *self, void * ptr,
     memcpy( self->small_ptr, ptr, max_sz );
 
     /* Send data */
+    _ofi_debug("OFI[i] ### POSTING SEND BUFFER len=%lu\n", max_sz);
     ret = fi_send( self->ep->ep, self->small_ptr, max_sz,
         fi_mr_desc(self->small_mr), self->ep->remote_fi_addr,
         &self->context );

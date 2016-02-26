@@ -537,36 +537,43 @@ int nn_sofi_in_rx_event_ack( struct nn_sofi_in *self, struct nn_msg *msg )
 }
 
 /**
- * Synchronous (blocking) rx request
+ * Post receive buffers
  */
-size_t nn_sofi_in_rx( struct nn_sofi_in *self, void * ptr, 
-    size_t max_sz, int timeout )
+size_t nn_sofi_in_rx_post( struct nn_sofi_in *self, size_t max_sz )
 {
-    struct fi_cq_data_entry entry;
-    size_t rx_size;
-    struct iovec iov[1];
-    void * desc[1];
     int ret;
 
-    _ofi_debug("OFI[i]: Blocking RX max_sz=%lu, timeout=%i\n", max_sz, timeout);
+    _ofi_debug("OFI[i]: Blocking RX Post max_sz=%lu\n", max_sz);
 
     /* Check if message does not fit in the buffer */
     if (max_sz > NN_OFI_SMALLMR_SIZE) { 
         return -ENOMEM;
     }
 
-    /* Move data to small MR */
-    memcpy( self->small_ptr, ptr, max_sz );
-
     /* Receive data */
-    _ofi_debug("OFI[i] ### POSTING RECEIVE BUFFER len=%lu\n", NN_OFI_SMALLMR_SIZE);
+    _ofi_debug("OFI[i] ### POSTING RECEIVE BUFFER len=%i\n", NN_OFI_SMALLMR_SIZE);
     ret = fi_recv( self->ep->ep, self->small_ptr, NN_OFI_SMALLMR_SIZE, fi_mr_desc(self->small_mr),
                     self->ep->remote_fi_addr, &self->context );
     if (ret) {
         FT_PRINTERR("fi_recvmsg", ret);
-        // return ret;
-        return 0;
+        return ret;
     }
+
+    /* Success */
+    return 0;
+}
+
+/**
+ * Synchronous (blocking) rx request
+ */
+size_t nn_sofi_in_rx_recv( struct nn_sofi_in *self, void * ptr, 
+    size_t max_sz, int timeout )
+{
+    struct fi_cq_data_entry entry;
+    size_t rx_size;
+    int ret;
+
+    _ofi_debug("OFI[i]: Blocking RX Recv max_sz=%lu, timeout=%i\n", max_sz, timeout);
 
     /* Wait for synchronous event */
     ret = fi_cq_sread( self->ep->rx_cq, &entry, 1, NULL, timeout );

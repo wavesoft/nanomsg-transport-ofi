@@ -331,7 +331,7 @@ int nn_sofi_out_tx_event_send( struct nn_sofi_out *self, struct nn_msg *msg )
 
     /* Send data and return when buffer can be reused */
     _ofi_debug("OFI[o]: Send context=%p\n", chunk);
-    _ofi_debug("OFI[i] ### POSTING SEND BUFFER len=%lu\n", egress_msg.msg_iov[0].iov_len);
+    _ofi_debug("OFI[o] ### POSTING SEND BUFFER len=%lu\n", egress_msg.msg_iov[0].iov_len);
     ret = fi_sendmsg( self->ep->ep, &egress_msg, FI_INJECT_COMPLETE);
     if (ret) {
 
@@ -378,7 +378,7 @@ size_t nn_sofi_out_tx( struct nn_sofi_out *self, void * ptr,
     memcpy( self->small_ptr, ptr, max_sz );
 
     /* Send data */
-    _ofi_debug("OFI[i] ### POSTING SEND BUFFER len=%lu\n", max_sz);
+    _ofi_debug("OFI[o] ### POSTING SEND BUFFER len=%lu\n", max_sz);
     ret = fi_send( self->ep->ep, self->small_ptr, max_sz,
         fi_mr_desc(self->small_mr), self->ep->remote_fi_addr,
         &self->context );
@@ -398,7 +398,7 @@ size_t nn_sofi_out_tx( struct nn_sofi_out *self, void * ptr,
         /* read CQ Error */
         struct fi_cq_err_entry err_entry;
         ret = fi_cq_readerr(self->ep->rx_cq, &err_entry, 0);
-        _ofi_debug("OFI[i]: %s (%s)\n",
+        _ofi_debug("OFI[o]: %s (%s)\n",
             fi_strerror(err_entry.err),
             fi_cq_strerror(self->ep->rx_cq, err_entry.prov_errno, err_entry.err_data, NULL, 0)
         );

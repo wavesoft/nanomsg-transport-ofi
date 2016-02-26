@@ -181,8 +181,11 @@ void nn_sofi_in_rx_error_event( struct nn_sofi_in *self,
 /* Acknowledge an rx event */
 int nn_sofi_in_rx_event_ack( struct nn_sofi_in *self, struct nn_msg *msg );
 
+/* Post rx buffers */
+size_t nn_sofi_in_rx_post( struct nn_sofi_in *self, size_t max_sz );
+
 /* Synchronous (blocking) rx request */
-size_t nn_sofi_in_rx( struct nn_sofi_in *self, void * ptr, size_t max_sz, 
+size_t nn_sofi_in_rx_recv( struct nn_sofi_in *self, void * ptr, size_t max_sz, 
     int timeout );
 
 #endif

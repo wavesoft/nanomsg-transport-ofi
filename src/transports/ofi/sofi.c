@@ -91,14 +91,27 @@ static int nn_sofi_send_handshake( struct nn_sofi *self )
 /**
  * Complete handshake
  */
-static int nn_sofi_recv_handshake( struct nn_sofi *self )
+static int nn_sofi_recv_handshake_start( struct nn_sofi *self )
+{
+    size_t sz;
+    _ofi_debug("OFI[S]: Posting buffers for receiving handshake\n");
+    nn_assert (self->state == NN_SOFI_STATE_HANDSHAKE);
+
+    /* Synchronous receive */
+    return nn_sofi_in_rx_post( &self->sofi_in, sizeof(self->hs_remote) );
+}
+
+/**
+ * Complete handshake
+ */
+static int nn_sofi_recv_handshake_complete( struct nn_sofi *self )
 {
     size_t sz;
     _ofi_debug("OFI[S]: Receiving handshake\n");
     nn_assert (self->state == NN_SOFI_STATE_HANDSHAKE);
 
     /* Synchronous receive */
-    sz = nn_sofi_in_rx( &self->sofi_in, &self->hs_remote, 
+    sz = nn_sofi_in_rx_recv( &self->sofi_in, &self->hs_remote, 
         sizeof(self->hs_remote), NN_SOFI_TIMEOUT_HANDSHAKE );
 
     /* Validate size of received data */
@@ -553,29 +566,47 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
                 _ofi_debug("OFI[S]: Performing handshake\n");
                 self->state = NN_SOFI_STATE_HANDSHAKE;
 
+                /* Post receive buffers */
+                self->error = nn_sofi_recv_handshake_start( self );
+                if (self->error == 0) {
+                    _ofi_debug("OFI[S]: Error preparing for handshake receive (error=%i)\n", self->error);
+                }
+
                 /* Depending ont he direction send or receive first */
                 if (self->ng_direction == NN_SOFI_NG_SEND) {
 
                     /* Send */
-                    self->error = nn_sofi_send_handshake( self );
-
-                    /* Receive if no error occured */
                     if (!self->error) {
-                       self->error = nn_sofi_recv_handshake( self );
-                    } else {
-                        _ofi_debug("OFI[S]: Error sending handshake (error=%i)\n", self->error);
+                        self->error = nn_sofi_send_handshake( self );
+                        if (self->error) {
+                            _ofi_debug("OFI[S]: Error sending handshake (error=%i)\n", self->error);
+                        }
+                    }
+
+                    /* Receive */
+                    if (!self->error) {
+                       self->error = nn_sofi_recv_handshake_complete( self );
+                        if (self->error) {
+                            _ofi_debug("OFI[S]: Error receiving handshake (error=%i)\n", self->error);
+                        }
                     }
 
                 } else if (self->ng_direction == NN_SOFI_NG_RECV) {
 
                     /* Receive */
-                    self->error = nn_sofi_recv_handshake( self );
-
-                    /* Send if no error occured */
                     if (!self->error) {
-                       self->error = nn_sofi_send_handshake( self );
-                    } else {
-                        _ofi_debug("OFI[S]: Error receiving handshake (error=%i)\n", self->error);
+                       self->error = nn_sofi_recv_handshake_complete( self );
+                        if (self->error) {
+                            _ofi_debug("OFI[S]: Error receiving handshake (error=%i)\n", self->error);
+                        }
+                    }
+
+                    /* Send */
+                    if (!self->error) {
+                        self->error = nn_sofi_send_handshake( self );
+                        if (self->error) {
+                            _ofi_debug("OFI[S]: Error sending handshake (error=%i)\n", self->error);
+                        }
                     }
 
                 }

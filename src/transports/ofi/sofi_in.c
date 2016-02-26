@@ -130,8 +130,6 @@ static int nn_sofi_in_post_buffers(struct nn_sofi_in *self)
 {
     int ret;
     uint32_t pick_age;
-    void * desc[1];
-    struct iovec iov[1];
     struct nn_sofi_in_chunk * pick_chunk = NULL;
 
     // nn_mutex_lock( &self->mutex_ingress );
@@ -165,23 +163,6 @@ static int nn_sofi_in_post_buffers(struct nn_sofi_in *self)
 
     _ofi_debug("OFI[i]: >>>>>> Grab MR %p\n", pick_chunk);
 
-    /* Prepare IOV */
-    iov[0].iov_base = pick_chunk->chunk;
-    iov[0].iov_len = self->msg_size;
-
-    /* Prepare MR Desc */
-    desc[0] = fi_mr_desc( pick_chunk->mr );
-
-    /* Prepare fi_msg */
-    struct fi_msg msg = {
-        .msg_iov = iov,
-        .desc = desc,
-        .iov_count = 1,
-        .addr = self->ep->remote_fi_addr,
-        .context = &pick_chunk->context,
-        .data = 0
-    };
-
     /* Mark chunk as posted */
     pick_chunk->flags |= NN_SOFI_IN_MR_FLAG_POSTED;
     pick_chunk->age = ++self->age_ingress;
@@ -189,8 +170,9 @@ static int nn_sofi_in_post_buffers(struct nn_sofi_in *self)
     /* Post receive buffers */
     _ofi_debug("OFI[i]: Posting buffers from RxMR chunk=%p (ctx=%p, buf=%p)\n", 
         pick_chunk, &pick_chunk->context, pick_chunk->chunk );
-    _ofi_debug("OFI[i] ### POSTING RECEIVE BUFFER len=%lu\n", iov[0].iov_len);
-    ret = fi_recvmsg(self->ep->ep, &msg, 0);
+    _ofi_debug("OFI[i] ### POSTING RECEIVE BUFFER len=%lu\n", self->msg_size);
+    ret = fi_recv(self->ep->ep,pick_chunk->chunk, self->msg_size,
+            fi_mr_desc( pick_chunk->mr ), self->ep->remote_fi_addr, &pick_chunk->context);
     if (ret) {
 
         /* If we are in a bad state, we were remotely disconnected */

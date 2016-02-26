@@ -578,7 +578,7 @@ size_t nn_sofi_in_rx( struct nn_sofi_in *self, void * ptr,
 
     /* Receive data */
     _ofi_debug("OFI[i] ### POSTING RECEIVE BUFFER len=%lu\n", iov[0].iov_len);
-    ret = fi_recv( self->ep->ep, self->small_mr, rx_size, fi_mr_desc(self->small_mr),
+    ret = fi_recv( self->ep->ep, self->small_mr, NN_OFI_SMALLMR_SIZE, fi_mr_desc(self->small_mr),
                     self->ep->remote_fi_addr, &self->context );
     if (ret) {
         FT_PRINTERR("fi_recvmsg", ret);

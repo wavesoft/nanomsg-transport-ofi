@@ -281,7 +281,8 @@ void nn_sofi_in_init ( struct nn_sofi_in *self,
 
     /* Allocate and manage a small MR for metadata I/O */
     self->small_ptr = nn_alloc(NN_OFI_SMALLMR_SIZE, "mr_small");
-    memset( self->small_ptr, 0, NN_SOFI_IN_MR_SMALL );
+    nn_assert( self->small_ptr );
+    memset( self->small_ptr, 0, NN_OFI_SMALLMR_SIZE );
     ret = fi_mr_reg(ep->domain, self->small_ptr, NN_OFI_SMALLMR_SIZE, 
         FI_RECV | FI_READ | FI_REMOTE_WRITE, 0, NN_SOFI_IN_MR_SMALL, 0, 
         &self->small_mr, NULL);

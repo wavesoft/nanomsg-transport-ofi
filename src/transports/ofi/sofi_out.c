@@ -114,6 +114,7 @@ void nn_sofi_out_init ( struct nn_sofi_out *self,
 
     /* Manage a new MR for small blocking calls */
     self->small_ptr = nn_alloc(NN_OFI_SMALLMR_SIZE, "mr_small");
+    nn_assert( self->small_ptr );
     memset( self->small_ptr, 0, NN_OFI_SMALLMR_SIZE );
     ret = fi_mr_reg(ep->domain, self->small_ptr, NN_OFI_SMALLMR_SIZE, 
         FI_RECV | FI_READ | FI_REMOTE_WRITE, 0, NN_SOFI_OUT_MR_SMALL, 0, 

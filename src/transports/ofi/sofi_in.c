@@ -576,22 +576,10 @@ size_t nn_sofi_in_rx( struct nn_sofi_in *self, void * ptr,
     /* Move data to small MR */
     memcpy( self->small_ptr, ptr, max_sz );
 
-    /* Prepare msg structure */
-    iov[0].iov_base = self->small_ptr;
-    iov[0].iov_len = max_sz;
-    desc[0] = fi_mr_desc(self->small_mr);
-    struct fi_msg msg = {
-        .msg_iov = iov,
-        .desc = desc,
-        .iov_count = 1,
-        .addr = self->ep->remote_fi_addr,
-        .context = &self->context,
-        .data = 0
-    };
-
     /* Receive data */
     _ofi_debug("OFI[i] ### POSTING RECEIVE BUFFER len=%lu\n", iov[0].iov_len);
-    ret = fi_recvmsg( self->ep->ep, &msg, 0 );
+    ret = fi_recv( self->ep->ep, self->small_mr, rx_size, fi_mr_desc(self->small_mr),
+                    self->ep->remote_fi_addr, &self->context );
     if (ret) {
         FT_PRINTERR("fi_recvmsg", ret);
         // return ret;

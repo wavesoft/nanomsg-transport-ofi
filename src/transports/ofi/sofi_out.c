@@ -77,6 +77,7 @@ void nn_sofi_out_init ( struct nn_sofi_out *self,
     const uint8_t ng_direction, int queue_size,
     struct nn_pipebase * pipebase, int src, struct nn_fsm *owner )
 {
+    int ret;
     _ofi_debug("OFI[o]: Initializing Output FSM\n");
 
     /* Initialize properties */
@@ -112,12 +113,12 @@ void nn_sofi_out_init ( struct nn_sofi_out *self,
         &self->fsm);
 
     /* Manage a new MR for small blocking calls */
-    ofi_mr_init( ep, &self->mr_small );
-    ofi_mr_manage( ep, &self->mr_small, 
-        nn_alloc(NN_OFI_SMALLMR_SIZE, "mr_small"), 
-        NN_OFI_SMALLMR_SIZE,
-        NN_SOFI_OUT_MR_SMALL, MR_RECV );
-    memset( &self->mr_small, 0, NN_OFI_SMALLMR_SIZE );
+    self->small_ptr = nn_alloc(NN_OFI_SMALLMR_SIZE, "mr_small");
+    memset( self->small_ptr, 0, NN_OFI_SMALLMR_SIZE );
+    ret = fi_mr_reg(ep->domain, self->small_ptr, NN_OFI_SMALLMR_SIZE, 
+        FI_RECV | FI_READ | FI_REMOTE_WRITE, 0, NN_SOFI_OUT_MR_SMALL, 0, 
+        &self->small_mr, NULL);
+    nn_assert( ret == 0 );
 
     /* Initialize MRM for managing multiple memory regions */
     nn_ofi_mrm_init( &self->mrm, ep, queue_size, NN_SOFI_OUT_MR_OUTPUT_BASE,
@@ -137,8 +138,8 @@ void nn_sofi_out_term (struct nn_sofi_out *self)
     _ofi_debug("OFI[o]: Terminating Output FSM\n");
 
     /* Free MR */
-    nn_free( self->mr_small.ptr );
-    ofi_mr_free( self->ep, &self->mr_small );
+    FT_CLOSE_FID( self->small_mr );
+    nn_free( self->small_ptr );
 
     /* Free MRM */
     nn_ofi_mrm_term( &self->mrm );
@@ -373,11 +374,11 @@ size_t nn_sofi_out_tx( struct nn_sofi_out *self, void * ptr,
         return -ENOMEM;
 
     /* Move data to small MR */
-    memcpy( self->mr_small.ptr, ptr, max_sz );
+    memcpy( self->small_ptr, ptr, max_sz );
 
     /* Send data */
-    ret = fi_send( self->ep->ep, self->mr_small.ptr, max_sz,
-        OFI_MR_DESC(self->mr_small), self->ep->remote_fi_addr,
+    ret = fi_send( self->ep->ep, self->small_ptr, max_sz,
+        fi_mr_desc(self->small_mr), self->ep->remote_fi_addr,
         &self->context );
     if (ret) {
         FT_PRINTERR("fi_send", ret);

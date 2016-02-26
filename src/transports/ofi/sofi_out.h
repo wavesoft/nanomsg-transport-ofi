@@ -102,7 +102,8 @@ struct nn_sofi_out {
     struct nn_timer             timer_abort;
 
     /* Buffers */
-    struct ofi_mr               mr_small;
+    struct fid_mr               * small_mr;
+    void *                      small_ptr;
     struct nn_ofi_mrm           mrm;
 
     /* Context for synchronous Tx operations */

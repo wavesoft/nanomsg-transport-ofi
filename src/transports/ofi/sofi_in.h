@@ -124,7 +124,8 @@ struct nn_sofi_in {
     struct nn_timer             timer_abort;
 
     /* Buffers */
-    struct ofi_mr               mr_small;
+    struct fid_mr               * small_mr;
+    void *                      small_ptr;
     struct nn_sofi_in_chunk     * mr_chunks;
 
     /* Ingress queue and pending item */

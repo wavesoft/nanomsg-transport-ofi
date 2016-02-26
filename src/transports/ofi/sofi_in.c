@@ -279,12 +279,13 @@ void nn_sofi_in_init ( struct nn_sofi_in *self,
     /* Initialize queue */
     nn_queue_init( &self->queue_ingress );
 
-    /* Manage a new MR for small blocking calls */
-    ofi_mr_init( ep, &self->mr_small );
-    ofi_mr_manage( ep, &self->mr_small, 
-        nn_alloc(NN_OFI_SMALLMR_SIZE, "mr_small"), 
-        NN_OFI_SMALLMR_SIZE, NN_SOFI_IN_MR_SMALL, MR_RECV );
-    memset( self->mr_small.ptr, 0, NN_SOFI_IN_MR_SMALL );
+    /* Allocate and manage a small MR for metadata I/O */
+    self->small_ptr = nn_alloc(NN_OFI_SMALLMR_SIZE, "mr_small");
+    memset( self->small_ptr, 0, NN_SOFI_IN_MR_SMALL );
+    ret = fi_mr_reg(ep->domain, self->small_ptr, NN_OFI_SMALLMR_SIZE, 
+        FI_RECV | FI_READ | FI_REMOTE_WRITE, 0, NN_SOFI_IN_MR_SMALL, 0, 
+        &self->small_mr, NULL);
+    nn_assert( ret == 0 );
 
     /* Allocate chunk buffer */
     self->mr_chunks = nn_alloc( sizeof (struct nn_sofi_in_chunk) * queue_size,
@@ -338,8 +339,8 @@ void nn_sofi_in_term (struct nn_sofi_in *self)
     _ofi_debug("OFI[i]: Terminating Input FSM\n");
 
     /* Free MR */
-    nn_free( self->mr_small.ptr );
-    ofi_mr_free( self->ep, &self->mr_small );
+    FT_CLOSE_FID( self->small_mr );
+    nn_free( self->small_ptr );
 
     /* The queue must be empty by here */
     nn_assert( nn_queue_pop( &self->queue_ingress) == NULL );
@@ -572,12 +573,12 @@ size_t nn_sofi_in_rx( struct nn_sofi_in *self, void * ptr,
     }
 
     /* Move data to small MR */
-    memcpy( self->mr_small.ptr, ptr, max_sz );
+    memcpy( self->small_ptr, ptr, max_sz );
 
     /* Prepare msg structure */
-    iov[0].iov_base = self->mr_small.ptr;
+    iov[0].iov_base = self->small_ptr;
     iov[0].iov_len = max_sz;
-    desc[0] = OFI_MR_DESC(self->mr_small);
+    desc[0] = fi_mr_desc(self->small_mr);
     struct fi_msg msg = {
         .msg_iov = iov,
         .desc = desc,
@@ -614,7 +615,7 @@ size_t nn_sofi_in_rx( struct nn_sofi_in *self, void * ptr,
 
     /* Move data to ptr */
     rx_size = entry.len;
-    memcpy( ptr, self->mr_small.ptr, rx_size );
+    memcpy( ptr, self->small_ptr, rx_size );
 
     /* Return bytes read */
     return rx_size;

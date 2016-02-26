@@ -551,7 +551,7 @@ size_t nn_sofi_in_rx( struct nn_sofi_in *self, void * ptr,
     _ofi_debug("OFI[i]: Blocking RX max_sz=%lu, timeout=%i\n", max_sz, timeout);
 
     /* Check if message does not fit in the buffer */
-    if (max_sz > NN_OFI_SMALLMR_SIZE) {
+    if (max_sz > NN_OFI_SMALLMR_SIZE) { 
         return -ENOMEM;
     }
 
@@ -560,7 +560,7 @@ size_t nn_sofi_in_rx( struct nn_sofi_in *self, void * ptr,
 
     /* Receive data */
     _ofi_debug("OFI[i] ### POSTING RECEIVE BUFFER len=%lu\n", iov[0].iov_len);
-    ret = fi_recv( self->ep->ep, self->small_mr, NN_OFI_SMALLMR_SIZE, fi_mr_desc(self->small_mr),
+    ret = fi_recv( self->ep->ep, self->small_ptr, NN_OFI_SMALLMR_SIZE, fi_mr_desc(self->small_mr),
                     self->ep->remote_fi_addr, &self->context );
     if (ret) {
         FT_PRINTERR("fi_recvmsg", ret);

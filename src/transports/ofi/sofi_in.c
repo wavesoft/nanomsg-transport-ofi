@@ -24,6 +24,8 @@
 #include "hlapi.h"
 #include "sofi_in.h"
 
+#include <string.h>
+
 #include "../../aio/ctx.h"
 #include "../../utils/alloc.h"
 #include "../../utils/cont.h"
@@ -282,10 +284,12 @@ void nn_sofi_in_init ( struct nn_sofi_in *self,
     ofi_mr_manage( ep, &self->mr_small, 
         nn_alloc(NN_OFI_SMALLMR_SIZE, "mr_small"), 
         NN_OFI_SMALLMR_SIZE, NN_SOFI_IN_MR_SMALL, MR_RECV );
+    memset( self->mr_small.ptr, 0, NN_SOFI_IN_MR_SMALL );
 
     /* Allocate chunk buffer */
     self->mr_chunks = nn_alloc( sizeof (struct nn_sofi_in_chunk) * queue_size,
         "mr chunks" );
+    memset( self->mr_chunks, 0, sizeof (struct nn_sofi_in_chunk) * queue_size );
     nn_assert( self->mr_chunks );
 
     /* Allocate the incoming buffers */
@@ -303,6 +307,7 @@ void nn_sofi_in_init ( struct nn_sofi_in *self,
 
         /* Allocate message chunk */
         ret = nn_chunk_alloc( msg_size, 0, &chunk->chunk );
+        memset( chunk->chunk, 0, msg_size );
         nn_assert( ret == 0 );
 
         /* Register this memory region */

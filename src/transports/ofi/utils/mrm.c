@@ -21,6 +21,7 @@
 */
 
 #include "mrm.h"
+#include <string.h>
 
 #include "../ofi.h"
 #include "../../../utils/alloc.h"
@@ -53,6 +54,7 @@ int nn_ofi_mrm_init( struct nn_ofi_mrm * self, struct ofi_active_endpoint * ep,
     /* Allocate ancillary pointer */
     ancillary_len = NN_OFI_MRM_ANCILLARY_SIZE * len;
     self->ptr_ancillary = nn_alloc( ancillary_len, "mrm ancillary" );
+    memset( self->ptr_ancillary, 0, ancillary_len );
     nn_assert( self->ptr_ancillary );
 
     /* Perform memory registration of ancillary buffer */
@@ -67,6 +69,7 @@ int nn_ofi_mrm_init( struct nn_ofi_mrm * self, struct ofi_active_endpoint * ep,
     /* Initialize chunks */
     self->chunks = nn_alloc( sizeof(struct nn_ofi_mrm_chunk) * len,
         "mrm chunk" );
+    memset( self->chunks, 0, sizeof(struct nn_ofi_mrm_chunk) * len );
     nn_assert( self->chunks != NULL );
 
     /* Set default values */

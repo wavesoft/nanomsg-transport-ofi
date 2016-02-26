@@ -22,6 +22,7 @@
 
 #include "ofi.h"
 #include "sofi_out.h"
+#include <string.h>
 
 #include "../../utils/alloc.h"
 #include "../../utils/cont.h"
@@ -116,6 +117,7 @@ void nn_sofi_out_init ( struct nn_sofi_out *self,
         nn_alloc(NN_OFI_SMALLMR_SIZE, "mr_small"), 
         NN_OFI_SMALLMR_SIZE,
         NN_SOFI_OUT_MR_SMALL, MR_RECV );
+    memset( &self->mr_small, 0, NN_OFI_SMALLMR_SIZE );
 
     /* Initialize MRM for managing multiple memory regions */
     nn_ofi_mrm_init( &self->mrm, ep, queue_size, NN_SOFI_OUT_MR_OUTPUT_BASE,

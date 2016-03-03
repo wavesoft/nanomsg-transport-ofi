@@ -230,8 +230,6 @@ void nn_sofi_out_tx_event( struct nn_sofi_out *self,
 
     /* Unlock mrm chunk */
     nn_ofi_mrm_unlock( &self->mrm, chunk );
-
-    /* Free message */
     nn_msg_term( chunk->data.msg );
 
     /* Hack to have only one worker task in queue */
@@ -252,6 +250,7 @@ void nn_sofi_out_tx_error_event( struct nn_sofi_out *self,
 
     /* Unlock mrm chunk */
     nn_ofi_mrm_unlock( &self->mrm, chunk );
+    nn_msg_term( chunk->data.msg );
 
     /* Keep error */
     self->error = cq_err->err;

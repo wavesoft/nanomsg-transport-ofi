@@ -170,20 +170,20 @@ static int nn_sofi_in_post_buffers(struct nn_sofi_in *self)
     /* Post receive buffers */
     _ofi_debug("OFI[i]: Posting buffers from RxMR chunk=%p (ctx=%p, buf=%p)\n", 
         pick_chunk, &pick_chunk->context, pick_chunk->chunk );
-    _ofi_debug("OFI[i] ### POSTING RECEIVE BUFFER len=%lu\n", self->msg_size);
-    ret = fi_recv(self->ep->ep,pick_chunk->chunk, self->msg_size,
+    _ofi_debug("OFI[i] ### POSTING RECEIVE BUFFER len=%lu, ctx=%p\n", self->msg_size, &pick_chunk->context);
+    ret = fi_recv(self->ep->ep, pick_chunk->chunk, self->msg_size,
             fi_mr_desc( pick_chunk->mr ), self->ep->remote_fi_addr, &pick_chunk->context);
     if (ret) {
 
         /* If we are in a bad state, we were remotely disconnected */
         if (ret == -FI_EOPBADSTATE) {
-            _ofi_debug("OFI[i]: fi_recvmsg() returned %i, considering "
+            _ofi_debug("OFI[i]: fi_recv() returned %i, considering "
                 "shutdown.\n", ret);
             return -EINTR;
         }
 
         /* Otherwise display error */
-        FT_PRINTERR("nn_sofi_in_post_buffers->fi_recvmsg", ret);
+        FT_PRINTERR("nn_sofi_in_post_buffers->fi_recv", ret);
         return -EBADF;
     }
 
@@ -441,8 +441,8 @@ void nn_sofi_in_rx_event( struct nn_sofi_in *self,
 
     /* Update chunk size */
     nn_assert( cq_entry->len <= self->msg_size );
+    _ofi_debug("OFI[i]: Got incoming len=%lu, chunk=%p\n", cq_entry->len, chunk->chunk);
     chunk->chunk = nn_sofi_in_set_chunk_size( chunk->chunk, cq_entry->len );
-    _ofi_debug("OFI[i]: Got incoming len=%lu\n", cq_entry->len);
 
     /* Continue according to state */
     switch (self->state) {
@@ -551,11 +551,11 @@ size_t nn_sofi_in_rx_post( struct nn_sofi_in *self, size_t max_sz )
     }
 
     /* Receive data */
-    _ofi_debug("OFI[i] ### POSTING RECEIVE BUFFER len=%i\n", NN_OFI_SMALLMR_SIZE);
+    _ofi_debug("OFI[i] ### POSTING RECEIVE BUFFER len=%i, ctx=%p\n", NN_OFI_SMALLMR_SIZE, &self->context);
     ret = fi_recv( self->ep->ep, self->small_ptr, NN_OFI_SMALLMR_SIZE, fi_mr_desc(self->small_mr),
                     self->ep->remote_fi_addr, &self->context );
     if (ret) {
-        FT_PRINTERR("fi_recvmsg", ret);
+        FT_PRINTERR("fi_recv", ret);
         return ret;
     }
 

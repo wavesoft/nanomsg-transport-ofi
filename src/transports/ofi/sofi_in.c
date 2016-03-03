@@ -597,7 +597,7 @@ size_t nn_sofi_in_rx_recv( struct nn_sofi_in *self, void * ptr,
     }
 
     _ofi_debug("OFI[i]: Blocking RX Completed, len=%zu, ctx=%p\n", entry.len, 
-        &self->context);
+        entry.op_context);
 
     /* Move data to ptr */
     rx_size = entry.len;

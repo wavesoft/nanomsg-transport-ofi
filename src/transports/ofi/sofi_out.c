@@ -246,7 +246,7 @@ void nn_sofi_out_tx_error_event( struct nn_sofi_out *self,
     nn_mutex_lock(&self->mutex_cntr);
     struct nn_ofi_mrm_chunk * chunk = 
         nn_cont (cq_err->op_context, struct nn_ofi_mrm_chunk, context);
-    _ofi_debug("OFI[o]: Got CQ event for the sent frame, ctx=%p\n", chunk);
+    _ofi_debug("OFI[o]: Got CQ error event for the sent frame, ctx=%p\n", chunk);
 
     /* Unlock mrm chunk */
     nn_ofi_mrm_unlock( &self->mrm, chunk );
@@ -413,7 +413,7 @@ size_t nn_sofi_out_tx( struct nn_sofi_out *self, void * ptr,
 
     }
 
-    _ofi_debug("OFI[o]: Blocking TX completed\n");
+    _ofi_debug("OFI[o]: Blocking TX completed (ctx=%p)\n", entry.op_context);
 
     /* Success */
     return 0;

@@ -35,6 +35,7 @@ static int nn_ofi_mrm_manage ( struct nn_ofi_mrm * self,
 static int nn_ofi_mrm_unmanage ( struct nn_ofi_mrm * self,
     struct nn_ofi_mrm_chunk * chunk );
 
+
 /* Initialize the memory region manager */
 int nn_ofi_mrm_init( struct nn_ofi_mrm * self, struct ofi_active_endpoint * ep, 
     size_t len, int base_key, uint64_t access_flags )
@@ -297,10 +298,21 @@ static struct nn_ofi_mrm_chunk * pick_chunk( struct nn_ofi_mrm * self,
         /* If this MR is already managed, return it as-is */
         if (( desc.base == mr->desc.base ) && ( desc.len == mr->desc.len )) {
 
-            /* TODO: What happens if base ptr is re-allocated in the same
-                     base address? */
-            _ofi_debug("OFI[-]: Found MRM match chunk=%p\n", mr);
-            return mr;
+            /* Check if the chunk was re-allocated */
+            if ( desc.id != mr->desc.id ) {
+
+                /* That's our target */
+                oldest_mr = mr;
+                free_mr = NULL;
+                break;
+
+            } else {
+
+                /* We found a properly managed address */
+                _ofi_debug("OFI[-]: Found MRM match chunk=%p\n", mr);
+                return mr;
+
+            }
 
         }
 

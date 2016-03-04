@@ -302,6 +302,8 @@ static struct nn_ofi_mrm_chunk * pick_chunk( struct nn_ofi_mrm * self,
             if ( desc.id != mr->desc.id ) {
 
                 /* That's our target */
+                _ofi_debug("OFI[-]: Found MRM chunk=%p with different ID (%u <-> %u)\n", 
+                    mr, desc.id, mr->desc.id);
                 oldest_mr = mr;
                 free_mr = NULL;
                 break;

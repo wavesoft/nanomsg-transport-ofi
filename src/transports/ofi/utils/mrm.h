@@ -28,6 +28,7 @@
 #include "../../../utils/chunk.h"
 #include "../../../utils/chunkref.h"
 #include "../../../utils/mutex.h"
+#include "../../../utils/msg.h"
 
 /* How many bytes to allocate for ancillary data for every chunk */
 #define NN_OFI_MRM_ANCILLARY_SIZE   64
@@ -65,7 +66,7 @@ struct nn_ofi_mrm_chunk {
     struct {
         struct iovec    mr_iov[2];
         void *          mr_desc[2];
-        struct nn_msg * msg;
+        struct nn_msg   msg;
     } data;
 
 };

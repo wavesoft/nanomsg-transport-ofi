@@ -84,6 +84,7 @@ typedef void (*nn_ofi_chunk_free_fn_copy) (void *p);
 struct nn_chunk_copy {
     struct nn_atomic refcount;
     size_t size;
+    uint32_t id;
     nn_ofi_chunk_free_fn_copy ffn;
 };
 
@@ -520,7 +521,8 @@ int nn_sofi_in_rx_event_ack( struct nn_sofi_in *self, struct nn_msg *msg )
     }
 
     /* Initialize and unlock message */
-    _ofi_debug("OFI[i]: Acknowledged rx chunk=%p\n",chunk )
+    _ofi_debug("OFI[i]: Acknowledged rx chunk=%p, size=%i\n",chunk, nn_chunk_size(chunk->chunk) );
+
     nn_chunk_addref( chunk->chunk, 2 );
     nn_msg_init_chunk ( msg, chunk->chunk );
 

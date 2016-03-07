@@ -269,21 +269,21 @@ int nn_sofi_out_tx_event_send( struct nn_sofi_out *self, struct nn_msg *msg )
     int iov_count;
     size_t sz_sphdr, sz_hdrs;
     struct nn_ofi_mrm_chunk * chunk;
-    nn_mutex_lock(&self->mutex_cntr);
 
     /* We can only send if we are in POSTED or SENDING state */
     if ( ( self->state != NN_SOFI_OUT_STATE_READY ) &&
          ( self->state != NN_SOFI_OUT_STATE_SENDING ) ) {
-        nn_mutex_unlock(&self->mutex_cntr);
         return -ETERM;
     }
 
     /* Acquire an MRM lock & get pointers */
     ret = nn_ofi_mrm_lock( &self->mrm, &chunk, &msg->body );
     if (ret) {
-        nn_mutex_unlock(&self->mutex_cntr);
         return ret;
     }
+
+    /* Enter critical section */
+    nn_mutex_lock(&self->mutex_cntr);
 
     /* Keep the msg in the piggy-back data */
     nn_msg_term( &chunk->data.msg );

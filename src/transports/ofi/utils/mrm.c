@@ -28,8 +28,8 @@
 #include "../../../utils/err.h"
 
 /* Private methods */
-static struct nn_ofi_mrm_chunk * pick_chunk( struct nn_ofi_mrm * self, 
-    void *chunk );
+static int pick_chunk( struct nn_ofi_mrm * self, 
+    void *chunk, struct nn_ofi_mrm_chunk ** result );
 static int nn_ofi_mrm_manage ( struct nn_ofi_mrm * self, 
     struct nn_ofi_mrm_chunk * chunk, struct nn_chunk_desc * desc );
 static int nn_ofi_mrm_unmanage ( struct nn_ofi_mrm * self,
@@ -90,6 +90,9 @@ int nn_ofi_mrm_init( struct nn_ofi_mrm * self, struct ofi_active_endpoint * ep,
         mr->ancillary = aux_ptr;
         aux_ptr += NN_OFI_MRM_ANCILLARY_SIZE;
 
+        /* Initialize EFD */
+        nn_efd_init( &mr->efd );
+
     }
 
     /* Success */
@@ -112,6 +115,8 @@ int nn_ofi_mrm_term( struct nn_ofi_mrm * self )
         if (mr->flags & NN_OFI_MRM_FLAG_ASSIGNED)
             nn_ofi_mrm_unmanage( self, mr );
 
+        /* Free EFD */
+        nn_efd_term( &mr->efd );
         _ofi_debug("OFI[-]: Released MRM chunk=%p\n", mr);
 
     }
@@ -134,15 +139,38 @@ int nn_ofi_mrm_term( struct nn_ofi_mrm * self )
 int nn_ofi_mrm_lock( struct nn_ofi_mrm * self, struct nn_ofi_mrm_chunk ** mrmc,
     struct nn_chunkref * chunkref )
 {
+    int ret;
     struct nn_ofi_mrm_chunk * chunk;
     nn_mutex_lock( &self->sync );
 
-    /* Pick most appropriate chunk */
-    chunk = pick_chunk( self, nn_chunkref_getchunk(chunkref) );
-    if (!chunk) {
-        nn_mutex_unlock( &self->sync );
-        return -ENOMEM;
+    while (1) {
+
+        /* Pick most appropriate chunk */
+        ret = pick_chunk( self, nn_chunkref_getchunk(chunkref), &chunk );
+
+        /* Check if this MR is busy */
+        if (ret == -EAGAIN) {
+
+            /* Wait for the MR to unlock */
+            nn_mutex_unlock( &self->sync );
+            nn_efd_wait( &chunk->efd, -1 );
+            nn_mutex_lock( &self->sync );
+
+        /* Check on errors */
+        } else if (ret < 0) {
+            nn_mutex_unlock( &self->sync );
+            return ret;
+        
+        /* Break on ret=0 */
+        } else {
+            break;
+
+        }
+
     }
+
+    /* This SHOULD NOT be locked! */
+    nn_assert( ! (chunk->flags & NN_OFI_MRM_FLAG_LOCKED) );
 
     /* First populate mrmc pointer because it's referred later */
     *mrmc = chunk;
@@ -154,7 +182,10 @@ int nn_ofi_mrm_lock( struct nn_ofi_mrm * self, struct nn_ofi_mrm_chunk ** mrmc,
     chunk->data.mr_desc[1] = fi_mr_desc( chunk->mr );
 
     /* Lock chunk */
+    _ofi_debug("--LOCKING %p--\n", chunk);
+
     chunk->flags |= NN_OFI_MRM_FLAG_LOCKED;
+    nn_efd_unsignal( &chunk->efd );
     nn_mutex_unlock( &self->sync );
     return 0;
 }
@@ -164,8 +195,12 @@ int nn_ofi_mrm_unlock( struct nn_ofi_mrm * self, struct nn_ofi_mrm_chunk * chunk
 {
     nn_mutex_lock( &self->sync );
     /* Unlock memory region */
+    _ofi_debug("OFI[-]: Unlocking MR chunk %p\n", chunk);
     nn_assert( chunk->flags & NN_OFI_MRM_FLAG_LOCKED );    
+
+    _ofi_debug("--UNLOCKING %p--\n", chunk);
     chunk->flags &= ~NN_OFI_MRM_FLAG_LOCKED;
+    nn_efd_signal( &chunk->efd );
     nn_mutex_unlock( &self->sync );
     return 0;
 }
@@ -265,8 +300,8 @@ static int nn_ofi_mrm_unmanage ( struct nn_ofi_mrm * self,
 }
 
 /* Pick most appropriate mr */
-static struct nn_ofi_mrm_chunk * pick_chunk( struct nn_ofi_mrm * self, 
-    void *chunk )
+static int pick_chunk( struct nn_ofi_mrm * self, 
+    void *chunk, struct nn_ofi_mrm_chunk ** result )
 {
     struct nn_ofi_mrm_chunk * oldest_mr = NULL;
     struct nn_ofi_mrm_chunk * free_mr = NULL;
@@ -282,12 +317,15 @@ static struct nn_ofi_mrm_chunk * pick_chunk( struct nn_ofi_mrm * self,
             * mr_end = self->chunks + self->len;
          mr < mr_end; mr++ ) {
 
-        /* If this is an unlocked MR, account it for picking by age */
+        /* If this is an unlocked MR, it's a candidate for pick-up */
         if (!(mr->flags & NN_OFI_MRM_FLAG_LOCKED)) {
+
+            /* Account it for oldest-picking */
             if (( oldest_age == -1 ) || ( mr->age < oldest_age )) {
                 oldest_age = mr->age;
                 oldest_mr = mr;
             }
+
         }
 
         /* If this is an unasigned, unlocked MR, prefer this if nothing found */
@@ -295,24 +333,47 @@ static struct nn_ofi_mrm_chunk * pick_chunk( struct nn_ofi_mrm * self,
             free_mr = mr;
         }
 
-        /* If this MR is already managed, return it as-is */
+        /* Check if this MR is already managed */
         if (( desc.base == mr->desc.base ) && ( desc.len == mr->desc.len )) {
 
-            /* Check if the chunk was re-allocated */
-            if ( desc.id != mr->desc.id ) {
+            /* We are processing this differently if this chunk is locked */
+            if (mr->flags & NN_OFI_MRM_FLAG_LOCKED) {
 
-                /* That's our target */
-                _ofi_debug("OFI[-]: Found MRM chunk=%p with different ID (%u <-> %u)\n", 
-                    mr, desc.id, mr->desc.id);
-                oldest_mr = mr;
-                free_mr = NULL;
-                break;
+                /* If this is exactly the same MR, this is bad... it means that the
+                   user tried to send the same pointer for the second time, but the
+                   previous one wasn't sent already.
+
+                   Effectively, this means that the user has possibly changed the data
+                   in memory and the previous request is now in unspecified state.
+
+                   There is no way to solve this, just wait for the previous MR to be
+                   released. */
+
+                _ofi_debug("OFI[-]: Found overlapping, locked MRM chunk=%p\n", mr);
+                *result = mr;
+                return -EAGAIN;
 
             } else {
 
-                /* We found a properly managed address */
-                _ofi_debug("OFI[-]: Found MRM match chunk=%p\n", mr);
-                return mr;
+                /* If the chunk we know is invalidated (ex. free'd and malloc'd at the same
+                    location), re-manage the same region */
+                if (desc.id != mr->desc.id) {
+
+                    /* That's our target */
+                    _ofi_debug("OFI[-]: Found MRM chunk=%p with different ID (%u <-> %u)\n", 
+                        mr, desc.id, mr->desc.id);
+                    oldest_mr = mr;
+                    free_mr = NULL;
+                    break;
+
+                } else {
+
+                    /* We found a properly managed address */
+                    _ofi_debug("OFI[-]: Found MRM match chunk=%p\n", mr);
+                    *result = mr;
+                    return 0;
+
+                }
 
             }
 
@@ -326,7 +387,8 @@ static struct nn_ofi_mrm_chunk * pick_chunk( struct nn_ofi_mrm * self,
 
         /* Manage memory region */
         nn_ofi_mrm_manage( self, free_mr, &desc );
-        return free_mr;
+        *result = free_mr;
+        return 0;
 
     }
 
@@ -336,16 +398,20 @@ static struct nn_ofi_mrm_chunk * pick_chunk( struct nn_ofi_mrm * self,
             oldest_mr->age);
 
         /* Free MR and check for errors */
-        if (nn_ofi_mrm_unmanage( self, oldest_mr ))
-            return NULL;
+        if (nn_ofi_mrm_unmanage( self, oldest_mr )) {
+            *result = NULL;
+            return 0;
+        }
 
         /* If successful, that's our MR */
         nn_ofi_mrm_manage( self, oldest_mr, &desc );
-        return oldest_mr;
+        *result = oldest_mr;
+        return 0;
 
     }
 
     /* Nothing found */
-    return NULL;
+    *result = NULL;
+    return -ENOMEM;
 
 }

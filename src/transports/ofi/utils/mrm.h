@@ -29,6 +29,7 @@
 #include "../../../utils/chunkref.h"
 #include "../../../utils/mutex.h"
 #include "../../../utils/msg.h"
+#include "../../../utils/efd.h"
 
 /* How many bytes to allocate for ancillary data for every chunk */
 #define NN_OFI_MRM_ANCILLARY_SIZE   64
@@ -60,6 +61,9 @@ struct nn_ofi_mrm_chunk {
 
     /* The libfabric context for putting the chunk as Rx/Tx context parameter */
     struct fi_context context;
+
+    /* The EFD used to synchronize concurrent operations on this chunk */
+    struct nn_efd efd;
 
     /* Piggyback data, used by other operations (ex. the transmission), exploiting the 
         fact that the memory allocated on heap. */

@@ -435,7 +435,7 @@ void nn_sofi_in_rx_event( struct nn_sofi_in *self,
     struct nn_sofi_in_chunk * chunk = 
         nn_cont (cq_entry->op_context, struct nn_sofi_in_chunk, context);
     _ofi_debug("OFI[i]: Got CQ event for the received frame, ctx=%p (ptr=%p)\n", 
-        chunk, cq_entry->op_context);
+        cq_entry->op_context, chunk);
 
     /* The chunk is not posted any more */
     chunk->flags &= ~NN_SOFI_IN_MR_FLAG_POSTED;
@@ -587,9 +587,11 @@ size_t nn_sofi_in_rx_recv( struct nn_sofi_in *self, void * ptr,
     if (ret < 0) {
 
         /* read CQ Error */
+        int lret = ret;
         struct fi_cq_err_entry err_entry;
         ret = fi_cq_readerr(self->ep->rx_cq, &err_entry, 0);
-        _ofi_debug("OFI[i]: %s (%s)\n",
+        _ofi_debug("OFI[i]: CQ Error (returned %i, %s): %s (%s)\n",
+            lret, fi_strerror(lret),
             fi_strerror(err_entry.err),
             fi_cq_strerror(self->ep->rx_cq, err_entry.prov_errno, err_entry.err_data, NULL, 0)
         );

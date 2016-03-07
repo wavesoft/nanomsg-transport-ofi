@@ -847,7 +847,7 @@ int ofi_open_active_ep( struct ofi_resources * R, struct ofi_active_endpoint * E
 		.wait_obj = FI_WAIT_SET,
 		.wait_set = EP->waitset,
 #else
-		.wait_obj = FI_WAIT_NONE,
+		.wait_obj = FI_WAIT_UNSPEC,
 		.wait_set = NULL,
 #endif
 	};

@@ -373,7 +373,7 @@ static void nn_sofi_poller_thread (void *arg)
 
             /* Get error details */
             ret = fi_cq_readerr( self->ep->rx_cq, &err_entry, 0 );
-            _ofi_debug("OFI[p]: Rx CQ Error (%s)\n", fi_strerror((int) -err_entry.err) );
+            _ofi_debug("OFI[p]: Rx CQ Error (%s)\n", fi_strerror((int) err_entry.err) );
 
             /* Trigger rx error worker task */
             nn_sofi_in_rx_error_event( &self->sofi_in, &err_entry );
@@ -568,7 +568,7 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
 
                 /* Post receive buffers */
                 self->error = nn_sofi_recv_handshake_start( self );
-                if (self->error == 0) {
+                if (self->error) {
                     _ofi_debug("OFI[S]: Error preparing for handshake receive (error=%i)\n", self->error);
                 }
 

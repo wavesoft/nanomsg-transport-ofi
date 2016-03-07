@@ -521,7 +521,7 @@ int nn_sofi_in_rx_event_ack( struct nn_sofi_in *self, struct nn_msg *msg )
     }
 
     /* Initialize and unlock message */
-    _ofi_debug("OFI[i]: Acknowledged rx chunk=%p, size=%i\n",chunk, nn_chunk_size(chunk->chunk) );
+    _ofi_debug("OFI[i]: Acknowledged rx chunk=%p, size=%zu\n",chunk, nn_chunk_size(chunk->chunk) );
 
     nn_chunk_addref( chunk->chunk, 2 );
     nn_msg_init_chunk ( msg, chunk->chunk );

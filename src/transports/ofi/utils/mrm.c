@@ -182,10 +182,7 @@ int nn_ofi_mrm_lock( struct nn_ofi_mrm * self, struct nn_ofi_mrm_chunk ** mrmc,
     chunk->data.mr_desc[1] = fi_mr_desc( chunk->mr );
 
     /* Lock chunk */
-    _ofi_debug("--LOCKING %p--\n", chunk);
-
     chunk->flags |= NN_OFI_MRM_FLAG_LOCKED;
-    nn_efd_unsignal( &chunk->efd );
     nn_mutex_unlock( &self->sync );
     return 0;
 }
@@ -196,9 +193,7 @@ int nn_ofi_mrm_unlock( struct nn_ofi_mrm * self, struct nn_ofi_mrm_chunk * chunk
     nn_mutex_lock( &self->sync );
     /* Unlock memory region */
     _ofi_debug("OFI[-]: Unlocking MR chunk %p\n", chunk);
-    nn_assert( chunk->flags & NN_OFI_MRM_FLAG_LOCKED );    
-
-    _ofi_debug("--UNLOCKING %p--\n", chunk);
+    nn_assert( chunk->flags & NN_OFI_MRM_FLAG_LOCKED );
     chunk->flags &= ~NN_OFI_MRM_FLAG_LOCKED;
     nn_efd_signal( &chunk->efd );
     nn_mutex_unlock( &self->sync );

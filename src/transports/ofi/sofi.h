@@ -49,6 +49,13 @@
 #define NN_SOFI_NG_SEND                 1
 #define NN_SOFI_NG_RECV                 2
 
+/* The payload of the keepalive message, trying to be
+   quite diverse in order not to be matched by any other protocol header */
+#define NN_SOFI_KEEPALIVE_PACKET_LEN    24
+#define NN_SOFI_KEEPALIVE_PACKET        "\xff\xff\xff\xff\xff\xff\xff\xff" \
+                                        "\xce\x9a\x11\x7e\xce\x9a\x11\x7e" \
+                                        "\xff\xff\xff\xff\xff\xff\xff\xff"
+
 /* Handshake information */
 struct nn_sofi_handshake
 {
@@ -92,9 +99,13 @@ struct nn_sofi {
     struct nn_sofi_out          sofi_out;
 
     /* Handshake timeout timer */
-    struct nn_timer             timer_keepalive;
     struct nn_sofi_handshake    hs_local;
     struct nn_sofi_handshake    hs_remote;
+
+    /* Keepalive mechanism */
+    struct nn_timer             timer_keepalive;
+    uint8_t                     ticks_in;
+    uint8_t                     ticks_out;
 
     /* Mutext for fabric operations */
     struct nn_mutex             mutex_fabric;

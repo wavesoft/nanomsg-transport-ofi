@@ -22,6 +22,7 @@
 
 #include "ofi.h"
 #include "hlapi.h"
+#include "sofi.h"
 #include "sofi_in.h"
 
 #include <string.h>
@@ -56,6 +57,7 @@
 /* Incoming MR flags */
 #define NN_SOFI_IN_MR_FLAG_POSTED       0x00000001
 #define NN_SOFI_IN_MR_FLAG_LOCKED       0x00000002
+#define NN_SOFI_IN_MR_FLAG_KEEPALIVE    0x00000004
 
 /* State change with mutex lock */
 #define NN_SOFI_IN_SET_STATE(self,val) \
@@ -450,6 +452,15 @@ void nn_sofi_in_rx_event( struct nn_sofi_in *self,
         case NN_SOFI_IN_STATE_READY:
         case NN_SOFI_IN_STATE_RECEIVING:
         case NN_SOFI_IN_STATE_ACKNOWLEGING:
+
+            /* Check if this is a keepalive message */
+            if (nn_slow(nn_chunk_size(chunk->chunk) == NN_SOFI_KEEPALIVE_PACKET_LEN)) {
+                if (nn_fast( memcmp(chunk->chunk, NN_SOFI_KEEPALIVE_PACKET, 
+                    NN_SOFI_KEEPALIVE_PACKET_LEN) == 0 )) {
+                    _ofi_debug("OFI[i]: This chunk is a keepalive packet\n");
+                    chunk->flags |= NN_SOFI_IN_MR_FLAG_KEEPALIVE;
+                }
+            }
 
             /* Lock and stage message */
             chunk->flags |= NN_SOFI_IN_MR_FLAG_LOCKED;

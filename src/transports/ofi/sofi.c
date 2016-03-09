@@ -393,23 +393,25 @@ static void nn_sofi_poller_thread (void *arg)
         /* ========================================= */
         /* Wait for Tx CQ event */
         /* ========================================= */
-        ret = fi_cq_read( self->ep->tx_cq, &cq_entry, 1 );
-        if (nn_slow(ret > 0)) {
+        if (!nn_sofi_out_isblocked(&self->sofi_out)) {
+            ret = fi_cq_read( self->ep->tx_cq, &cq_entry, 1 );
+            if (nn_slow(ret > 0)) {
 
-            /* Trigger tx worker task */
-            _ofi_debug("OFI[p]: Tx CQ Event (ret=%i)\n", ret);
-            nn_sofi_out_tx_event( &self->sofi_out, &cq_entry );
+                /* Trigger tx worker task */
+                _ofi_debug("OFI[p]: Tx CQ Event (ret=%i)\n", ret);
+                nn_sofi_out_tx_event( &self->sofi_out, &cq_entry );
 
-        } else if (nn_slow(ret != -FI_EAGAIN)) {
+            } else if (nn_slow(ret != -FI_EAGAIN)) {
 
-            /* Get error details */
-            ret = fi_cq_readerr( self->ep->tx_cq, &err_entry, 0 );
-            _ofi_debug("OFI[p]: Tx CQ Error (%s)\n", 
-                fi_strerror((int) -err_entry.err) );
+                /* Get error details */
+                ret = fi_cq_readerr( self->ep->tx_cq, &err_entry, 0 );
+                _ofi_debug("OFI[p]: Tx CQ Error (%s)\n", 
+                    fi_strerror((int) -err_entry.err) );
 
-            /* Trigger tx error worker task */
-            nn_sofi_out_tx_error_event( &self->sofi_out, &err_entry );
+                /* Trigger tx error worker task */
+                nn_sofi_out_tx_error_event( &self->sofi_out, &err_entry );
 
+            }
         }
 
         /* ========================================= */
@@ -837,6 +839,7 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
 
                 /* Check if we have to send a tick */
                 if (++self->ticks_out > NN_SOFI_KEEPALIVE_OUT_TICKS) {
+                    _ofi_debug("OFI[S]: Haven't sent anything for a while, sending keepalive\n");
 
                     /* Send keepalive packet */
                     ret = nn_sofi_out_tx( &self->sofi_out, 

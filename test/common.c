@@ -62,7 +62,7 @@ static void u_bw_update_bandwidth( struct u_bw_timing * self, int64_t t_delta )
 	 *
 	 */
 	int64_t bandwidth = (int64_t)((double)(self->bandwidth_counter / t_delta) * 1.048576);
-	printf("%sBandwidth %lld MB/s\n", self->prefix, bandwidth);
+	printf("%sBandwidth %lld MB/s (%.2lf GBit/s)\n", self->prefix, bandwidth, (double)(bandwidth * 8.0 / 1000.0));
 
 	/* Update bandwidth */
 	if (self->bandwidth_index == 0) {
@@ -210,7 +210,8 @@ void u_bw_finalize( struct u_bw_timing * self )
 	printf("%sLattency Avg  : %lf uSec\n", self->prefix, self->lattency_average );
 	printf("%sLattency Min  : %lld uSec\n", self->prefix, self->lattency_min );
 	printf("%sLattency Max  : %lld uSec\n", self->prefix, self->lattency_max );
-	printf("%sBandwidth Avg : %lf MB/s\n", self->prefix, self->bandwidth_average );
+	printf("%sBandwidth Avg : %.2lf MB/s (%lf GBit/s)\n", self->prefix, 
+		self->bandwidth_average, (double)(self->bandwidth_average * 8.0 / 1000.0) );
 	printf("%sBandwidth Min : %lld MB/s\n", self->prefix, self->bandwidth_min );
 	printf("%sBandwidth Max : %lld MB/s\n", self->prefix, self->bandwidth_max );
 	printf("----------------------\n");

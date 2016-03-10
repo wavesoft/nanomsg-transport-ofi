@@ -337,7 +337,7 @@ void nn_sofi_in_term (struct nn_sofi_in *self)
          chunk < chunk_end; chunk++ ) {
 
         /* No chunk must not be locked at shutdown time */
-        nn_assert( (chunk->flags & NN_SOFI_IN_MR_FLAG_LOCKED) == 0 );
+        // nn_assert( (chunk->flags & NN_SOFI_IN_MR_FLAG_LOCKED) == 0 );
 
         /* Free everything */
         FT_CLOSE_FID( chunk->mr );

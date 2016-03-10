@@ -1,5 +1,6 @@
 
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "common.h"
@@ -23,14 +24,14 @@ static int64_t get_elapsed(const struct timespec *b, const struct timespec *a)
 static void u_bw_update_average( struct u_bw_timing * self )
 {
 	double sum;
-	int vmax;
+	int vmax, i;
 
 	/* Calculate average lattency */
 	sum = 0;
 	vmax = U_BW_TIMING_RING_SIZE;
 	if (self->lattency_index < vmax)
 		vmax = self->lattency_index;
-	for (int i=0; i<vmax; i++) {
+	for (i=0; i<vmax; i++) {
 		sum += self->lattency_ring[i];
 	}
 	self->lattency_average = sum / vmax;
@@ -40,7 +41,7 @@ static void u_bw_update_average( struct u_bw_timing * self )
 	vmax = U_BW_TIMING_RING_SIZE;
 	if (self->bandwidth_index < vmax)
 		vmax = self->bandwidth_index;
-	for (int i=0; i<vmax; i++) {
+	for (i=0; i<vmax; i++) {
 		sum += self->bandwidth_ring[i];
 	}
 	self->bandwidth_average = sum / vmax;
@@ -94,9 +95,10 @@ static void u_bw_update_bandwidth( struct u_bw_timing * self, int64_t t_delta )
  */
 void u_bw_init( struct u_bw_timing * self, const char * prefix )
 {
+	struct timespec time;
+	int i;
 
 	/* Initialize time */
-	struct timespec time;
 	clock_gettime(CLOCK_MONOTONIC, &time);
 	self->last = time;
 	self->counter = time;
@@ -106,7 +108,7 @@ void u_bw_init( struct u_bw_timing * self, const char * prefix )
 	memcpy( self->prefix, prefix, strlen(prefix)+1 );
 
 	/* Reset lattency properties */
-	for (int i=0; i<U_BW_TIMING_RING_SIZE; i++)
+	for (i=0; i<U_BW_TIMING_RING_SIZE; i++)
 		self->lattency_ring[i] = 0;
 	self->lattency_index = 0;
 	self->lattency_min = 0;
@@ -114,7 +116,7 @@ void u_bw_init( struct u_bw_timing * self, const char * prefix )
 	self->lattency_average = 0;
 
 	/* Reset bandwidth properties */
-	for (int i=0; i<U_BW_TIMING_RING_SIZE; i++)
+	for (i=0; i<U_BW_TIMING_RING_SIZE; i++)
 		self->bandwidth_ring[i] = 0;
 	self->bandwidth_index = 0;
 	self->bandwidth_min = 0;

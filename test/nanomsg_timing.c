@@ -25,20 +25,10 @@
 #include <assert.h>
 #include <stdio.h>
 
-#include <time.h>
-#include <sys/time.h>
-
 #include <nanomsg/nn.h>
 #include <nanomsg/pair.h>
 
-/* Platform-specific customisations */
-#ifdef __APPLE__
-#include <libc.h>
-#include "../src/transports/ofi/platf/osx.h"
-/* (Implementation in libfabric) */
-#else
-#include <inttypes.h>
-#endif
+#include "common.h"
 
 #define MSG_LEN 	10240
 #define ITERATIONS 	10000
@@ -49,33 +39,19 @@
 #define NODE0 "node0"
 #define NODE1 "node1"
 
-//const char msg_buffer[MSG_LEN];
-
-/**
- * shamelessly stolen from fabtests shared.c
- * precision fixed to us
- */
-int64_t get_elapsed(const struct timespec *b, const struct timespec *a)
-{
-	int64_t elapsed;
-
-	elapsed = (a->tv_sec - b->tv_sec) * 1000 * 1000 * 1000;
-	elapsed += a->tv_nsec - b->tv_nsec;
-	return elapsed / 1000;  // microseconds
-}
-
 /**
  */
 int run_tests( int sock, int direction, size_t msg_len )
 {
-	struct timespec t0, t1;
-	void * msg;
+	struct u_bw_timing bw;
+	void * msg = NULL;
 	int iterations = ITERATIONS;
 	int sz_n, i;
 
 	// When sending, start counting before transmittion
 	if (direction == DIRECTION_OUT)
-		clock_gettime(CLOCK_MONOTONIC, &t0);
+		u_bw_init( &bw, "OUT: ");
+
 
 	// Exchange messages
 	for (i=0; i<iterations; i++) {
@@ -94,6 +70,7 @@ int run_tests( int sock, int direction, size_t msg_len )
 	            printf("!! Sent %d instead of %zu\n", sz_n, msg_len);
 	        }
 			printf("-- Sent %i\n", i);
+			u_bw_count( &bw, sz_n );
 
 		} else {
 
@@ -107,16 +84,25 @@ int run_tests( int sock, int direction, size_t msg_len )
 			printf("-- Received %i\n", i);
 
 			// When receiving, start counting after first receive
-			if (i == 0)
-				clock_gettime(CLOCK_MONOTONIC, &t0);
+			if (i == 0) {
+				u_bw_init( &bw, "IN: ");
+			} else {
+				u_bw_count( &bw, sz_n );
+			}
 
 		}
 
 	}
 
 	// Calculate overall lattency
-	clock_gettime(CLOCK_MONOTONIC, &t1);
-    printf("TIM: Time per message: %8.2f us\n", get_elapsed(&t0, &t1)/i/2.0);
+	u_bw_finalize( &bw );
+
+	// Wait 500 ms
+	usleep(500000);
+
+	// Display bandwidth/lattency results
+	u_bw_display( &bw );
+
     return 0;
 }
 
@@ -132,6 +118,7 @@ int node0 ( const char *url, size_t msg_len )
 	assert (nn_bind (sock, url) >= 0);
 	printf("TIM: I will be receiving\n");
 	run_tests(sock, DIRECTION_IN, msg_len);
+	printf(">>> SHUTDOWN\n");
 	nn_shutdown (sock, 0);
 	return 0;
 }
@@ -148,6 +135,7 @@ int node1 ( const char *url, size_t msg_len )
 	assert (nn_connect (sock, url) >= 0);
 	printf("TIM: I will be sending\n");
 	run_tests(sock, DIRECTION_OUT, msg_len);
+	printf(">>> SHUTDOWN\n");
 	nn_shutdown (sock, 0);
 	return 0;
 }
@@ -183,5 +171,6 @@ int main (const int argc, const char **argv)
 		help();
 		return 1;
 	}
+
 	return 0;
 }

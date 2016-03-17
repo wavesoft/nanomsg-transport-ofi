@@ -51,7 +51,15 @@
 
 /* Timeout values */
 #define NN_SOFI_TIMEOUT_HANDSHAKE        1000
-#define NN_SOFI_TIMEOUT_KEEPALIVE_TICK   1000
+#define NN_SOFI_TIMEOUT_KEEPALIVE_TICK   500
+
+/* How many ticks to wait before sending
+   an keepalive packet to remote end. */
+#define NN_SOFI_KEEPALIVE_OUT_TICKS      5
+
+/* How many ticks to wait for any incoming
+   message (assumed keepalive) from remote end */
+#define NN_SOFI_KEEPALIVE_IN_TICKS       10
 
 /* Local flags */
 #define NN_SOFI_FLAGS_THREAD_ACTIVE      0x01
@@ -197,8 +205,8 @@ void nn_sofi_init ( struct nn_sofi *self,
     nn_epbase_getopt (epbase, NN_SOL_SOCKET, NN_RCVBUF, &rx_msg_size, &opt_sz);
 
     /* Initialize INPUT Sofi */
-    nn_sofi_in_init( &self->sofi_in, ofi, ep, ng_direction, rx_queue, rx_msg_size,
-        &self->pipebase, NN_SOFI_SRC_IN_FSM, &self->fsm );
+    nn_sofi_in_init( &self->sofi_in, ofi, ep, ng_direction, rx_queue,
+        rx_msg_size, &self->pipebase, NN_SOFI_SRC_IN_FSM, &self->fsm );
 
     /* Initialize OUTPUT Sofi */
     nn_sofi_out_init( &self->sofi_out, ofi, ep, ng_direction, tx_queue,
@@ -343,7 +351,7 @@ static void nn_sofi_poller_thread (void *arg)
     uint32_t event;
     int ret;
 
-    _ofi_debug("OFI[p]: Starting poller thread\n");
+    _ofi_debug("OFI[Sp]: Starting poller thread\n");
 
     /* Keep thread alive while the THREAD_ACTIVE flag is set  */
     while ( self->flags & NN_SOFI_FLAGS_THREAD_ACTIVE ) {
@@ -366,14 +374,16 @@ static void nn_sofi_poller_thread (void *arg)
         if (nn_slow(ret > 0)) {
 
             /* Trigger rx worker task */
-            _ofi_debug("OFI[p]: Rx CQ Event (ret=%i, ctx=%p)\n", ret, cq_entry.op_context);
+            _ofi_debug("OFI[Sp]: Rx CQ Event (ret=%i, ctx=%p)\n", ret, 
+                cq_entry.op_context);
             nn_sofi_in_rx_event( &self->sofi_in, &cq_entry );
 
         } else if (nn_slow(ret != -FI_EAGAIN)) {
 
             /* Get error details */
             ret = fi_cq_readerr( self->ep->rx_cq, &err_entry, 0 );
-            _ofi_debug("OFI[p]: Rx CQ Error (%s)\n", fi_strerror((int) err_entry.err) );
+            _ofi_debug("OFI[Sp]: Rx CQ Error (%s)\n", 
+                fi_strerror((int) err_entry.err) );
 
             /* Trigger rx error worker task */
             nn_sofi_in_rx_error_event( &self->sofi_in, &err_entry );
@@ -383,22 +393,25 @@ static void nn_sofi_poller_thread (void *arg)
         /* ========================================= */
         /* Wait for Tx CQ event */
         /* ========================================= */
-        ret = fi_cq_read( self->ep->tx_cq, &cq_entry, 1 );
-        if (nn_slow(ret > 0)) {
+        if (!nn_sofi_out_isblocked(&self->sofi_out)) {
+            ret = fi_cq_read( self->ep->tx_cq, &cq_entry, 1 );
+            if (nn_slow(ret > 0)) {
 
-            /* Trigger tx worker task */
-            _ofi_debug("OFI[p]: Tx CQ Event (ret=%i)\n", ret);
-            nn_sofi_out_tx_event( &self->sofi_out, &cq_entry );
+                /* Trigger tx worker task */
+                _ofi_debug("OFI[Sp]: Tx CQ Event (ret=%i)\n", ret);
+                nn_sofi_out_tx_event( &self->sofi_out, &cq_entry );
 
-        } else if (nn_slow(ret != -FI_EAGAIN)) {
+            } else if (nn_slow(ret != -FI_EAGAIN)) {
 
-            /* Get error details */
-            ret = fi_cq_readerr( self->ep->tx_cq, &err_entry, 0 );
-            _ofi_debug("OFI[p]: Tx CQ Error (%s)\n", fi_strerror((int) -err_entry.err) );
+                /* Get error details */
+                ret = fi_cq_readerr( self->ep->tx_cq, &err_entry, 0 );
+                _ofi_debug("OFI[Sp]: Tx CQ Error (%s)\n", 
+                    fi_strerror((int) -err_entry.err) );
 
-            /* Trigger tx error worker task */
-            nn_sofi_out_tx_error_event( &self->sofi_out, &err_entry );
+                /* Trigger tx error worker task */
+                nn_sofi_out_tx_error_event( &self->sofi_out, &err_entry );
 
+            }
         }
 
         /* ========================================= */
@@ -406,11 +419,11 @@ static void nn_sofi_poller_thread (void *arg)
         /* ========================================= */
         ret = fi_eq_read( self->ep->eq, &event, &eq_entry, sizeof eq_entry, 0);
         if (nn_fast(ret != -FI_EAGAIN)) {
-            _ofi_debug("OFI[p]: Endpoint EQ Event (event=%i)\n", event);
+            _ofi_debug("OFI[Sp]: Endpoint EQ Event (event=%i)\n", event);
 
             /* Check for socket disconnection */
             if (event == FI_SHUTDOWN) {
-                _ofi_debug("OFI[p]: Endpoint Disconnected\n");
+                _ofi_debug("OFI[Sp]: Endpoint Disconnected\n");
                 if (self->state == NN_SOFI_STATE_RUNNING)
                     nn_worker_execute (self->worker, &self->task_disconnect);
                 break;
@@ -432,7 +445,7 @@ static void nn_sofi_poller_thread (void *arg)
     }
 
     /* Clenaup */
-    _ofi_debug("OFI[p]: Exited poller thread\n");
+    _ofi_debug("OFI[Sp]: Exited poller thread\n");
 
 }
 
@@ -454,6 +467,9 @@ static int nn_sofi_send (struct nn_pipebase *pb, struct nn_msg *msg)
     /* Return error codes on erroreus states */
     if (nn_slow(self->state != NN_SOFI_STATE_RUNNING))
         return 0;
+
+    /* We sent something */
+    self->ticks_out = 0;
 
     /* Forward event to Output FSM */
     return nn_sofi_out_tx_event_send( &self->sofi_out, msg );
@@ -541,6 +557,7 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
 {
 
     /* Get pointer to sofi structure */
+    int ret;
     struct nn_sofi *self;
     self = nn_cont (fsm, struct nn_sofi, fsm);
     _ofi_debug("OFI[S]: nn_sofi_handler state=%i, src=%i, type=%i\n", 
@@ -569,7 +586,8 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
                 /* Post receive buffers */
                 self->error = nn_sofi_recv_handshake_start( self );
                 if (self->error) {
-                    _ofi_debug("OFI[S]: Error preparing for handshake receive (error=%i)\n", self->error);
+                    _ofi_debug("OFI[S]: Error preparing for handshake receive "
+                        "(error=%i)\n", self->error);
                 }
 
                 /* Depending ont he direction send or receive first */
@@ -579,7 +597,8 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
                     if (!self->error) {
                         self->error = nn_sofi_send_handshake( self );
                         if (self->error) {
-                            _ofi_debug("OFI[S]: Error sending handshake (error=%i)\n", self->error);
+                            _ofi_debug("OFI[S]: Error sending handshake "
+                                "(error=%i)\n", self->error);
                         }
                     }
 
@@ -587,7 +606,8 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
                     if (!self->error) {
                        self->error = nn_sofi_recv_handshake_complete( self );
                         if (self->error) {
-                            _ofi_debug("OFI[S]: Error receiving handshake (error=%i)\n", self->error);
+                            _ofi_debug("OFI[S]: Error receiving handshake "
+                                "(error=%i)\n", self->error);
                         }
                     }
 
@@ -597,7 +617,8 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
                     if (!self->error) {
                        self->error = nn_sofi_recv_handshake_complete( self );
                         if (self->error) {
-                            _ofi_debug("OFI[S]: Error receiving handshake (error=%i)\n", self->error);
+                            _ofi_debug("OFI[S]: Error receiving handshake "
+                                "(error=%i)\n", self->error);
                         }
                     }
 
@@ -605,7 +626,8 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
                     if (!self->error) {
                         self->error = nn_sofi_send_handshake( self );
                         if (self->error) {
-                            _ofi_debug("OFI[S]: Error sending handshake (error=%i)\n", self->error);
+                            _ofi_debug("OFI[S]: Error sending handshake "
+                                "(error=%i)\n", self->error);
                         }
                     }
 
@@ -782,9 +804,12 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
         case NN_SOFI_SRC_IN_FSM:
             switch (type) {
             case NN_SOFI_IN_EVENT_RECEIVED:
+                _ofi_debug("OFI[S]: Data are available\n");
+
+                /* Reset keepalive */
+                self->ticks_in = 0;
 
                 /* Notify socket base that data are available */
-                _ofi_debug("OFI[S]: Data are available\n");
                 nn_pipebase_received (&self->pipebase);
 
                 return;
@@ -811,6 +836,36 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
 
                 /* Handhsake phase is completely terminated */
                 _ofi_debug("OFI[S]: Keepalive tick\n");
+
+                /* Check if we have to send a tick */
+                if (++self->ticks_out > NN_SOFI_KEEPALIVE_OUT_TICKS) {
+                    _ofi_debug("OFI[S]: Haven't sent anything for a while, sending keepalive\n");
+
+                    /* Send keepalive packet */
+                    ret = nn_sofi_out_tx( &self->sofi_out, 
+                        NN_SOFI_KEEPALIVE_PACKET, 
+                        NN_SOFI_KEEPALIVE_PACKET_LEN,
+                        NN_SOFI_TIMEOUT_KEEPALIVE_TICK );
+                    if (ret) {
+                        _ofi_debug("OFI[S]: Unable to send keepalive, assuming "
+                            "broken connection!\n");
+                        self->error = EPIPE;
+                        nn_sofi_stop(self);
+                        return;
+                    }
+
+                    /* Reset keepalive timeout */
+                    self->ticks_out = 0;
+
+                }
+
+                /* Check if we timed out waiting for ticks */
+                if (++self->ticks_in > NN_SOFI_KEEPALIVE_IN_TICKS) {
+                    _ofi_debug("OFI[S]: Timed out waiting for keepalive!\n");
+                    self->error = EPIPE;
+                    nn_sofi_stop(self);
+                    return;
+                }
 
                 /* Stop Keepalive timer only to be started later */
                 nn_timer_stop( &self->timer_keepalive );

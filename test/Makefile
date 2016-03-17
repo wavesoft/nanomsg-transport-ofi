@@ -55,6 +55,9 @@ nanomsg: test_nanomsg_timing
 hlapi.o: $(OFI_DIR)/hlapi.c
 	gcc $(CCFLAGS_OFI) $(CCFLAGS) -I$(PWD) $(OFI_DIR)/hlapi.c -c -o $@
 
+common.o: common.c
+	gcc $(CCFLAGS_OFI) $(CCFLAGS) common.c -c -o $@
+
 # ================================================
 #  Target binaries
 # ================================================
@@ -70,7 +73,7 @@ test_fabric_msg_timed: fabric_msg_timed.c hlapi.o
 	gcc $(CCFLAGS_OFI) $(CCFLAGS) $^ $(LDFLAGS_OFI) $(LDFLAGS) -o $@
 
 # Nanomsg tests
-test_nanomsg_timing: nanomsg_timing.c $(NANOMSG_LIB_DIR)/libnanomsg.a
+test_nanomsg_timing: nanomsg_timing.c common.o hlapi.o $(NANOMSG_LIB_DIR)/libnanomsg.a
 	gcc $(CCFLAGS_NN) $(CCFLAGS) $^ $(LDFLAGS_NN) $(LDFLAGS) -o $@
 
 # ================================================

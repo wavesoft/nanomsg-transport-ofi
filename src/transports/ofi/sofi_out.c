@@ -80,12 +80,28 @@ void nn_sofi_out_init ( struct nn_sofi_out *self,
     int ret;
     _ofi_debug("OFI[o]: Initializing Output FSM\n");
 
+    /* Auto-discover queue size */
+    if (queue_size == 0) {
+        queue_size = ep->tx_size;
+        /* Fallback */
+        if (queue_size < 1)
+            queue_size = 1;
+    } else {
+        /* Wrap to max */
+        if (queue_size > ep->tx_size)
+            queue_size = ep->tx_size;
+    }
+
+
     /* Initialize properties */
     self->state = NN_SOFI_OUT_STATE_IDLE;
     self->error = 0;
     self->ofi = ofi;
     self->ep = ep;
     self->pend_sent = 0;
+
+    /* Initialize sync I/O */
+    self->sync_io_active = 0;
 
     /* Initialize events */
     nn_fsm_event_init (&self->event_started);
@@ -131,6 +147,12 @@ void nn_sofi_out_init ( struct nn_sofi_out *self,
 int nn_sofi_out_isidle (struct nn_sofi_out *self)
 {
     return nn_fsm_isidle (&self->fsm);
+}
+
+/* Check of there is a blocking operation in progress */
+uint8_t nn_sofi_out_isblocked( struct nn_sofi_out *self )
+{
+    return self->sync_io_active;
 }
 
 /*  Cleanup the state machine */
@@ -381,6 +403,7 @@ size_t nn_sofi_out_tx( struct nn_sofi_out *self, void * ptr,
         return -ENOMEM;
 
     /* Move data to small MR */
+    self->sync_io_active = 1;
     memcpy( self->small_ptr, ptr, max_sz );
 
     /* Send data */
@@ -390,6 +413,7 @@ size_t nn_sofi_out_tx( struct nn_sofi_out *self, void * ptr,
         &self->context );
     if (ret) {
         FT_PRINTERR("fi_send", ret);
+        self->sync_io_active = 0;
         return ret;
     }
 
@@ -410,6 +434,7 @@ size_t nn_sofi_out_tx( struct nn_sofi_out *self, void * ptr,
         );
 
         /* Return CQ Error */
+        self->sync_io_active = 0;
         return -err_entry.prov_errno;
 
     }
@@ -417,6 +442,7 @@ size_t nn_sofi_out_tx( struct nn_sofi_out *self, void * ptr,
     _ofi_debug("OFI[o]: Blocking TX completed (ctx=%p)\n", entry.op_context);
 
     /* Success */
+    self->sync_io_active = 0;
     return 0;
 
 }
@@ -663,38 +689,54 @@ static void nn_sofi_out_handler (struct nn_fsm *fsm, int src, int type,
             case NN_WORKER_TASK_EXECUTE:
 
                 nn_mutex_lock(&self->mutex_cntr);
-                while (self->cntr_pending > 0) {
+                if (self->cntr_pending > 0) {
 
                     /* =================================== */
                     /*  Tx CQ Event                        */
                     if (self->cntr_task_tx > 0) {
                     /* =================================== */
                         self->cntr_task_tx--;
+                        self->cntr_pending--;
 
                         /* Notify that data are sent */
                         _ofi_debug("OFI[o]: Acknowledged sent event, cleaning-up\n");
 
-                        /* Check for idle MRM */
-                        if (nn_ofi_mrm_isidle(&self->mrm)) {
-                            _ofi_debug("OFI[o]: MRM is idle, cleaning-up\n");
+                        /* Don't exit until MRM is idle and all send events are sent */
+                        if (self->pend_sent) {
 
-                            /* We got acknowledgement, continue with abort cleanup */
-                            self->state = NN_SOFI_OUT_STATE_ABORT_CLEANUP;
-                            nn_timer_stop (&self->timer_abort);
-                            return;
+                            /* Check for late send events */
+                            _ofi_debug("OFI[o]: Pending %i sends before close\n", self->pend_sent);
+                            self->pend_sent--;
 
-                        };
+                            /* Send delayed send event */
+                            _ofi_debug("OFI[o]: Delayed return from send() before close\n");
+                            nn_fsm_raise(&self->fsm, &self->event_sent, 
+                                NN_SOFI_OUT_EVENT_SENT);
+
+                        } else {
+
+                            /* Check for idle MRM */
+                            if (nn_ofi_mrm_isidle(&self->mrm)) {
+                                _ofi_debug("OFI[o]: MRM is idle, cleaning-up\n");
+
+                                /* We got acknowledgement, continue with abort cleanup */
+                                self->state = NN_SOFI_OUT_STATE_ABORT_CLEANUP;
+                                nn_timer_stop (&self->timer_abort);
+
+                            };
+
+                        }
 
                     /* =================================== */
                     /*  Tx Error Event                     */
                     } else if (self->cntr_task_tx_error > 0) {
                     /* =================================== */
                         self->cntr_task_tx_error--;
+                        self->cntr_pending--;
 
                         /* Send error, cleanup */
                         self->state = NN_SOFI_OUT_STATE_ABORT_CLEANUP;
                         nn_timer_stop (&self->timer_abort);
-                        return;
 
                     }
 

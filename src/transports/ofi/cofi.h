@@ -23,10 +23,11 @@
 #ifndef NN_COFI_INCLUDED
 #define NN_COFI_INCLUDED
 
+#include "hlapi.h"
 #include "../../transport.h"
 
 /*  State machine managing connected OpenFabrics Interface socket. */
 
-int nn_cofi_create (void *hint, struct nn_epbase **epbase);
+int nn_cofi_create (void *hint, struct nn_epbase **epbase, struct ofi_resources * ofi);
 
 #endif

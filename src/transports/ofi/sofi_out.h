@@ -77,6 +77,9 @@ struct nn_sofi_out {
     int                         state;
     int                         error;
 
+    /* Support for  */
+    uint8_t                     sync_io_active;
+
     /* References */
     struct nn_pipebase          * pipebase;
     struct ofi_resources        * ofi;
@@ -132,6 +135,9 @@ void nn_sofi_out_stop (struct nn_sofi_out *self);
 
 /*  Cleanup the state machine */
 void nn_sofi_out_term (struct nn_sofi_out *self);
+
+/* This function returns 1 when a blocking operation is active */
+uint8_t nn_sofi_out_isblocked( struct nn_sofi_out *self );
 
 /* ============================== */
 /*        EXTERNAL EVENTS         */

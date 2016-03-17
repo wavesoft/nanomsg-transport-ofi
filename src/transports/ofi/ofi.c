@@ -23,6 +23,7 @@
 #include "ofi.h"
 #include "bofi.h"
 #include "cofi.h"
+#include "hlapi.h"
 
 #include "../../ofi.h"
 #include "../../utils/err.h"
@@ -53,8 +54,13 @@ static const struct nn_optset_vfptr nn_ofi_optset_vfptr = {
 };
 
 /*  nn_transport interface. */
+static void nn_ofi_init ();
+static void nn_ofi_term ();
 static int  nn_ofi_bind (void *hint, struct nn_epbase **epbase);
 static int  nn_ofi_connect (void *hint, struct nn_epbase **epbase);
+
+/* High-level API of libfabric */
+static struct ofi_resources R;
 
 /**
  * Expose the OFI transport pointer table
@@ -62,8 +68,8 @@ static int  nn_ofi_connect (void *hint, struct nn_epbase **epbase);
 static struct nn_transport nn_ofi_vfptr = {
     "ofi",
     NN_OFI,
-    NULL,
-    NULL,
+    nn_ofi_init,
+    nn_ofi_term,
     nn_ofi_bind,
     nn_ofi_connect,
     nn_ofi_optset,
@@ -73,11 +79,35 @@ static struct nn_transport nn_ofi_vfptr = {
 struct nn_transport *nn_ofi = &nn_ofi_vfptr;
 
 /**
+ * Initialize OFI
+ */
+static void nn_ofi_init ()
+{
+
+    /* Allocate instance-wide OFI structures */
+    R.err = ofi_alloc( &R, FI_EP_MSG );
+
+    /* We can't do much on the initialization phase for
+       any errors. We rather let bofi/cofi to abort initialization
+       if the resources are not properly initialized. */
+
+}
+
+/**
+ * Terminate OFI
+ */
+static void nn_ofi_term ()
+{
+    /* Release intance-wide OFI resources */
+    ofi_free( &R );
+}
+
+/**
  * Create a new bind socket
  */
 static int nn_ofi_bind (void *hint, struct nn_epbase **epbase)
 {
-    return nn_bofi_create(hint, epbase);
+    return nn_bofi_create(hint, epbase, &R);
 }
 
 /**
@@ -85,7 +115,7 @@ static int nn_ofi_bind (void *hint, struct nn_epbase **epbase)
  */
 static int nn_ofi_connect (void *hint, struct nn_epbase **epbase)
 {
-    return nn_cofi_create(hint, epbase);
+    return nn_cofi_create(hint, epbase, &R);
 }
 
 /**
@@ -99,7 +129,7 @@ static struct nn_optset *nn_ofi_optset (void)
     alloc_assert (optset);
     optset->base.vfptr = &nn_ofi_optset_vfptr;
 
-    /*  Default values for OFI socket options. */
+    /*  Default values for OFI socket options (0=max). */
     optset->rx_queue_size = 2;
     optset->tx_queue_size = 2;
 

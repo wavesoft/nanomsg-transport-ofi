@@ -205,12 +205,20 @@ void u_bw_finalize( struct u_bw_timing * self )
 	/* Update averages */
 	u_bw_update_average( self );
 
+}
+
+
+/**
+ * Display counters
+ */
+void u_bw_display( struct u_bw_timing * self )
+{
 	/* Dump */
 	printf("----------------------\n");
-	printf("%sLattency Avg  : %lf uSec\n", self->prefix, self->lattency_average );
+	printf("%sLattency Avg  : %.2lf uSec\n", self->prefix, self->lattency_average );
 	printf("%sLattency Min  : %lld uSec\n", self->prefix, self->lattency_min );
 	printf("%sLattency Max  : %lld uSec\n", self->prefix, self->lattency_max );
-	printf("%sBandwidth Avg : %.2lf MB/s (%lf GBit/s)\n", self->prefix, 
+	printf("%sBandwidth Avg : %.2lf MB/s (%.2lf GBit/s)\n", self->prefix, 
 		self->bandwidth_average, (double)(self->bandwidth_average * 8.0 / 1000.0) );
 	printf("%sBandwidth Min : %lld MB/s\n", self->prefix, self->bandwidth_min );
 	printf("%sBandwidth Max : %lld MB/s\n", self->prefix, self->bandwidth_max );

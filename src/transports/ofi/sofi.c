@@ -351,7 +351,7 @@ static void nn_sofi_poller_thread (void *arg)
     uint32_t event;
     int ret;
 
-    _ofi_debug("OFI[p]: Starting poller thread\n");
+    _ofi_debug("OFI[Sp]: Starting poller thread\n");
 
     /* Keep thread alive while the THREAD_ACTIVE flag is set  */
     while ( self->flags & NN_SOFI_FLAGS_THREAD_ACTIVE ) {
@@ -374,7 +374,7 @@ static void nn_sofi_poller_thread (void *arg)
         if (nn_slow(ret > 0)) {
 
             /* Trigger rx worker task */
-            _ofi_debug("OFI[p]: Rx CQ Event (ret=%i, ctx=%p)\n", ret, 
+            _ofi_debug("OFI[Sp]: Rx CQ Event (ret=%i, ctx=%p)\n", ret, 
                 cq_entry.op_context);
             nn_sofi_in_rx_event( &self->sofi_in, &cq_entry );
 
@@ -382,7 +382,7 @@ static void nn_sofi_poller_thread (void *arg)
 
             /* Get error details */
             ret = fi_cq_readerr( self->ep->rx_cq, &err_entry, 0 );
-            _ofi_debug("OFI[p]: Rx CQ Error (%s)\n", 
+            _ofi_debug("OFI[Sp]: Rx CQ Error (%s)\n", 
                 fi_strerror((int) err_entry.err) );
 
             /* Trigger rx error worker task */
@@ -398,14 +398,14 @@ static void nn_sofi_poller_thread (void *arg)
             if (nn_slow(ret > 0)) {
 
                 /* Trigger tx worker task */
-                _ofi_debug("OFI[p]: Tx CQ Event (ret=%i)\n", ret);
+                _ofi_debug("OFI[Sp]: Tx CQ Event (ret=%i)\n", ret);
                 nn_sofi_out_tx_event( &self->sofi_out, &cq_entry );
 
             } else if (nn_slow(ret != -FI_EAGAIN)) {
 
                 /* Get error details */
                 ret = fi_cq_readerr( self->ep->tx_cq, &err_entry, 0 );
-                _ofi_debug("OFI[p]: Tx CQ Error (%s)\n", 
+                _ofi_debug("OFI[Sp]: Tx CQ Error (%s)\n", 
                     fi_strerror((int) -err_entry.err) );
 
                 /* Trigger tx error worker task */
@@ -419,11 +419,11 @@ static void nn_sofi_poller_thread (void *arg)
         /* ========================================= */
         ret = fi_eq_read( self->ep->eq, &event, &eq_entry, sizeof eq_entry, 0);
         if (nn_fast(ret != -FI_EAGAIN)) {
-            _ofi_debug("OFI[p]: Endpoint EQ Event (event=%i)\n", event);
+            _ofi_debug("OFI[Sp]: Endpoint EQ Event (event=%i)\n", event);
 
             /* Check for socket disconnection */
             if (event == FI_SHUTDOWN) {
-                _ofi_debug("OFI[p]: Endpoint Disconnected\n");
+                _ofi_debug("OFI[Sp]: Endpoint Disconnected\n");
                 if (self->state == NN_SOFI_STATE_RUNNING)
                     nn_worker_execute (self->worker, &self->task_disconnect);
                 break;
@@ -445,7 +445,7 @@ static void nn_sofi_poller_thread (void *arg)
     }
 
     /* Clenaup */
-    _ofi_debug("OFI[p]: Exited poller thread\n");
+    _ofi_debug("OFI[Sp]: Exited poller thread\n");
 
 }
 

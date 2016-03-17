@@ -61,7 +61,7 @@ struct nn_cofi {
     int                         state;
 
     /* The high-level api structures */
-    struct ofi_resources        ofi;
+    struct ofi_resources *      ofi;
     struct ofi_active_endpoint  ep;
 
     /*  This object is a specific type of endpoint.
@@ -77,7 +77,7 @@ struct nn_cofi {
 /**
  * Create a connected OFI Socket
  */
-int nn_cofi_create (void *hint, struct nn_epbase **epbase)
+int nn_cofi_create (void *hint, struct nn_epbase **epbase, struct ofi_resources * ofi)
 {
     int ret;
     struct nn_cofi *self;
@@ -108,17 +108,17 @@ int nn_cofi_create (void *hint, struct nn_epbase **epbase)
     _ofi_debug("OFI[C]: Createing socket for (domain=%s, service=%s)\n", domain, 
         service );
 
-    /* Initialize ofi */
-    ret = ofi_alloc( &self->ofi, FI_EP_MSG );
-    if (ret) {
-        _ofi_debug("OFI[C]: Failed to ofi_alloc!\n");
+    /* Keep resources */
+    self->ofi = ofi;
+    if (ofi->err) {
+        _ofi_debug("OFI[C]: OFI was not properly initialized!\n");
         nn_epbase_term (&self->epbase);
         nn_free(self);
-        return ret;
+        return ofi->err;
     }
 
     /* Start server */
-    ret = ofi_init_client( &self->ofi, &self->ep, 
+    ret = ofi_init_client( self->ofi, &self->ep, 
         FI_SOCKADDR, domain, service );
     if (ret) {
         _ofi_debug("OFI[C]: Failed to ofi_init_client!\n");
@@ -171,7 +171,6 @@ static void nn_cofi_destroy (struct nn_epbase *self)
 
     /* Stop OFI (sofi also closes endpoint) */
     nn_sofi_term(&cofi->sofi);
-    ofi_free( &cofi->ofi );
 
     /* Cleanup other resources */
     nn_fsm_term (&cofi->fsm);
@@ -252,7 +251,7 @@ static void nn_cofi_handler (struct nn_fsm *self, int src, int type,
                 /* Create new connected OFI */
                 _ofi_debug("OFI[C]: Creating new SOFI\n");
                 cofi->state = NN_COFI_STATE_CONNECTED;
-                nn_sofi_init (&cofi->sofi, &cofi->ofi, &cofi->ep, NN_SOFI_NG_SEND, 
+                nn_sofi_init (&cofi->sofi, cofi->ofi, &cofi->ep, NN_SOFI_NG_SEND, 
                     &cofi->epbase, NN_COFI_SRC_SOFI, &cofi->fsm);
 
                 return;

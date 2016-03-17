@@ -167,6 +167,7 @@ static int nn_sofi_in_post_buffers(struct nn_sofi_in *self)
     _ofi_debug("OFI[i]: >>>>>> Grab MR %p\n", pick_chunk);
 
     /* Mark chunk as posted */
+    self->chunk_ingress = pick_chunk;
     pick_chunk->flags |= NN_SOFI_IN_MR_FLAG_POSTED;
     pick_chunk->age = ++self->age_ingress;
 
@@ -221,6 +222,18 @@ void nn_sofi_in_init ( struct nn_sofi_in *self,
 {
     int ret, offset;
     _ofi_debug("OFI[i]: Initializing Input FSM\n");
+
+    /* Auto-discover queue size */
+    if (queue_size == 0) {
+        queue_size = ep->rx_size;
+        /* Fallback */
+        if (queue_size < 1)
+            queue_size = 1;
+    } else {
+        /* Wrap to max */
+        if (queue_size > ep->rx_size)
+            queue_size = ep->rx_size;
+    }
 
     /* Reset properties */
     self->state = NN_SOFI_IN_STATE_IDLE;
@@ -337,13 +350,12 @@ void nn_sofi_in_term (struct nn_sofi_in *self)
          chunk < chunk_end; chunk++ ) {
 
         /* No chunk must not be locked at shutdown time */
-        // nn_assert( (chunk->flags & NN_SOFI_IN_MR_FLAG_LOCKED) == 0 );
+        nn_assert( (chunk->flags & NN_SOFI_IN_MR_FLAG_LOCKED) == 0 );
 
         /* Free everything */
+        _ofi_debug("OFI[i]: Releasing RxMR chunk=%p\n", chunk);
         FT_CLOSE_FID( chunk->mr );
         nn_chunk_free( chunk->chunk );
-        nn_queue_item_term( &chunk->item );
-        _ofi_debug("OFI[i]: Released RxMR chunk=%p\n", chunk);
 
     }
     nn_free( self->mr_chunks );
@@ -636,6 +648,12 @@ static void nn_sofi_in_shutdown (struct nn_fsm *fsm, int src, int type,
     /* Get pointer to sofi structure */
     struct nn_sofi_in *self;
     self = nn_cont (fsm, struct nn_sofi_in, fsm);
+
+    /* If we have an ingress chunk, mark it as free */
+    if (self->chunk_ingress) {
+        _ofi_debug("OFI[i]: We are never going to use chunk %p\n", self->chunk_ingress);
+        self->chunk_ingress->flags &= ~NN_SOFI_IN_MR_FLAG_LOCKED;
+    }
 
     /* If this is part of the FSM action, start shutdown */
     if (nn_slow (src == NN_FSM_ACTION && type == NN_FSM_STOP)) {

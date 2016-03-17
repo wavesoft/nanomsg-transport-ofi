@@ -732,6 +732,7 @@ int ofi_alloc( struct ofi_resources * R, enum fi_ep_type ep_type )
 	R->hints->mode			= FI_CONTEXT | FI_LOCAL_MR;
 
 	/* Success */
+	R->err = 0;
 	return 0;
 }
 
@@ -810,6 +811,8 @@ int ofi_open_active_ep( struct ofi_resources * R, struct ofi_active_endpoint * E
 	/* Cache some information */
 	EP->rx_prefix_size = ft_rx_prefix_size( fi );
 	EP->tx_prefix_size = ft_tx_prefix_size( fi );
+	EP->tx_size = fi->tx_attr->size;
+	EP->rx_size = fi->rx_attr->size;
 
 	/* Open Endpoint */
 	ret = fi_endpoint(EP->domain, fi, &EP->ep, NULL);
@@ -1150,8 +1153,7 @@ int ofi_server_accept( struct ofi_resources * R, struct ofi_passive_endpoint * P
 	} while ((int)rd == 0);
 
 	/* Close passive endpoint */
-	FT_CLOSE_FID( PEP->pep );
-	FT_CLOSE_FID( PEP->eq );
+	ofi_free_pep( PEP );
 
 	/* Success */
 	fi_freeinfo(info);
@@ -1355,6 +1357,10 @@ int ofi_shutdown_ep( struct ofi_active_endpoint * EP )
 int ofi_shutdown_pep( struct ofi_passive_endpoint * PEP )
 {
 
+	/* If PEP is not initialized, return */
+	if (PEP->pep == NULL)
+		return 0;
+
 	/* Send a shutdown even to event queuet */
 	struct fi_eq_cm_entry entry = {0};
 	ssize_t rd;
@@ -1390,6 +1396,10 @@ int ofi_free( struct ofi_resources * R )
 int ofi_free_pep( struct ofi_passive_endpoint * ep )
 {
 
+	/* If PEP is not initialized, return */
+	if (ep->pep == NULL)
+		return 0;
+
 	/* Drain event queue */
 	struct fi_eq_cm_entry entry;
 	uint32_t event;
@@ -1400,9 +1410,11 @@ int ofi_free_pep( struct ofi_passive_endpoint * ep )
 
 	/* Close endpoint */
 	FT_CLOSE_FID( ep->pep );
+	ep->pep = NULL;
 
 	/* Free structures */
 	FT_CLOSE_FID( ep->eq );
+	ep->eq = NULL;
 
 	/* Success */
 	return 0;

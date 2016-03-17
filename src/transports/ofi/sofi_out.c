@@ -80,6 +80,19 @@ void nn_sofi_out_init ( struct nn_sofi_out *self,
     int ret;
     _ofi_debug("OFI[o]: Initializing Output FSM\n");
 
+    /* Auto-discover queue size */
+    if (queue_size == 0) {
+        queue_size = ep->tx_size;
+        /* Fallback */
+        if (queue_size < 1)
+            queue_size = 1;
+    } else {
+        /* Wrap to max */
+        if (queue_size > ep->tx_size)
+            queue_size = ep->tx_size;
+    }
+
+
     /* Initialize properties */
     self->state = NN_SOFI_OUT_STATE_IDLE;
     self->error = 0;

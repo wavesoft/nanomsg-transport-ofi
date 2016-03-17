@@ -39,14 +39,12 @@
 #define NODE0 "node0"
 #define NODE1 "node1"
 
-//const char msg_buffer[MSG_LEN];
-
 /**
  */
 int run_tests( int sock, int direction, size_t msg_len )
 {
 	struct u_bw_timing bw;
-	void * msg;
+	void * msg = NULL;
 	int iterations = ITERATIONS;
 	int sz_n, i;
 
@@ -72,7 +70,7 @@ int run_tests( int sock, int direction, size_t msg_len )
 	            printf("!! Sent %d instead of %zu\n", sz_n, msg_len);
 	        }
 			printf("-- Sent %i\n", i);
-			u_bw_count( &bw, msg_len );
+			u_bw_count( &bw, sz_n );
 
 		} else {
 
@@ -89,7 +87,7 @@ int run_tests( int sock, int direction, size_t msg_len )
 			if (i == 0) {
 				u_bw_init( &bw, "IN: ");
 			} else {
-				u_bw_count( &bw, msg_len );
+				u_bw_count( &bw, sz_n );
 			}
 
 		}
@@ -98,6 +96,13 @@ int run_tests( int sock, int direction, size_t msg_len )
 
 	// Calculate overall lattency
 	u_bw_finalize( &bw );
+
+	// Wait 500 ms
+	usleep(500000);
+
+	// Display bandwidth/lattency results
+	u_bw_display( &bw );
+
     return 0;
 }
 
@@ -113,6 +118,7 @@ int node0 ( const char *url, size_t msg_len )
 	assert (nn_bind (sock, url) >= 0);
 	printf("TIM: I will be receiving\n");
 	run_tests(sock, DIRECTION_IN, msg_len);
+	printf(">>> SHUTDOWN\n");
 	nn_shutdown (sock, 0);
 	return 0;
 }
@@ -129,6 +135,7 @@ int node1 ( const char *url, size_t msg_len )
 	assert (nn_connect (sock, url) >= 0);
 	printf("TIM: I will be sending\n");
 	run_tests(sock, DIRECTION_OUT, msg_len);
+	printf(">>> SHUTDOWN\n");
 	nn_shutdown (sock, 0);
 	return 0;
 }
@@ -164,5 +171,6 @@ int main (const int argc, const char **argv)
 		help();
 		return 1;
 	}
+
 	return 0;
 }

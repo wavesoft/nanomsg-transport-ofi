@@ -45,6 +45,15 @@ struct u_bw_timing {
 
 };
 
+/* Call this to initialize counter.
+   The prefix argument is displayed before every line, ex. "IN: " */
 void u_bw_init( struct u_bw_timing * self, const char * prefix );
+
+/* Call this every time you send/receive a message */
 void u_bw_count( struct u_bw_timing * self, size_t len );
+
+/* Call this to summarize results */
 void u_bw_finalize( struct u_bw_timing * self );
+
+/* Call this to display results */
+void u_bw_display( struct u_bw_timing * self );

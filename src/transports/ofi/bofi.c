@@ -52,7 +52,7 @@ struct nn_bofi {
     int state;
 
     /* The high-level api structures */
-    struct ofi_resources        ofi;
+    struct ofi_resources *      ofi;
     struct ofi_passive_endpoint pep;
 
     /* The Connected OFIs */
@@ -91,10 +91,13 @@ static void nn_bofi_shutdown (struct nn_fsm *self, int src, int type,
 /* Thread functions */
 static void nn_bofi_accept_thread (void *arg);
 
+/* Helper functions */
+static void nn_bofi_start_accepting ( struct nn_bofi* bofi );
+
 /**
  * Create a bound (server) OFI Socket
  */
-int nn_bofi_create (void *hint, struct nn_epbase **epbase)
+int nn_bofi_create (void *hint, struct nn_epbase **epbase, struct ofi_resources * ofi)
 {
     int ret;
     struct nn_bofi *self;
@@ -122,16 +125,17 @@ int nn_bofi_create (void *hint, struct nn_epbase **epbase)
     _ofi_debug("OFI[B]: Creating bound OFI socket (domain=%s, service=%s)\n", domain, 
         service );
 
-    /* Initialize ofi */
-    ret = ofi_alloc( &self->ofi, FI_EP_MSG );
-    if (ret) {
+    /* Keep resources */
+    self->ofi = ofi;
+    if (ofi->err) {
+        _ofi_debug("OFI[B]: OFI was not properly initialized!\n");
         nn_epbase_term (&self->epbase);
         nn_free(self);
-        return ret;
+        return ofi->err;
     }
 
     /* Start server */
-    ret = ofi_init_server( &self->ofi, &self->pep, FI_SOCKADDR, domain, 
+    ret = ofi_init_server( self->ofi, &self->pep, FI_SOCKADDR, domain, 
         service );
     if (ret) {
         nn_epbase_term (&self->epbase);
@@ -212,7 +216,6 @@ static void nn_bofi_destroy (struct nn_epbase *self)
     }
 
     /* Free structures */
-    ofi_free( &bofi->ofi );
     nn_worker_cancel (bofi->worker, &bofi->task_accept);
     nn_worker_cancel (bofi->worker, &bofi->task_error);
     nn_worker_task_term (&bofi->task_accept);
@@ -242,16 +245,13 @@ static void nn_bofi_shutdown (struct nn_fsm *self, int src, int type,
         /* Switch to shutting down state */
         bofi->state = NN_BOFI_STATE_STOPPING;
 
-        /* Stop OFI operations */
-        _ofi_debug("OFI[B]: Freeing passive endpoint resources\n");
+        /*  Post shutdown event, wait for thread to exit and then close PEP. */
         ofi_shutdown_pep( &bofi->pep );
         ofi_free_pep( &bofi->pep );
 
-        /*  Wait till worker thread terminates. */
-        nn_thread_term (&bofi->thread);
-
         /* We are stopped */
         nn_fsm_stopped_noevent(&bofi->fsm);
+        nn_epbase_stopped (&bofi->epbase);
         return;
 
     }
@@ -276,7 +276,7 @@ static void nn_bofi_accept_thread (void *arg)
 
     /* Listen for incoming connections */
     _ofi_debug("OFI[B]: bofi_accept_thread: Waiting for incoming connections\n");
-    ret = ofi_server_accept( &self->ofi, &self->pep, self->accept_ep );
+    ret = ofi_server_accept( self->ofi, &self->pep, self->accept_ep );
     if (ret == FI_SHUTDOWN) {
         _ofi_debug("OFI[B]: bofi_accept_thread: Stopping because of FI_SHUTDOWN\n");
 
@@ -311,6 +311,7 @@ static void nn_bofi_accept_thread (void *arg)
     nn_worker_execute (self->worker, &self->task_accept);
 
 }
+
 /**
  * Bound OFI FSM Handler
  */
@@ -339,7 +340,7 @@ static void nn_bofi_handler (struct nn_fsm *self, int src, int type,
             case NN_FSM_START:
 
                 /* Start accept thread */
-                nn_thread_init (&bofi->thread, nn_bofi_accept_thread, bofi);
+                nn_bofi_start_accepting( bofi );
                 bofi->state = NN_BOFI_STATE_ACCEPTING;
 
                 return;
@@ -363,11 +364,14 @@ static void nn_bofi_handler (struct nn_fsm *self, int src, int type,
             switch (type) {
             case NN_WORKER_TASK_EXECUTE:
 
+                /* Reap thread */
+                nn_thread_term (&bofi->thread);
+
                 /* Create new SOFI */
                 _ofi_debug("OFI[B]: Allocating new SOFI\n");
                 bofi->sofi = nn_alloc (sizeof (struct nn_sofi), "sofi");
                 alloc_assert (bofi->sofi);
-                nn_sofi_init (bofi->sofi, &bofi->ofi, bofi->accept_ep, NN_SOFI_NG_RECV,
+                nn_sofi_init (bofi->sofi, bofi->ofi, bofi->accept_ep, NN_SOFI_NG_RECV,
                     &bofi->epbase, NN_BOFI_SRC_SOFI, &bofi->fsm);
 
                 /*  Move the newly created connection to the list of existing
@@ -377,6 +381,7 @@ static void nn_bofi_handler (struct nn_fsm *self, int src, int type,
                 bofi->sofi = NULL;
 
                 /* Acknowledge event and resume operation */
+                nn_bofi_start_accepting( bofi );
                 bofi->state = NN_BOFI_STATE_ACCEPTING;
 
                 return;
@@ -388,6 +393,9 @@ static void nn_bofi_handler (struct nn_fsm *self, int src, int type,
         case NN_BOFI_SRC_WORKER_ERROR:
             switch (type) {
             case NN_WORKER_TASK_EXECUTE:
+
+                /* Reap thread */
+                nn_thread_term (&bofi->thread);
 
                 /* Create new SOFI */
                 _ofi_debug("OFI[B]: Unable to accept! Terminating\n");
@@ -434,4 +442,13 @@ static void nn_bofi_handler (struct nn_fsm *self, int src, int type,
 
     }
 
+}
+
+/**
+ * Bound OFI FSM Handler
+ */
+static void nn_bofi_start_accepting ( struct nn_bofi* bofi )
+{
+    /* Start thread */
+    nn_thread_init (&bofi->thread, nn_bofi_accept_thread, bofi);
 }

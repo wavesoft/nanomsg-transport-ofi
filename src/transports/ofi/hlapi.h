@@ -97,6 +97,10 @@ struct ofi_active_endpoint
 	unsigned char 		tx_prefix_size;
 	unsigned char		rx_prefix_size;
 
+	/* Sixe of Rx/Tx Queues */
+	size_t 				tx_size;
+	size_t 				rx_size;
+
 	/* For fast poller loops */
 	uint32_t 			kinstructions_per_ms;
 
@@ -126,6 +130,9 @@ struct ofi_resources
 
 	/* For fast poller loops */
 	uint32_t 			kinstructions_per_ms;
+
+	/* Last error */
+	int 				err;
 
 };
 
@@ -190,6 +197,11 @@ struct ofi_mr_block {
  * Allocate hints and prepare core structures
  */
 int ofi_alloc( struct ofi_resources * R, enum fi_ep_type ep_type );
+
+/**
+ * Free hints and core structures
+ */
+int ofi_free( struct ofi_resources * R );
 
 /**
  * Scattter-gather version
@@ -271,11 +283,6 @@ int ofi_shutdown_ep( struct ofi_active_endpoint * EP );
  * Shutdown an passive endpoint
  */
 int ofi_shutdown_pep( struct ofi_passive_endpoint * PEP );
-
-/**
- * Free hints and core structures
- */
-int ofi_free( struct ofi_resources * R );
 
 /**
  * Free passive endpoint

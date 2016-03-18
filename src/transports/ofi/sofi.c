@@ -144,6 +144,8 @@ void nn_sofi_init ( struct nn_sofi *self,
     self->ep = ep;
     self->epbase = epbase;
     self->ng_direction = ng_direction;
+    self->ticks_in = 0;
+    self->ticks_out = 0;
 
     /* Initialize properties */
     self->flags = 0;
@@ -426,7 +428,7 @@ static void nn_sofi_poller_thread (void *arg)
                 _ofi_debug("OFI[Sp]: Endpoint Disconnected\n");
                 if (self->state == NN_SOFI_STATE_RUNNING)
                     nn_worker_execute (self->worker, &self->task_disconnect);
-                break;
+                // break;
             }
 
         }
@@ -466,7 +468,7 @@ static int nn_sofi_send (struct nn_pipebase *pb, struct nn_msg *msg)
 
     /* Return error codes on erroreus states */
     if (nn_slow(self->state != NN_SOFI_STATE_RUNNING))
-        return 0;
+        return -self->error;
 
     /* We sent something */
     self->ticks_out = 0;
@@ -486,6 +488,10 @@ static int nn_sofi_recv (struct nn_pipebase *pb, struct nn_msg *msg)
     struct nn_sofi *self;
     self = nn_cont (pb, struct nn_sofi, pipebase);
     _ofi_debug("SOFI[S]: NanoMsg RECV event\n");
+
+    /* Return error codes on erroreus states */
+    if (nn_slow(self->state != NN_SOFI_STATE_RUNNING))
+        return -self->error;
 
     /* Acknowledge event and pull msg from in FSM */
     return nn_sofi_in_rx_event_ack( &self->sofi_in, msg );
@@ -808,10 +814,19 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
 
                 /* Reset keepalive */
                 self->ticks_in = 0;
+                printf("ticks=%d\n",self->ticks_in);
 
                 /* Notify socket base that data are available */
                 nn_pipebase_received (&self->pipebase);
 
+                return;
+
+            case NN_SOFI_IN_EVENT_KEEPALIVE:
+                _ofi_debug("OFI[S]: Keepalive received\n");
+
+                /* Reset keepalive */
+                self->ticks_in = 0;
+                printf("ticks=%d\n",self->ticks_in);
                 return;
 
             case NN_SOFI_IN_EVENT_ERROR:
@@ -839,7 +854,7 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
 
                 /* Check if we have to send a tick */
                 if (++self->ticks_out > NN_SOFI_KEEPALIVE_OUT_TICKS) {
-                    _ofi_debug("OFI[S]: Haven't sent anything for a while, sending keepalive\n");
+                    printf("OFI[S]: Haven't sent anything for a while, sending keepalive\n");
 
                     /* Send keepalive packet */
                     ret = nn_sofi_out_tx( &self->sofi_out, 
@@ -847,7 +862,7 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
                         NN_SOFI_KEEPALIVE_PACKET_LEN,
                         NN_SOFI_TIMEOUT_KEEPALIVE_TICK );
                     if (ret) {
-                        _ofi_debug("OFI[S]: Unable to send keepalive, assuming "
+                        printf("OFI[S]: Unable to send keepalive, assuming "
                             "broken connection!\n");
                         self->error = EPIPE;
                         nn_sofi_stop(self);
@@ -861,11 +876,12 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
 
                 /* Check if we timed out waiting for ticks */
                 if (++self->ticks_in > NN_SOFI_KEEPALIVE_IN_TICKS) {
-                    _ofi_debug("OFI[S]: Timed out waiting for keepalive!\n");
+                    printf("OFI[S]: Timed out waiting for keepalive!\n");
                     self->error = EPIPE;
                     nn_sofi_stop(self);
                     return;
                 }
+                printf("ticks=%d\n",self->ticks_in);
 
                 /* Stop Keepalive timer only to be started later */
                 nn_timer_stop( &self->timer_keepalive );

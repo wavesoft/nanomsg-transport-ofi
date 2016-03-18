@@ -80,16 +80,21 @@ void nn_sofi_out_init ( struct nn_sofi_out *self,
     int ret;
     _ofi_debug("OFI[o]: Initializing Output FSM\n");
 
-    /* Auto-discover queue size */
+    /* NOTE: We reserve 1 item on the Tx queue that must be always available
+             for synchronous transmissions using nn_sofi_out_tx. This way,
+             even when the egress queue is saturated, we still have one slot
+             for sending keepalive messages. */
+
+    /* Auto-discover queue size. */
     if (queue_size == 0) {
-        queue_size = ep->tx_size;
+        queue_size = ep->tx_size - 1;
         /* Fallback */
         if (queue_size < 1)
             queue_size = 1;
     } else {
         /* Wrap to max */
-        if (queue_size > ep->tx_size)
-            queue_size = ep->tx_size;
+        if (queue_size > ep->tx_size - 1)
+            queue_size = ep->tx_size - 1;
     }
 
 

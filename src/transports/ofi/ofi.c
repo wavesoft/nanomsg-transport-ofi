@@ -98,8 +98,10 @@ static void nn_ofi_init ()
  */
 static void nn_ofi_term ()
 {
+
     /* Release intance-wide OFI resources */
     ofi_free( &R );
+
 }
 
 /**

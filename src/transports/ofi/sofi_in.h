@@ -36,6 +36,7 @@
 #define NN_SOFI_IN_EVENT_RECEIVED       2202
 #define NN_SOFI_IN_EVENT_ERROR          2203
 #define NN_SOFI_IN_EVENT_CLOSE          2204
+#define NN_SOFI_IN_EVENT_KEEPALIVE      2205
 
 /* MR Keys */
 #define NN_SOFI_IN_MR_SMALL             0xF200
@@ -86,6 +87,9 @@ struct nn_sofi_in_chunk {
     /* The libfabric memory region */
     struct fid_mr * mr;
 
+    /* Mutex for atomic access */
+    struct nn_mutex mutex;
+
     /* This chunk can also be used as a context to libfabric */
     struct fi_context context;
 
@@ -110,6 +114,7 @@ struct nn_sofi_in {
     /* Outgoing : Events */
     struct nn_fsm_event         event_started;
     struct nn_fsm_event         event_received;
+    struct nn_fsm_event         event_keepalive;
 
     /* Incoming : Events through worker tasks */
     struct nn_worker            * worker;
@@ -130,6 +135,7 @@ struct nn_sofi_in {
 
     /* Ingress queue and pending item */
     struct nn_sofi_in_chunk     * chunk_ingress;
+    struct nn_sofi_in_chunk     * chunk_active;
     struct nn_queue             queue_ingress;
     struct nn_mutex             mutex_ingress;
     uint32_t                    age_ingress;

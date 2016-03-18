@@ -1055,7 +1055,7 @@ int ofi_open_passive_ep( struct ofi_resources * R, struct ofi_passive_endpoint *
 /**
  * Create a bound socket and listen for incoming connections
  */
-int ofi_init_server( struct ofi_resources * R, struct ofi_passive_endpoint * PEP, unsigned int addr_format, const char * node, const char * service )
+int ofi_init_server( struct ofi_resources * R, unsigned int addr_format, const char * node, const char * service )
 {
 	int ret;
 
@@ -1079,14 +1079,10 @@ int ofi_init_server( struct ofi_resources * R, struct ofi_passive_endpoint * PEP
 }
 
 /**
- * Wait for incoming connections and accept
+ * Asynchronous function to start listening for incoming connections
  */
-int ofi_server_accept( struct ofi_resources * R, struct ofi_passive_endpoint * PEP, struct ofi_active_endpoint * EP )
+int ofi_server_listen( struct ofi_resources * R, struct ofi_passive_endpoint * PEP )
 {
-	struct fi_eq_cm_entry entry;
-	uint32_t event;
-	struct fi_info *info = NULL;
-	ssize_t rd;
 	int ret;
 
 	/* Start passive endpoint */
@@ -1101,20 +1097,16 @@ int ofi_server_accept( struct ofi_resources * R, struct ofi_passive_endpoint * P
 		return ret;
 	}
 
-	/* Wait for connection request from client */
-	rd = fi_eq_sread(PEP->eq, &event, &entry, sizeof entry, -1, 0);
-	if (rd != sizeof entry) {
-		FT_PROCESS_EQ_ERR(rd, PEP->eq, "fi_eq_sread", "listen");
-		return (int) rd;
-	}
+	return 0;
+}
 
-	/* Extract info from the event */
-	info = entry.info;
-	if (event != FI_CONNREQ) {
-		FT_ERR("Unexpected CM event %d\n", event);
-		ret = -FI_EOTHER;
-		goto err;
-	}
+int ofi_server_accept( struct ofi_resources * R, struct fi_eq_cm_entry * cq_entry, struct ofi_active_endpoint * EP )
+{
+	struct fi_info *info = cq_entry->info;
+	struct fi_eq_cm_entry entry;
+	uint32_t event;
+	ssize_t rd;
+	int ret;
 
 	/* Open active endpoint */
 	ret = ofi_open_active_ep( R, EP, info, MAX_MSG_SIZE );
@@ -1147,14 +1139,6 @@ int ofi_server_accept( struct ofi_resources * R, struct ofi_passive_endpoint * P
 		goto err;
 	}
 
-	/* Drain event queue */
-	do {
-		rd = fi_eq_read(PEP->eq, &event, &entry, sizeof entry, 0);
-	} while ((int)rd == 0);
-
-	/* Close passive endpoint */
-	ofi_free_pep( PEP );
-
 	/* Success */
 	fi_freeinfo(info);
 	return 0;
@@ -1162,7 +1146,6 @@ int ofi_server_accept( struct ofi_resources * R, struct ofi_passive_endpoint * P
 err:
 
 	/* Failure */
-	fi_reject(PEP->pep, info->handle, NULL, 0);
 	fi_freeinfo(info);
 	return ret;
 }

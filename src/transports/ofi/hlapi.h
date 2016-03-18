@@ -254,13 +254,18 @@ int ofi_add_remote( struct ofi_resources * R, struct ofi_active_endpoint * EP,
 /**
  * Create a bound socket and listen for incoming connections
  */
-int ofi_init_server( struct ofi_resources * R, struct ofi_passive_endpoint * PEP, unsigned int addr_format, 
+int ofi_init_server( struct ofi_resources * R, unsigned int addr_format, 
 					const char * node, const char * service );
 
 /**
- * Wait for incoming connections and accept
+ * Wait for incoming connections and raise EQ events on the PEP EQ
  */
-int ofi_server_accept( struct ofi_resources * R, struct ofi_passive_endpoint * PEP, struct ofi_active_endpoint * EP );
+int ofi_server_listen( struct ofi_resources * R, struct ofi_passive_endpoint * PEP );
+
+/**
+ * Accept an incoming connection request
+ */
+int ofi_server_accept( struct ofi_resources * R, struct fi_eq_cm_entry * cq_entry, struct ofi_active_endpoint * EP );
 
 /**
  * Initialize memory regions of an active endpoint (use this before tx/rx operations!)

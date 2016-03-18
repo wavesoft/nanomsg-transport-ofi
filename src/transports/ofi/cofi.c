@@ -72,6 +72,10 @@ struct nn_cofi {
         lifetime. */
     struct nn_sofi              sofi;
 
+    /*  Remote address */
+    const char *                domain;
+    const char *                service;
+
 };
 
 /**
@@ -81,8 +85,6 @@ int nn_cofi_create (void *hint, struct nn_epbase **epbase, struct ofi_resources 
 {
     int ret;
     struct nn_cofi *self;
-    const char * domain;
-    const char * service;
 
     _ofi_debug("OFI[C]: Creating connected OFI socket\n");
 
@@ -93,20 +95,20 @@ int nn_cofi_create (void *hint, struct nn_epbase **epbase, struct ofi_resources 
 
     /*  Initalise the endpoint. */
     nn_epbase_init (&self->epbase, &nn_cofi_epbase_vfptr, hint);
-    domain = nn_epbase_getaddr (&self->epbase);
+    self->domain = nn_epbase_getaddr (&self->epbase);
 
     /* Get local service */
-    service = strrchr (domain, ':');
-    if (service == NULL) {
+    self->service = strrchr (self->domain, ':');
+    if (self->service == NULL) {
         nn_epbase_term (&self->epbase);
         return -EINVAL;
     }
-    *(char*)(service) = '\0'; /* << TODO: That's a HACK! */
-    service++;
+    *(char*)(self->service) = '\0'; /* << TODO: That's a HACK! */
+    self->service++;
 
     /* Debug */
-    _ofi_debug("OFI[C]: Createing socket for (domain=%s, service=%s)\n", domain, 
-        service );
+    _ofi_debug("OFI[C]: Createing socket for (domain=%s, service=%s)\n", 
+        self->domain, self->service );
 
     /* Keep resources */
     self->ofi = ofi;
@@ -115,16 +117,6 @@ int nn_cofi_create (void *hint, struct nn_epbase **epbase, struct ofi_resources 
         nn_epbase_term (&self->epbase);
         nn_free(self);
         return ofi->err;
-    }
-
-    /* Start server */
-    ret = ofi_init_client( self->ofi, &self->ep, 
-        FI_SOCKADDR, domain, service );
-    if (ret) {
-        _ofi_debug("OFI[C]: Failed to ofi_init_client!\n");
-        nn_epbase_term (&self->epbase);
-        nn_free(self);
-        return ret;
     }
 
     /*  Initialise the root FSM. */
@@ -223,6 +215,28 @@ static void nn_cofi_shutdown (struct nn_fsm *self, int src, int type,
 }
 
 /**
+ * Start conecting to the remote endpoint
+ */
+static int nn_cofi_start_connecting( struct nn_cofi * self )
+{
+    int ret;
+
+    /* Start server */
+    ret = ofi_init_client( self->ofi, &self->ep, 
+        FI_SOCKADDR, self->domain, self->service );
+    if (ret) {
+        _ofi_debug("OFI[C]: Failed to call ofi_init_client!\n");
+        return ret;
+    }
+
+    /* Create a new SOFI */
+    nn_sofi_init (&self->sofi, self->ofi, &self->ep, NN_SOFI_NG_SEND, 
+        &self->epbase, NN_COFI_SRC_SOFI, &self->fsm);
+
+    return 0;
+}
+
+/**
  * Bound OFI FSM Handler
  */
 static void nn_cofi_handler (struct nn_fsm *self, int src, int type,
@@ -251,8 +265,9 @@ static void nn_cofi_handler (struct nn_fsm *self, int src, int type,
                 /* Create new connected OFI */
                 _ofi_debug("OFI[C]: Creating new SOFI\n");
                 cofi->state = NN_COFI_STATE_CONNECTED;
-                nn_sofi_init (&cofi->sofi, cofi->ofi, &cofi->ep, NN_SOFI_NG_SEND, 
-                    &cofi->epbase, NN_COFI_SRC_SOFI, &cofi->fsm);
+
+                /* WARNING: Blocking */
+                nn_cofi_start_connecting( cofi );
 
                 return;
             default:
@@ -284,8 +299,13 @@ static void nn_cofi_handler (struct nn_fsm *self, int src, int type,
             case NN_SOFI_STOPPED:
 
                 /* Disconnected from remote endpoint */
-                _ofi_debug("OFI[C]: SOFI Stopped, cleaning-up\n");
-                nn_fsm_stop (&cofi->fsm);
+                _ofi_debug("OFI[C]: SOFI Stopped error=%i. Restarting\n", cofi->sofi.error);
+                nn_epbase_set_error( &cofi->epbase, cofi->sofi.error );
+
+                /* WARNING: Blocking */
+                nn_cofi_start_connecting( cofi );
+
+                // nn_fsm_stop (&cofi->fsm);
                 return;
 
             default:
@@ -305,3 +325,4 @@ static void nn_cofi_handler (struct nn_fsm *self, int src, int type,
     }
 
 }
+

@@ -147,6 +147,11 @@ int ofi_mr_init( struct ofi_mr_manager * self, struct ofi_domain *domain,
     size_t size, enum ofi_mr_direction direction, uint64_t base_key );
 
 /**
+ * Clean-up the memory region manager resources
+ */
+int ofi_mr_term( struct ofi_mr_manager * self );
+
+/**
  * Add a memory registration hint for the specified region
  *
  * This will reserve a non-volatile MRM bank with the specified information and

@@ -276,6 +276,37 @@ int ofi_mr_init( struct ofi_mr_manager * self, struct ofi_domain *domain,
 }
 
 /**
+ * Clean-up the memory region manager resources
+ */
+int ofi_mr_term( struct ofi_mr_manager * self )
+{
+	int i;
+
+	/* Free banks */
+	for (i=0; i<self->size; ++i) {
+		struct ofi_mr_bank * bank = &self->banks[i];
+		nn_mutex_lock( &bank->mutex );
+
+		/* No banks must be reserved */
+		nn_assert( bank->ref == 0 );
+
+		/* Unregister memory regions */
+		ofi_mr_unregister( self, bank );
+
+		/* Terminate structures */
+		nn_mutex_unlock( &bank->mutex );
+		nn_mutex_term( &bank->mutex );
+
+	}
+
+	/* Free memory */
+	nn_free(self->banks);
+
+	/* Success */
+	return 0;
+}
+
+/**
  * Add a memory registration hint for the specified region
  *
  * This will reserve a non-volatile MRM bank with the specified information and

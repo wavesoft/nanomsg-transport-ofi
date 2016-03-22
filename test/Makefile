@@ -55,6 +55,12 @@ nanomsg: test_nanomsg_timing
 hlapi.o: $(OFI_DIR)/hlapi.c
 	gcc $(CCFLAGS_OFI) $(CCFLAGS) -I$(PWD) $(OFI_DIR)/hlapi.c -c -o $@
 
+ofiapi.o: $(OFI_DIR)/ofiapi.c
+	gcc $(CCFLAGS_OFI) $(CCFLAGS) -I$(PWD) $(OFI_DIR)/ofiapi.c -c -o $@
+
+ofiw.o: $(OFI_DIR)/ofiw.c
+	gcc $(CCFLAGS_OFI) $(CCFLAGS) -I$(PWD) $(OFI_DIR)/ofiw.c -c -o $@
+
 common.o: common.c
 	gcc $(CCFLAGS_OFI) $(CCFLAGS) common.c -c -o $@
 
@@ -75,6 +81,11 @@ test_fabric_msg_timed: fabric_msg_timed.c hlapi.o
 # Nanomsg tests
 test_nanomsg_timing: nanomsg_timing.c common.o hlapi.o $(NANOMSG_LIB_DIR)/libnanomsg.a
 	gcc $(CCFLAGS_NN) $(CCFLAGS) $^ $(LDFLAGS_NN) $(LDFLAGS) -o $@
+
+# OFIAPI Tests
+test_ofiapi_basic: ofiapi_basic.c ofiw.o ofiapi.o $(NANOMSG_LIB_DIR)/libnanomsg.a
+	gcc $(CCFLAGS_NN) $(CCFLAGS) $(CCFLAGS_OFI) $(CCFLAGS_NN) $^ \
+		$(LDFLAGS_OFI) $(LDFLAGS_NN) $(LDFLAGS_NN) $(LDFLAGS) -o $@
 
 # ================================================
 #  Phony targets

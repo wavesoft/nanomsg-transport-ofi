@@ -26,10 +26,12 @@
 #include "hlapi.h"
 
 #include "../../ofi.h"
+#include "../../core/ep.h"
 #include "../../utils/err.h"
 #include "../../utils/alloc.h"
 #include "../../utils/fast.h"
 #include "../../utils/cont.h"
+#include "../../utils/list.h"
 
 #include <string.h>
 
@@ -59,8 +61,17 @@ static void nn_ofi_term ();
 static int  nn_ofi_bind (void *hint, struct nn_epbase **epbase);
 static int  nn_ofi_connect (void *hint, struct nn_epbase **epbase);
 
-/* High-level API of libfabric */
-static struct ofi_resources R;
+/* Transport-wide static configuration */
+struct nn_ofi {
+
+    /* The global OFI Resources */
+    struct ofi_resources    R;
+
+    /* The list of registered domains */
+    struct nn_list          domains;
+
+};
+static struct nn_ofi ofi;
 
 /**
  * Expose the OFI transport pointer table
@@ -78,14 +89,62 @@ static struct nn_transport nn_ofi_vfptr = {
 
 struct nn_transport *nn_ofi = &nn_ofi_vfptr;
 
+/* ============================== */
+/*       HELPER FUNCTIONS         */
+/* ============================== */
+
+/**
+ * Extract address information
+ */
+// int nn_ofi_populate_domain( void *hint, struct nn_ofi_domain * d )
+// {
+//     const char * domain;
+//     const char * service;
+//     size_t len;
+
+//     /* Parse the address. */
+//     domain = nn_ep_getaddr ((struct nn_ep*) hint);
+
+//     /* Get local service */
+//     service = strrchr (domain, ':');
+//     if (service == NULL) {
+//         return -EINVAL;
+//     }
+
+//     /* Copy domain name */
+//     len = service - domain;
+//     if (len >= MAX_DOMAIN_LEN-1)
+//         return -EINVAL;
+//     memcpy( &d->domain, domain, len );
+//     d->domain[len] = '\0';
+
+//     /* Copy service name */
+//     len = strlen( service );
+//     if (len >= MAX_SERVICE_LEN-1)
+//         return -EINVAL;
+//     memcpy( &d->service, service, len );
+//     d->service[len] = '\0';
+
+//     /* Success */
+//     return 0;
+// }
+
+
+/* ============================== */
+/*      INTERFACE FUNCTIONS       */
+/* ============================== */
+
 /**
  * Initialize OFI
  */
 static void nn_ofi_init ()
 {
 
+    /* Initialize list */
+    nn_list_init( &ofi.domains );
+
     /* Allocate instance-wide OFI structures */
-    R.err = ofi_alloc( &R, FI_EP_MSG );
+    ofi.R.err = ofi_alloc( &ofi.R, FI_EP_MSG );
 
     /* We can't do much on the initialization phase for
        any errors. We rather let bofi/cofi to abort initialization
@@ -99,8 +158,11 @@ static void nn_ofi_init ()
 static void nn_ofi_term ()
 {
 
+    /* Initialize list */
+    nn_list_term( &ofi.domains );
+
     /* Release intance-wide OFI resources */
-    ofi_free( &R );
+    ofi_free( &ofi.R );
 
 }
 
@@ -109,7 +171,8 @@ static void nn_ofi_term ()
  */
 static int nn_ofi_bind (void *hint, struct nn_epbase **epbase)
 {
-    return nn_bofi_create(hint, epbase, &R);
+    printf(">>Hint:[%s]\n", (char*)hint);
+    return nn_bofi_create(hint, epbase, &ofi.R);
 }
 
 /**
@@ -117,7 +180,8 @@ static int nn_ofi_bind (void *hint, struct nn_epbase **epbase)
  */
 static int nn_ofi_connect (void *hint, struct nn_epbase **epbase)
 {
-    return nn_cofi_create(hint, epbase, &R);
+    printf(">>Hint:[%s]\n", (char*)hint);
+    return nn_cofi_create(hint, epbase, &ofi.R);
 }
 
 /**

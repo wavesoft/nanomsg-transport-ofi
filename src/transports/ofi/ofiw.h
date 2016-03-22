@@ -23,17 +23,32 @@
 #ifndef nn_ofiw_INCLUDED
 #define nn_ofiw_INCLUDED
 
-#include "hlapi.h"
+#include "oficommon.h"
 
 #include "../../utils/list.h"
 #include "../../utils/thread.h"
 #include "../../utils/mutex.h"
 
 /**
+ * This file exposes the OFI Worker Class, which is simmilar to NanoMsg's native
+ * worker classes, but it operates over libfabric waitable objects, such as Event
+ * and Completion Queues.
+ * 
+ * It starts only one thread upon calling `nn_ofiw_pool_init` and it allocates 
+ * one or more poller workers when calling `nn_ofiw_pool_getworker`. Each worker 
+ * can support an arbitrary number of CQs and EQs, that should be created using 
+ * the wrapper functions: `nn_ofiw_open_eq` and `nn_ofiw_open_cq`.
+ *
+ * When the latter functions are used, the CQ/EQ will be created with a waitset
+ * configured, that is used to receive events in the most optimal way.
+ *
+ */
+
+/**
  * Turn on this flag if the libfabric provider you are using
  * supports waitsets in order to use the optimised version of the code.
  */
-#define OFI_USE_WAITSET
+// #define OFI_USE_WAITSET
 
 /**
  * Mask overlaied over the item ID 
@@ -42,7 +57,7 @@
 #define NN_OFIW_ERROR       2
 
 /**
- * Enums of different polling types
+ * Enums of different polling items
  */
 enum nn_ofiw_item_type {
     NN_OFIW_ITEM_EQ,
@@ -78,6 +93,13 @@ struct nn_ofiw_pool {
 
     /* Context used by various operations */
     struct fi_context       context;
+
+#ifdef OFI_USE_WAITSET
+
+    /* Global waitset */
+    struct fid_wait         *waitset;
+
+#endif
 
     /* === Local variables === */
 
@@ -136,12 +158,15 @@ struct nn_ofiw {
 
 };
 
+/* ####################################### */
+
 /* Initialize an OFI worker pool */
 int nn_ofiw_pool_init( struct nn_ofiw_pool * pool, struct fid_fabric *fabric );
 
 /* Terminate an OFI worker pool */
 int nn_ofiw_pool_term( struct nn_ofiw_pool * pool );
 
+/* ####################################### */
 
 /* Get an OFI worker from the specified worker pool */
 struct nn_ofiw * nn_ofiw_pool_getworker( struct nn_ofiw_pool * pool,
@@ -150,6 +175,8 @@ struct nn_ofiw * nn_ofiw_pool_getworker( struct nn_ofiw_pool * pool,
 /* Close a worker */
 void nn_ofiw_term( struct nn_ofiw * self );
 
+/* ####################################### */
+
 /* Monitor the specified OFI Completion Queue, and trigger the specified type
    event to the handling FSM */
 int nn_ofiw_add_cq( struct nn_ofiw * worker, struct fid_cq * cq, int src );
@@ -157,6 +184,18 @@ int nn_ofiw_add_cq( struct nn_ofiw * worker, struct fid_cq * cq, int src );
 /* Monitor the specified OFI Completion Queue, and trigger the specified type
    event to the handling FSM */
 int nn_ofiw_add_eq( struct nn_ofiw * worker, struct fid_eq * eq, int src );
+
+/* Wrapping function to fi_eq_open that properly registers the resulting EQ
+   in the worker. This function might update EQ attributes accordingly in order
+   to configure waitsets. */
+int nn_ofiw_open_eq( struct nn_ofiw * self, int src, struct fi_eq_attr *attr, 
+    void *context, struct fid_eq **eq );
+
+/* Wrapping function to fi_cq_open that properly registers the resulting CQ
+   in the worker. This function might update CQ attributes accordingly in order
+   to configure waitsets. */
+int nn_ofiw_open_cq( struct nn_ofiw * self, int src, struct fid_domain *domain,
+    struct fi_cq_attr *attr, void *context, struct fid_cq **cq );
 
 /* Remove a particular file descriptor from the monitor */
 int nn_ofiw_remove( struct nn_ofiw * worker, void * fd );

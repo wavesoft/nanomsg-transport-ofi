@@ -50,15 +50,21 @@ static void nn_ofiw_poller_thread( void *arg )
 
     _ofi_debug("OFI[w]: Starting OFIW pool thread\n");
     while (self->active) {
+
+#ifdef OFI_USE_WAITSET
+
+        /* If waitsets are available, we have an optimized way for
+           waiting for an event across all of our objects. */
+        ret = fi_wait( self->waitset, -1 );
+        if (nn_slow( (ret < 0) && (ret != -FI_EAGAIN) )) {
+            FT_PRINTERR("fi_wait", ret);
+            break;
+        }
+
+#endif
+
+        /* Enter critical region */
         nn_mutex_lock( &self->mutex );
-
-        /* If waitsets are available, just listen to the single waitset
-           that every CQ and EQ are bound to. */
-
-
-
-        /* If waitsets are not availabe we can only continuously
-           poll all different file descriptors. */
 
         /* Iterate over workers */
         for (it = nn_list_begin (&self->workers);
@@ -83,7 +89,7 @@ static void nn_ofiw_poller_thread( void *arg )
                             &item->data.cq_entry, 1);
                         if (nn_slow(ret > 0)) {
                             _ofi_debug("OFI[w]: Got CQ Event from worker=%p, fd=%p\n",
-                                worker, item->fd);
+                                worker, item);
 
                             /* Feed event to the FSM */
                             nn_ctx_enter (worker->owner->ctx);
@@ -121,7 +127,7 @@ static void nn_ofiw_poller_thread( void *arg )
                             &event, &item->data.eq_entry, sizeof(item->data.eq_entry),0);
                         if (nn_slow(ret != -FI_EAGAIN)) {
                             _ofi_debug("OFI[w]: Got EQ Event from worker=%p, fd=%p\n",
-                                worker, item->fd);
+                                worker, item);
 
                             /* Feed event to the FSM */
                             nn_ctx_enter (worker->owner->ctx);
@@ -172,12 +178,34 @@ int nn_ofiw_pool_init( struct nn_ofiw_pool * self, struct fid_fabric *fabric )
     nn_list_init( &self->workers );
     nn_mutex_init( &self->mutex );
 
+#ifdef OFI_USE_WAITSET
+
+    /* Open a waitset */
+    struct fi_wait_attr wait_attr = {
+        .wait_obj = FI_WAIT_NONE,
+        .flags = 0
+    };
+
+    /* Open waitset */
+    ret = fi_wait_open( fabric, &wait_attr, &self->waitset);
+    if (ret) {
+        FT_PRINTERR("fi_wait_open", ret);
+        return ret;
+    }
+
+#endif
+
     /* Create an EQ that we use for signaling the termination */
     struct fi_eq_attr internal_eq = {
         .size = 1,
         .flags = FI_WRITE,
-        .wait_obj = FI_WAIT_UNSPEC,
+#ifdef OFI_USE_WAITSET
+        .wait_obj = FI_WAIT_SET,
+        .wait_set = self->waitset,
+#else
+        .wait_obj = FI_WAIT_NONE,
         .wait_set = NULL,
+#endif
     };
     ret = fi_eq_open( fabric, &internal_eq, &self->eq, &self->context);
     if (ret) {        
@@ -324,6 +352,74 @@ int nn_ofiw_add_eq( struct nn_ofiw * self, struct fid_eq * eq, int src )
 
     /* Success */
     return 0;
+}
+
+/* Wrapping function to fi_eq_open that properly registers the resulting EQ
+   in the worker. This function might update EQ attributes accordingly in order
+   to configure waitsets. */
+int nn_ofiw_open_eq( struct nn_ofiw * self, int src, struct fi_eq_attr *attr, 
+    void *context, struct fid_eq **eq )
+{
+    int ret;
+
+#ifdef OFI_USE_WAITSET
+
+    /* Use the global waitset */
+    if (attr->wait_obj == FI_WAIT_FD) {
+        return -EINVAL;
+    } else if (attr->wait_obj == FI_WAIT_MUTEX_COND) {
+        return -EINVAL;
+    } else {
+        attr->wait_obj = FI_WAIT_SET;
+        attr->wait_set = self->parent->waitset;
+    }
+
+#endif
+
+    /* Open EQ */
+    ret = fi_eq_open( self->parent->fabric, attr, eq, context);
+    if (ret) {        
+        FT_PRINTERR("fi_eq_open", ret);
+        return ret;
+    }
+
+    /* Register */
+    return nn_ofiw_add_eq( self, *eq, src );
+
+}
+
+/* Wrapping function to fi_cq_open that properly registers the resulting CQ
+   in the worker. This function might update CQ attributes accordingly in order
+   to configure waitsets. */
+int nn_ofiw_open_cq( struct nn_ofiw * self, int src, struct fid_domain *domain,
+    struct fi_cq_attr *attr, void *context, struct fid_cq **cq )
+{
+    int ret;
+
+#ifdef OFI_USE_WAITSET
+
+    /* Use the global waitset */
+    if (attr->wait_obj == FI_WAIT_FD) {
+        return -EINVAL;
+    } else if (attr->wait_obj == FI_WAIT_MUTEX_COND) {
+        return -EINVAL;
+    } else {
+        attr->wait_obj = FI_WAIT_SET;
+        attr->wait_set = self->parent->waitset;
+    }
+
+#endif
+
+    /* Open EQ */
+    ret = fi_cq_open( domain, attr, cq, context);
+    if (ret) {        
+        FT_PRINTERR("fi_cq_open", ret);
+        return ret;
+    }
+
+    /* Register */
+    return nn_ofiw_add_cq( self, *cq, src );
+
 }
 
 /* Remove the specified file descriptor from the worker stack */

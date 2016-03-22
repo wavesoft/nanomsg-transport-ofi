@@ -8,7 +8,7 @@
      src/pair.h \
      src/pubsub.h \
      src/reqrep.h \
-@@ -306,6 +315,26 @@
+@@ -306,6 +317,28 @@
      src/transports/ws/sha1.h \
      src/transports/ws/sha1.c
  
@@ -29,13 +29,15 @@
 +    src/transports/ofi/cofi.c \
 +    src/transports/ofi/ofiw.h \
 +    src/transports/ofi/ofiw.c \
++    src/transports/ofi/ofiapi.h \
++    src/transports/ofi/ofiapi.c \
 +    src/transports/ofi/ofi.h \
 +    src/transports/ofi/ofi.c 
 +
  TRANSPORTS_TCPMUX = \
      src/transports/tcpmux/atcpmux.h \
      src/transports/tcpmux/atcpmux.c \
-@@ -324,7 +345,8 @@
+@@ -324,7 +347,8 @@
      $(TRANSPORTS_IPC) \
      $(TRANSPORTS_TCP) \
      $(TRANSPORTS_WS) \
@@ -45,7 +47,7 @@
  
  libnanomsg_la_SOURCES = \
      src/transport.h \
-@@ -339,7 +362,7 @@
+@@ -339,7 +364,7 @@
  pkgconfigdir = $(libdir)/pkgconfig
  pkgconfig_DATA = libnanomsg.pc
  

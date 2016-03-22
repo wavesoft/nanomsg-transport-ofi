@@ -300,53 +300,19 @@ int ofi_cm_connect( struct ofi_active_endpoint * ep, void *addr,
     const void *data, size_t datalen );
 
 /* ########################################################################## */
-/*  Memory Management Operations                                              */
-/* ########################################################################## */
-
-/**
- * A chunk in the multi-buffered blocks
- */
-struct ofi_io_buf_chunk {
-
-    /* One or more buffers under management */
-    struct iovec * iov;
-
-    /* Memory region handler */
-    struct fid_mr * mr;
-
-};
-
-/**
- * Transmission or reception double-buffered buffers
- */
-struct ofi_io_buf {
-
-    /* The two buffer chunks */
-    struct ofi_io_buf_chunk[2];
-
-    /* Which buffer is active */
-    uint8_t active;
-
-};
-
-/**
- * Initialize the OFI Tx/Rx Buffer structures
- */
-int ofi_io_buf_init( struct ofi_io_buf * buf );
-
-/**
- * Terminate the OFI Tx/Rx Buffer structures
- */
-int ofi_io_buf_term( struct ofi_io_buf * buf );
-
-/* ########################################################################## */
-/*  Data Transmission Operations                                              */
+/*  Data I/O Operations                                                       */
 /* ########################################################################## */
 
 /**
  * Perform send operation
  */
-int ofi_send( struct ofi_active_endpoint * ep, struct ofi_io_buf * buf,
-    struct iovec * iov );
+int ofi_sendmsg( struct ofi_active_endpoint * ep, const struct fi_msg *msg,
+    uint64_t flags );
+
+/**
+ * Perform a receive operation
+ */
+int ofi_recvmsg( struct ofi_active_endpoint * ep, const struct fi_msg *msg,
+    uint64_t flags );
 
 #endif

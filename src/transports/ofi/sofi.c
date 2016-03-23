@@ -62,8 +62,9 @@
    message (assumed keepalive) from remote end */
 #define NN_SOFI_KEEPALIVE_IN_TICKS       10
 
-/* Local flags */
-#define NN_SOFI_FLAGS_THREAD_ACTIVE      0x01
+/* Memory registration keys */
+#define NN_SOFI_MRM_SEND_KEY            0xF101
+#define NN_SOFI_MRM_RECV_KEY            0xF201
 
 /* Forward Declarations */
 static void nn_sofi_handler (struct nn_fsm *self, int src, int type, 
@@ -85,19 +86,65 @@ const struct nn_pipebase_vfptr nn_sofi_pipebase_vfptr = {
 /* ########################################################################## */
 
 /**
- * Post input buffers
+ * A critical SOFI error occured, that must result to the termination
+ * of the connection.
  */
-static void nn_sofi_post_ingress_buffers( struct nn_sofi * self )
+static void nn_sofi_critical_error( struct nn_sofi * self, int error )
 {
+    _ofi_debug("OFI[S]: Unrecoverable error #%i: %s\n", error,
+        fi_strerror((int) -error));
+    /* Stop the FSM */
+    nn_fsm_stop( &self->fsm );
+}
 
+/* ########################################################################## */
+/*  Egress Functions                                                          */
+/* ########################################################################## */
+
+/**
+ * Post output buffers (AKA "send data"), and return
+ * the number of bytes sent or the error occured.
+ */
+static int nn_sofi_post_egress_buffers( struct nn_sofi * self, 
+    struct nn_msg * outmsg )
+{   
+    int ret;
+    struct iovec iov [2];
+    struct fi_msg msg;
+
+    /* Prepare IOVs */
+    iov [0].iov_base = nn_chunkref_data (&outmsg->sphdr);
+    iov [0].iov_len = nn_chunkref_size (&outmsg->sphdr);
+    iov [1].iov_base = nn_chunkref_data (&outmsg->body);
+    iov [1].iov_len = nn_chunkref_size (&outmsg->body);
+
+    /* Prepare message */
+    memset( &msg, 0, sizeof(msg) );
+    msg.msg_iov = iov;
+    msg.iov_count = 2;
+
+    /* Populate MR descriptions through MRM */
+    ret = ofi_mr_describe( &self->mrm_egress, &msg );
+    if (ret) {
+        FT_PRINTERR("ofi_mr_describe", ret);
+        return ret;
+    }
+
+    /* TODO: Libfabric SEND */
+
+    return 0;
 }
 
 /**
- * Check if egress queue can forward requests
+ * Acknowledge the fact that the ougoing data are sent
  */
-static int nn_sofi_egress_ready( struct nn_sofi * self )
+static void nn_sofi_egress_handle( struct nn_sofi * self,
+    struct fi_cq_data_entry * cq_entry )
 {
-    return 0;
+
+    /* Release the MR resources associated with this MR */
+    ofi_mr_release( &cq_entry->op_context );
+
 }
 
 /**
@@ -105,13 +152,21 @@ static int nn_sofi_egress_ready( struct nn_sofi * self )
  */
 static int nn_sofi_egress_send( struct nn_sofi * self )
 {
+    int ret;
     nn_assert(self->out_state == NN_SOFI_OUT_STATE_ACTIVE);
     nn_assert(self->stageout_state == NN_SOFI_STAGEOUT_STATE_STAGED);
 
-    /* TODO: Send self->outmsg */
+    /* Post egress buffers */
+    ret = nn_sofi_post_egress_buffers( self, &self->outmsg );
+    if (ret) {
+        FT_PRINTERR("nn_sofi_post_egress_buffers", ret);
+        return ret;
+    }
 
     /* Release staged data */
     self->stageout_state = NN_SOFI_STAGEOUT_STATE_IDLE;
+
+    /* TODO: Check for backpressure before calling the next fn */
 
     /* Data are sent, unlock pipebase for next request */
     nn_pipebase_sent( &self->pipebase );
@@ -119,16 +174,17 @@ static int nn_sofi_egress_send( struct nn_sofi * self )
 }
 
 /**
- * Post output buffers (AKA "send data"), and return
- * the number of bytes sent or the error occured.
+ * Stage data for outgoing transmission
  */
-static int nn_sofi_push_egress( struct nn_sofi * self, 
+static int nn_sofi_egress_stage( struct nn_sofi * self, 
     struct nn_msg * msg )
 {
+    int ret;
+    nn_assert( self->stageout_state == NN_SOFI_STAGEOUT_STATE_IDLE );
 
-    /* If the stage buffer is full, raise an error */
-    if (self->stageout_state != NN_SOFI_STAGEOUT_STATE_IDLE)
-        return -EBUSY;
+    /* If we are shutting down, don't accept staged messages */
+    if (self->state == NN_SOFI_STATE_CLOSING)
+        return -EPIPE;
 
     /* Move the message to the local storage. */
     nn_msg_term (&self->outmsg);
@@ -136,29 +192,16 @@ static int nn_sofi_push_egress( struct nn_sofi * self,
     self->stageout_state = NN_SOFI_STAGEOUT_STATE_STAGED;
 
     /* Check if we can send right away */
-    if (self->out_state == NN_SOFI_OUT_STATE_ACTIVE) {
-        nn_sofi_egress_send( self );
+    if (nn_fast( self->out_state == NN_SOFI_OUT_STATE_ACTIVE )) {
+        ret = nn_sofi_egress_send( self );
+        if (ret) {
+            FT_PRINTERR("nn_sofi_egress_send", ret);
+            return ret;
+        }
     }
 
+    /* Success */
     return 0;
-}
-
-/**
- * Pop a message from the ingress queue
- */
-static int nn_sofi_pop_ingress( struct nn_sofi * self,
-    struct nn_msg * msg )
-{
-    return 0;
-}
-
-/**
- * Acknowledge the fact that the ougoing data are sent
- */
-static void nn_sofi_handle_egress( struct nn_sofi * self,
-    struct fi_cq_data_entry * cq_entry )
-{
-
 }
 
 /**
@@ -169,12 +212,20 @@ static int nn_sofi_egress_empty( struct nn_sofi * self )
     return 0;
 }
 
+/* ########################################################################## */
+/*  Ingress Functions                                                         */
+/* ########################################################################## */
+
 /**
- * Check if there are no outstanding items on the ingress queue
+ * Post receive buffers
+ *
+ * This function should pick one of the available pre-allocated message buffers
+ * and post them to libfabric. After that, we are expecting a CQ event to 
+ * trigger the `sofi_ingress_handle` in order to receive the incoming data.
  */
-static int nn_sofi_ingress_empty( struct nn_sofi * self )
+static void nn_sofi_ingress_post( struct nn_sofi * self )
 {
-    return 1;
+
 }
 
 /**
@@ -184,22 +235,27 @@ static int nn_sofi_ingress_empty( struct nn_sofi * self )
  * buffers available for re-posting or -EAGAIN otherwise. In case an error
  * occurs, this function will return the appropriate error code.
  */
-static int nn_sofi_handle_ingress( struct nn_sofi * self, 
+static int nn_sofi_ingress_handle( struct nn_sofi * self, 
     struct fi_cq_data_entry * cq_entry )
 {
     return -EAGAIN;
 }
 
 /**
- * A critical SOFI error occured, that must result to the termination
- * of the connection.
+ * Pop a message from the ingress queue
  */
-static void nn_sofi_critical_error( struct nn_sofi * self, int error )
+static int nn_sofi_ingress_fetch( struct nn_sofi * self,
+    struct nn_msg * msg )
 {
-    _ofi_debug("OFI[S]: Unrecoverable error #%i: %s\n", error,
-        fi_strerror((int) -error));
-    /* Stop the FSM */
-    nn_fsm_stop( &self->fsm );
+    return 0;
+}
+
+/**
+ * Check if there are no outstanding items on the ingress queue
+ */
+static int nn_sofi_ingress_empty( struct nn_sofi * self )
+{
+    return 1;
 }
 
 /* ########################################################################## */
@@ -265,6 +321,10 @@ void nn_sofi_init ( struct nn_sofi *self, struct ofi_domain *domain,
 
     /* Get an OFI worker */
     self->worker = ofi_fabric_getworker( domain->parent, &self->fsm );
+
+    /* Initialize egress MR Manager with 32 banks */
+    ofi_mr_init( &self->mrm_egress, self->domain, 32, OFI_MR_DIR_SEND, 
+        NN_SOFI_MRM_SEND_KEY );
 
 }
 
@@ -344,6 +404,9 @@ void nn_sofi_term (struct nn_sofi *self)
     /* Terminate worker */
     nn_ofiw_term( self->worker );
 
+    /* Terminate MR manager */
+    ofi_mr_term( &self->mrm_egress );
+
     /* ----------------------------------- */
     /*  NanoMsg Component Termination      */
     /* ----------------------------------- */
@@ -364,11 +427,6 @@ void nn_sofi_term (struct nn_sofi *self)
     /* Cleanup components */
     nn_pipebase_term (&self->pipebase);
     nn_fsm_term (&self->fsm);
-
-
-    /* ----------------------------------- */
-    /*  libFabric/HLAPI Termination        */
-    /* ----------------------------------- */
 
 }
 
@@ -409,7 +467,7 @@ static int nn_sofi_send (struct nn_pipebase *pb, struct nn_msg *msg)
     self->ticks_out = 0;
 
     /* Push a message to the egress queue */
-    return nn_sofi_push_egress( self, msg );
+    return nn_sofi_egress_stage( self, msg );
 
 }
 
@@ -424,12 +482,8 @@ static int nn_sofi_recv (struct nn_pipebase *pb, struct nn_msg *msg)
     self = nn_cont (pb, struct nn_sofi, pipebase);
     _ofi_debug("SOFI[S]: NanoMsg RECV event\n");
 
-    /* If we are not active return EPIPE */
-    if (nn_slow(self->state == NN_SOFI_STATE_ACTIVE))
-        return -EPIPE;
-
-    /* Pop a message from the ingress queue */
-    return nn_sofi_pop_ingress( self, msg );
+    /* Fetch a message from the ingress queue */
+    return nn_sofi_ingress_fetch( self, msg );
 }
 
 /**
@@ -457,14 +511,14 @@ static void nn_sofi_shutdown (struct nn_fsm *fsm, int src, int type,
         /* Handle Tx Events. Other Tx events won't be accepted because our
            state is now in NN_SOFI_STATE_CLOSING */
         _ofi_debug("OFI[S]: Handling drain egress event\n");
-        nn_sofi_handle_egress( self, cq_entry );
+        nn_sofi_egress_handle( self, cq_entry );
 
     } else if (nn_slow(src == (NN_SOFI_SRC_ENDPOINT | OFI_SRC_CQ_RX) )) {
 
         /* Handle Rx Events, but don't post new input buffers */
         _ofi_debug("OFI[S]: Handling drain ingress event\n");
         cq_entry = (struct fi_cq_data_entry *) srcptr;
-        nn_sofi_handle_ingress( self, cq_entry );
+        nn_sofi_ingress_handle( self, cq_entry );
 
     } else if (nn_slow(src == NN_SOFI_SRC_KEEPALIVE_TIMER)) {
 
@@ -564,11 +618,15 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
                 nn_pipebase_start( &self->pipebase );
 
                 /* Post input buffers */
-                nn_sofi_post_ingress_buffers( self );
+                nn_sofi_ingress_post( self );
 
                 /* Now it's time to send staged data */
                 if (self->stageout_state == NN_SOFI_STAGEOUT_STATE_STAGED) {
-                    nn_sofi_egress_send( self );
+                    ret = nn_sofi_egress_send( self );
+                    if (ret) {
+                        FT_PRINTERR("nn_sofi_egress_send", ret);
+                        nn_sofi_critical_error( self, ret );
+                    }
                 }
                 return;
 
@@ -616,14 +674,14 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
                 cq_entry = (struct fi_cq_data_entry *) srcptr;
 
                 /* Process incoming data */
-                ret = nn_sofi_handle_ingress( self, cq_entry );
+                ret = nn_sofi_ingress_handle( self, cq_entry );
 
                 /* If there is a buffer available, post input
                    buffers again, right away. */
                 if (ret == 0) {
 
                     /* Post input buffers */
-                    nn_sofi_post_ingress_buffers( self );
+                    nn_sofi_ingress_post( self );
 
                 } else if (ret == -EAGAIN) {
                     /* No buffers are avaiable, this is no error */
@@ -662,7 +720,7 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
                 cq_entry = (struct fi_cq_data_entry *) srcptr;
 
                 /* Data from the output buffer are sent */
-                nn_sofi_handle_egress( self, cq_entry );
+                nn_sofi_egress_handle( self, cq_entry );
 
                 return;
 

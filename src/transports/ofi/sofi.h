@@ -80,6 +80,7 @@ struct nn_sofi {
 
     /* The high-level api structures */
     struct ofi_domain           *domain;
+    struct ofi_mr_manager       mrm_egress;
     struct ofi_active_endpoint  *ep;
     struct nn_ofiw              *worker;
 
@@ -88,7 +89,7 @@ struct nn_sofi {
     uint8_t                     ticks_in;
     uint8_t                     ticks_out;
 
-    /* Outgoing flags */
+    /* Outgoing states */
     uint8_t                     stageout_state;
     uint8_t                     out_state;
 

@@ -22,6 +22,7 @@
 
 #include <string.h>
 
+#include "ofi.h"
 #include "ofimr.h"
 
 #include "../../utils/alloc.h"
@@ -48,6 +49,8 @@ static int ofi_mr_unregister( struct ofi_mr_manager * self,
 	}
 
 	/* Try to close the MR FID */
+	_ofi_debug("OFI[M]: Unregistering base=%p, len=%lu\n",
+		bank->base, bank->len);
 	ret = fi_close(&bank->mr->fid);
 	if (ret) {
 		return ret;
@@ -87,6 +90,8 @@ static int ofi_mr_register( struct ofi_mr_manager * self,
 
 	/* Calculate the index of this bank */
 	index = (int)(bank - &self->banks[0]);
+	_ofi_debug("OFI[M]: Registering base=%p, len=%lu, key=%04llx\n",
+		bank->base, bank->len, self->base_key+index);
 
 	/* Try to register the memory region */
     ret = fi_mr_reg(self->domain->domain, bank->base, bank->len, 

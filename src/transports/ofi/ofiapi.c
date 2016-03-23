@@ -20,8 +20,10 @@
     IN THE SOFTWARE.
 */
 
+#include <ctype.h>
 #include <string.h>
 
+#include "ofi.h"
 #include "ofiapi.h"
 
 #include "../../utils/alloc.h"
@@ -31,6 +33,18 @@
 /* ########################################################################## */
 /*  Utility Functions                                                         */
 /* ########################################################################## */
+
+/**
+ * Case-insensitive strcmp
+ */
+static int strcicmp(char const *a, char const *b)
+{
+    for (;; a++, b++) {
+        int d = tolower(*a) - tolower(*b);
+        if (d != 0 || !*a)
+            return d;
+    }
+}
 
 /**
  * Parse string address that follows the following specifications:
@@ -70,6 +84,9 @@ static int ofi_match_fabric( const char * addr, enum ofi_fabric_addr_flags addf,
             *(char*)(provider) = '\0'; provider++;
         }
 
+        /* Put fabric equal to NULL if zero-len */
+        if (strlen(fabric) == 0) fabric = NULL;
+
     }
 
     /* Get node and service */
@@ -85,6 +102,9 @@ static int ofi_match_fabric( const char * addr, enum ofi_fabric_addr_flags addf,
     if (addf == OFI_ADDR_LOCAL)
         flags = FI_SOURCE;
 
+    _ofi_debug("OFI[A]: Looking fabric for node=%s, service=%s, fabric=%s, provider=%s\n",
+        node, service, fabric, provider);
+
     /* Try to find a matching fabric according to specs & hints */
     ret = fi_getinfo(FT_FIVERSION, node, service, flags, hints, &fabrics);
     if (ret) {
@@ -94,20 +114,24 @@ static int ofi_match_fabric( const char * addr, enum ofi_fabric_addr_flags addf,
     }
 
     /* Iterate over fabrics and test fabric & provider arags */
-    f_pick = NULL;
+    f_pick = NULL; f = fabrics;
     while (f != NULL) {
+        _ofi_debug("OFI[A]: Found compatible fabric=%s, provider=%s\n",
+            f->fabric_attr->name, f->fabric_attr->prov_name);
 
         /* Assume that's our candidate */
         f_pick = f;
 
         /* Test if fabric or provider does not match */
         if (fabric != NULL) {
-            if (strcmp(fabric, f->fabric_attr->name) != 0) {
+            if (strcicmp(fabric, f->fabric_attr->name) != 0) {
+                _ofi_debug("OFI[A]: Mismatched fabric name\n");
                 f_pick = NULL;
             }
         }
         if (provider != NULL) {
-            if (strcmp(provider, f->fabric_attr->prov_name) != 0) {
+            if (strcicmp(provider, f->fabric_attr->prov_name) != 0) {
+                _ofi_debug("OFI[A]: Mismatch provider\n");
                 f_pick = NULL;
             }
         }
@@ -149,8 +173,8 @@ int ofi_init( struct ofi_resources * R, enum fi_ep_type ep_type )
     }
 
     /* Domains */
-    R->hints->domain_attr->mr_mode       = FI_MR_UNSPEC;
-    R->hints->domain_attr->threading     = FI_THREAD_UNSPEC;
+    // R->hints->domain_attr->mr_mode       = FI_MR_UNSPEC;
+    // R->hints->domain_attr->threading     = FI_THREAD_UNSPEC;
 
     /* Endpoints */
     R->hints->ep_attr->type = ep_type;
@@ -160,13 +184,40 @@ int ofi_init( struct ofi_resources * R, enum fi_ep_type ep_type )
     R->hints->mode          = FI_CONTEXT | FI_LOCAL_MR;
 
     /* Specify the address format we are using */
-    R->hints->addr_format   = FI_FORMAT_UNSPEC;
+    R->hints->addr_format   = FI_SOCKADDR;
 
     /* Initialize fabric list */
     nn_list_init( &R->fabrics );
 
     /* Success */
     R->err = 0;
+    return 0;
+}
+
+/**
+ * Free everything
+ */
+int ofi_term( struct ofi_resources * R )
+{
+    int ret;
+    struct ofi_fabric *item;
+    struct nn_list_item *it;
+
+    /* Close fabrics */
+    for (it = nn_list_begin (&R->fabrics);
+          it != nn_list_end (&R->fabrics);
+          it = nn_list_next (&R->fabrics, it)) {
+        item = nn_cont (it, struct ofi_fabric, item);
+
+        /* Close domains */
+        ofi_fabric_close( item );
+    }
+
+    /* Free structures */
+    fi_freeinfo( R->hints );
+    nn_list_term( &R->fabrics );
+
+    /* Success */
     return 0;
 }
 
@@ -375,16 +426,9 @@ int ofi_passive_endpoint_open( struct ofi_fabric * fabric, struct nn_ofiw * wrk,
     int ret;
     struct ofi_passive_endpoint * pep;
 
-    /* If we have already a PEP structure, re-use it */
-    if (*_pep) {
-        /* Close previous passive endpoint */
-        pep = *_pep;
-        ofi_passive_endpoint_close( pep );
-    } else {
-        /* Allocate new endpoint */
-        pep = nn_alloc( sizeof(struct ofi_passive_endpoint), "ofi passive ep" );
-        nn_assert( pep );
-    }
+    /* Allocate new endpoint */
+    pep = nn_alloc( sizeof(struct ofi_passive_endpoint), "ofi passive ep" );
+    nn_assert( pep );
 
     /* Open a passive endpoint */
     ret = fi_passive_ep(fabric->fabric, fabric->fi, &pep->ep, context);
@@ -447,13 +491,12 @@ int ofi_passive_endpoint_close( struct ofi_passive_endpoint * pep )
         rd = fi_eq_read(pep->eq, &event, &entry, sizeof entry, 0);
     } while ((int)rd == 0);
 
-    /* Close endpoint */
+    /* Close FIDs */
+    FT_CLOSE_FID( pep->eq );
     FT_CLOSE_FID( pep->ep );
-    pep->ep = NULL;
 
     /* Free structures */
-    FT_CLOSE_FID( pep->eq );
-    pep->eq = NULL;
+    nn_free( pep );
 
     /* Success */
     return 0;
@@ -473,16 +516,9 @@ int ofi_active_endpoint_open( struct ofi_domain* domain, struct nn_ofiw* wrk,
     int ret;
     struct ofi_active_endpoint * aep;
 
-    /* If we have already a n endpoint structure re-use it */
-    if (*a) {
-        /* Close previous passive endpoint */
-        aep = *a;
-        ofi_active_endpoint_close( aep );
-    } else {
-        /* Allocate new endpoint */
-        aep = nn_alloc( sizeof(struct ofi_active_endpoint), "ofi active ep" );
-        nn_assert( aep );
-    }
+    /* Allocate new endpoint */
+    aep = nn_alloc( sizeof(struct ofi_active_endpoint), "ofi active ep" );
+    nn_assert( aep );
 
     /* Use domain FI if fi missing */
     if (!fi) fi = domain->fi;
@@ -596,7 +632,6 @@ int ofi_active_endpoint_open( struct ofi_domain* domain, struct nn_ofiw* wrk,
  */
 int ofi_active_endpoint_close( struct ofi_active_endpoint * aep )
 {
-
     /* Remove EQ/CQs from worker, to stop monitoring them */
     nn_ofiw_remove( aep->worker, aep->eq );
     nn_ofiw_remove( aep->worker, aep->cq_tx );
@@ -610,16 +645,18 @@ int ofi_active_endpoint_close( struct ofi_active_endpoint * aep )
         rd = fi_eq_read(aep->eq, &event, &entry, sizeof entry, 0);
     } while ((int)rd == 0);
 
-    /* Close endpoint */
-    FT_CLOSE_FID( aep->ep );
-    aep->ep = NULL;
+    /* Close EQ */
+    FT_CLOSE_FID( aep->eq );
 
     /* Close CQs */
     FT_CLOSE_FID( aep->cq_tx );
-    aep->cq_tx = NULL;
     FT_CLOSE_FID( aep->cq_rx );
-    aep->cq_rx = NULL;
 
+    /* Close endpoint */
+    FT_CLOSE_FID( aep->ep );
+
+    /* Free memory */
+    nn_free( aep );
     return 0;
 }
 
@@ -706,6 +743,39 @@ int ofi_cm_connect( struct ofi_active_endpoint * ep, void *addr,
 
     /* Success */
     return 0;
+}
+
+/**
+ * Reject the incoming request
+ */
+int ofi_cm_reject( struct ofi_passive_endpoint * pep, struct fi_info * fi )
+{
+    int ret;
+
+    /* Reject */
+    ret = fi_reject(pep->ep, fi->handle, NULL, 0);
+    if (ret) {
+        FT_PRINTERR("fi_reject", ret);
+        return ret;
+    }
+
+    /* Success */
+    return 0;
+}
+
+/**
+ * Shutdown an established connection
+ *
+ * This function will simply call the `fi_shutdown` function to terminate the
+ * connection. If it is not supported by the provider, the implementation might
+ * try to perform some tricks to satisfy the requests. No errors are generated.
+ */
+void ofi_cm_shutdown( struct ofi_active_endpoint * ep )
+{
+    /* Shutdown */
+    fi_shutdown( ep->ep, 0 );
+    /* Cancel I/O operations on the endpoint */
+    fi_cancel( &(ep->ep)->fid, NULL );
 }
 
 /* ########################################################################## */

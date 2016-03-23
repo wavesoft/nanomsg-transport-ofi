@@ -71,6 +71,15 @@ struct ofi_domain;
 /* ########################################################################## */
 
 /**
+ * Handshake information
+ */
+struct ofi_handshake
+{
+    /* Protocol version */
+    uint16_t version;
+};
+
+/**
  * Global Resources
  */
 struct ofi_resources
@@ -298,6 +307,11 @@ int ofi_cm_accept( struct ofi_active_endpoint * ep, const void *data,
     size_t datalen );
 
 /**
+ * Reject the incoming request
+ */
+int ofi_cm_reject( struct ofi_passive_endpoint * pep, struct fi_info * fi );
+
+/**
  * You can optionally specify an payload that will be sent as part of the
  * handshake sequence to the other end. This data will be available as
  * part of the FI_CONNECTED EQ event.
@@ -305,12 +319,23 @@ int ofi_cm_accept( struct ofi_active_endpoint * ep, const void *data,
 int ofi_cm_connect( struct ofi_active_endpoint * ep, void *addr, 
     const void *data, size_t datalen );
 
+/**
+ * Shutdown an established connection
+ *
+ * This function will simply call the `fi_shutdown` function to terminate the
+ * connection. If it is not supported by the provider, the implementation might
+ * try to perform some tricks to satisfy the requests. No errors are generated.
+ */
+void ofi_cm_shutdown( struct ofi_active_endpoint * ep );
+
 /* ########################################################################## */
 /*  Data I/O Operations                                                       */
 /* ########################################################################## */
 
 /**
  * Perform send operation
+ *
+ * This operation will trigger a OFI_SRC_CQ_TX 
  */
 int ofi_sendmsg( struct ofi_active_endpoint * ep, const struct fi_msg *msg,
     uint64_t flags );

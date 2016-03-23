@@ -21,9 +21,9 @@
 */
 
 #include "ofi.h"
+#include "ofiapi.h"
 #include "cofi.h"
 #include "sofi.h"
-#include "hlapi.h"
 
 #include <string.h>
 
@@ -34,11 +34,12 @@
 
 /* State machine states */
 #define NN_COFI_STATE_IDLE              1
-#define NN_COFI_STATE_CONNECTED         2
+#define NN_COFI_STATE_ACTIVE            2
 #define NN_COFI_STATE_STOPPING          3
 
 /* State machine sources */
 #define NN_COFI_SRC_SOFI                NN_OFI_SRC_SOFI
+#define NN_COFI_SRC_ENDPOINT            5100
 
 /* nn_epbase virtual interface implementation. */
 static void nn_cofi_stop (struct nn_epbase *self);
@@ -57,31 +58,77 @@ static void nn_cofi_shutdown (struct nn_fsm *self, int src, int type,
 struct nn_cofi {
 
     /*  The state machine. */
-    struct nn_fsm               fsm;
-    int                         state;
+    struct nn_fsm fsm;
+    int state;
 
     /* The high-level api structures */
-    struct ofi_resources *      ofi;
-    struct ofi_active_endpoint  ep;
+    struct ofi_fabric *fabric;
+    struct ofi_domain *domain;
+    struct nn_ofiw *worker;
 
     /*  This object is a specific type of endpoint.
         Thus it is derived from epbase. */
-    struct nn_epbase            epbase;
+    struct nn_epbase epbase;
 
     /*  State machine that handles the active part of the connection
         lifetime. */
-    struct nn_sofi              sofi;
-
-    /*  Remote address */
-    const char *                domain;
-    const char *                service;
+    struct nn_sofi sofi;
 
 };
+
+/* ########################################################################## */
+/*  Utility Functions                                                         */
+/* ########################################################################## */
+
+/**
+ * Create an active endpoint and place a connection request
+ */
+static int nn_cofi_start_connecting( struct nn_cofi * self )
+{
+    int ret;
+
+    /* Initialize a new SOFI */
+    nn_sofi_init( &self->sofi, self->domain,
+        &self->epbase, NN_COFI_SRC_SOFI, &self->fsm );
+
+    /* Start SOFI */
+    ret = nn_sofi_start_connect( &self->sofi );
+    if (ret) {
+        FT_PRINTERR("nn_sofi_start_connect", ret);
+        return ret;
+    }
+
+    /* Success */
+    return 0;
+
+}
+
+/**
+ * Reap the SOFI object specified
+ */
+static void nn_cofi_reap_sofi( struct nn_cofi * self )
+{
+    /* Terminate SOFI */
+    nn_sofi_term( &self->sofi );
+}
+
+/**
+ * An unrecoverable error has occured
+ */
+static void nn_cofi_critical_error( struct nn_cofi * self, int error )
+{
+    nn_fsm_stop( &self->fsm );
+}
+
+/* ########################################################################## */
+/*  Implementation  Functions                                                 */
+/* ########################################################################## */
 
 /**
  * Create a connected OFI Socket
  */
-int nn_cofi_create (void *hint, struct nn_epbase **epbase, struct ofi_resources * ofi)
+int nn_cofi_create (void *hint, struct nn_epbase **epbase, 
+    struct ofi_fabric * fabric)
 {
     int ret;
     struct nn_cofi *self;
@@ -95,29 +142,18 @@ int nn_cofi_create (void *hint, struct nn_epbase **epbase, struct ofi_resources 
 
     /*  Initalise the endpoint. */
     nn_epbase_init (&self->epbase, &nn_cofi_epbase_vfptr, hint);
-    self->domain = nn_epbase_getaddr (&self->epbase);
 
-    /* Get local service */
-    self->service = strrchr (self->domain, ':');
-    if (self->service == NULL) {
-        nn_epbase_term (&self->epbase);
-        return -EINVAL;
-    }
-    *(char*)(self->service) = '\0'; /* << TODO: That's a HACK! */
-    self->service++;
-
-    /* Debug */
-    _ofi_debug("OFI[C]: Createing socket for (domain=%s, service=%s)\n", 
-        self->domain, self->service );
-
-    /* Keep resources */
-    self->ofi = ofi;
-    if (ofi->err) {
-        _ofi_debug("OFI[C]: OFI was not properly initialized!\n");
+    /* Open a domain on this address */
+    self->fabric = fabric;
+    ret = ofi_domain_open( fabric, NULL, &self->domain );
+    if (ret) {
         nn_epbase_term (&self->epbase);
         nn_free(self);
-        return ofi->err;
+        return ret;
     }
+
+    /* Create an ofi worker for this fabric */
+    self->worker = ofi_fabric_getworker( self->fabric, &self->fsm );
 
     /*  Initialise the root FSM. */
     nn_fsm_init_root(&self->fsm, 
@@ -215,42 +251,21 @@ static void nn_cofi_shutdown (struct nn_fsm *self, int src, int type,
 }
 
 /**
- * Start conecting to the remote endpoint
- */
-static int nn_cofi_start_connecting( struct nn_cofi * self )
-{
-    int ret;
-
-    /* Start server */
-    ret = ofi_init_client( self->ofi, &self->ep, 
-        FI_SOCKADDR, self->domain, self->service );
-    if (ret) {
-        _ofi_debug("OFI[C]: Failed to call ofi_init_client!\n");
-        return ret;
-    }
-
-    /* Create a new SOFI */
-    nn_sofi_init (&self->sofi, self->ofi, &self->ep, NN_SOFI_NG_SEND, 
-        &self->epbase, NN_COFI_SRC_SOFI, &self->fsm);
-
-    return 0;
-}
-
-/**
  * Bound OFI FSM Handler
  */
-static void nn_cofi_handler (struct nn_fsm *self, int src, int type,
+static void nn_cofi_handler (struct nn_fsm *fsm, int src, int type,
     void *srcptr)
 {
-    struct nn_cofi *cofi;
+    int ret;
+    struct nn_cofi *self;
 
     /* Continue with the next OFI Event */
-    cofi = nn_cont (self, struct nn_cofi, fsm);
+    self = nn_cont (fsm, struct nn_cofi, fsm);
     _ofi_debug("OFI[C]: nn_cofi_handler state=%i, src=%i, type=%i\n", 
-        cofi->state, src, type);
+        self->state, src, type);
 
     /* Handle new state */
-    switch (cofi->state) {
+    switch (self->state) {
 
 /******************************************************************************/
 /*  IDLE state.                                                               */
@@ -258,69 +273,75 @@ static void nn_cofi_handler (struct nn_fsm *self, int src, int type,
     case NN_COFI_STATE_IDLE:
         switch (src) {
 
+        /* ========================= */
+        /*  FSM Action               */
+        /* ========================= */
         case NN_FSM_ACTION:
             switch (type) {
             case NN_FSM_START:
 
-                /* Create new connected OFI */
-                _ofi_debug("OFI[C]: Creating new SOFI\n");
-                cofi->state = NN_COFI_STATE_CONNECTED;
-
-                /* WARNING: Blocking */
-                nn_cofi_start_connecting( cofi );
+                /* Create a new SOFI and start connection */
+                ret = nn_cofi_start_connecting( self );
+                if (ret) {
+                    nn_cofi_critical_error( self, ret );
+                } else {                
+                    self->state = NN_COFI_STATE_ACTIVE;
+                }
 
                 return;
             default:
-                nn_fsm_bad_action (cofi->state, src, type);
+                nn_fsm_bad_action (self->state, src, type);
             }
 
         default:
-            nn_fsm_bad_source (cofi->state, src, type);
+            nn_fsm_bad_source (self->state, src, type);
         }
 
 /******************************************************************************/
-/*  NN_COFI_STATE_CONNECTED state.                                            */
-/*  We are connected to the remote endpoint                                   */
+/*  NN_COFI_STATE_ACTIVE state.                                               */
+/*  Our SOFI is active, which means that a connection is established          */
 /******************************************************************************/
-    case NN_COFI_STATE_CONNECTED:
+    case NN_COFI_STATE_ACTIVE:
         switch (src) {
 
+        /* ========================= */
+        /*  Streaming OFI FSM        */
+        /* ========================= */
         case NN_COFI_SRC_SOFI:
             switch (type) {
 
-            // case NN_SOFI_INTERRUPTED:
-
-            //     /* SOFI Interrupted (connection broken) */
-            //     _ofi_debug("OFI[C]: Connection interrupted\n");
-            //     nn_ep_stop(cofi->epbase.ep);
-            //     nn_sofi_stop(&cofi->sofi);
-            //     return;
-
+            /* The SOFI is stopped only when the connection is interrupted */
             case NN_SOFI_STOPPED:
 
                 /* Disconnected from remote endpoint */
-                _ofi_debug("OFI[C]: SOFI Stopped error=%i. Restarting\n", cofi->sofi.error);
-                nn_epbase_set_error( &cofi->epbase, cofi->sofi.error );
+                _ofi_debug("OFI[C]: SOFI Stopped error=%i. Restarting\n", 
+                    self->sofi.error);
+                nn_epbase_set_error( &self->epbase, self->sofi.error );
 
-                /* WARNING: Blocking */
-                nn_cofi_start_connecting( cofi );
+                /* TODO: Use back-off timer */
 
-                // nn_fsm_stop (&cofi->fsm);
+                /* Start another SOFI */
+                nn_cofi_reap_sofi( self );
+                ret = nn_cofi_start_connecting( self );
+                if (ret) {
+                    nn_cofi_critical_error( self, ret );
+                }
+
                 return;
 
             default:
-                nn_fsm_bad_action (cofi->state, src, type);
+                nn_fsm_bad_action (self->state, src, type);
             }
 
         default:
-            nn_fsm_bad_source (cofi->state, src, type);
+            nn_fsm_bad_source (self->state, src, type);
         }
 
 /******************************************************************************/
 /*  Invalid state.                                                            */
 /******************************************************************************/
     default:
-        nn_fsm_bad_state (cofi->state, src, type);
+        nn_fsm_bad_state (self->state, src, type);
 
     }
 

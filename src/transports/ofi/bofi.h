@@ -23,11 +23,11 @@
 #ifndef NN_BOFI_INCLUDED
 #define NN_BOFI_INCLUDED
 
-#include "hlapi.h"
+#include "ofiapi.h"
 #include "../../transport.h"
 
 /*  State machine managing bound (server) OpenFabrics Interface socket. */
 
-int nn_bofi_create (void *hint, struct nn_epbase **epbase, struct ofi_resources * ofi);
+int nn_bofi_create (void *hint, struct nn_epbase **epbase, struct ofi_fabric *);
 
 #endif

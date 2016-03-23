@@ -23,9 +23,7 @@
 #ifndef NN_SOFI_INCLUDED
 #define NN_SOFI_INCLUDED
 
-#include "hlapi.h"
-#include "sofi_in.h"
-#include "sofi_out.h"
+#include "ofiapi.h"
 
 #include "../../transport.h"
 #include "../../aio/fsm.h"
@@ -70,52 +68,35 @@ struct nn_sofi {
 
     /*  The state machine. */
     struct nn_fsm               fsm;
-    struct nn_epbase            * epbase;
+    struct nn_epbase            *epbase;
     int                         state;
     int                         error;
-    uint8_t                     flags;
-    uint8_t                     ng_direction;
 
     /* This member can be used by owner to keep individual sofis in a list. */
     struct nn_list_item         item;
-
-    /* Asynchronous communication with the worker thread */
-    struct nn_worker            * worker;
-    struct nn_worker_task       task_disconnect;
-    struct nn_worker_task       task_stop;
-
-    /* The worker thread */
-    struct nn_thread            thread_worker;
 
     /*  Pipe connecting this inproc connection to the nanomsg core. */
     struct nn_pipebase          pipebase;
 
     /* The high-level api structures */
-    struct ofi_resources        * ofi;
-    struct ofi_active_endpoint  * ep;
-
-    /* Sub-components */
-    struct nn_sofi_in           sofi_in;
-    struct nn_sofi_out          sofi_out;
-
-    /* Handshake timeout timer */
-    struct nn_sofi_handshake    hs_local;
-    struct nn_sofi_handshake    hs_remote;
+    struct ofi_domain           *domain;
+    struct ofi_active_endpoint  *ep;
+    struct nn_ofiw              *worker;
 
     /* Keepalive mechanism */
     struct nn_timer             timer_keepalive;
     uint8_t                     ticks_in;
     uint8_t                     ticks_out;
 
-    /* Mutext for fabric operations */
-    struct nn_mutex             mutex_fabric;
-
 };
 
 /*  Initialize the state machine */
-void nn_sofi_init (struct nn_sofi *self, 
-    struct ofi_resources *ofi, struct ofi_active_endpoint *ep, const uint8_t ng_direction,
+void nn_sofi_init (struct nn_sofi *self, struct ofi_domain *domain,
     struct nn_epbase *epbase, int src, struct nn_fsm *owner);
+
+/* Start the state machine either in receiving or sending side */
+int nn_sofi_start_accept( struct nn_sofi *self, struct fi_eq_cm_entry * conreq );
+int nn_sofi_start_connect( struct nn_sofi *self );
 
 /* Check if FSM is idle */
 int nn_sofi_isidle (struct nn_sofi *self);

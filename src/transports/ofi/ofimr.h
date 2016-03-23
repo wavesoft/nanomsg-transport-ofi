@@ -23,6 +23,11 @@
 #ifndef NN_OFIMR_INCLUDED
 #define NN_OFIMR_INCLUDED
 
+/* Forward declarations */
+struct ofi_mr_bank;
+struct ofi_mr_manager;
+struct ofi_mr_context;
+
 #include "oficommon.h"
 #include "ofiapi.h"
 
@@ -163,8 +168,23 @@ int ofi_mr_term( struct ofi_mr_manager * self );
  * you will send smaller chunks. MRM will find and return memory regions with
  * smaller chunks.
  *
+ * This function will return -ENOMEM if there are no free banks available
+ * to hold the mark information.
+ *
  */
-int ofi_mr_hint( struct ofi_mr_manager * self, void * base, size_t len );
+int ofi_mr_mark( struct ofi_mr_manager * self, void * base, size_t len );
+
+/**
+ * Invalidate the specified memory region, forcing intersecting memory
+ * registrations to be released.
+ *
+ * This is useful when you are releasing a pointer previously registered
+ * with `ofi_mr_mark`.
+ *
+ * This function will return -EBUSY if the memory region specified is
+ * currently in use by some bank.
+ */
+int ofi_mr_invalidate( struct ofi_mr_manager * self, void * base, size_t len );
 
 /**
  * Populate the local descriptors of the `fi_msg` structure and perform

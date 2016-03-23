@@ -113,7 +113,7 @@ static int ofi_mr_register( struct ofi_mr_manager * self,
  * WARNING: This function will *NOT* release the acquired mutex upon successful	
  * 			completion!
  */
-static int ofi_mr_free_bank( struct ofi_mr_manager * self, 
+static int ofi_mr_get_free_bank( struct ofi_mr_manager * self, 
 	struct ofi_mr_bank ** pick_bank )
 {
 	int i;
@@ -176,17 +176,23 @@ static int ofi_mr_find_bank( struct ofi_mr_manager *self, void *ptr, size_t len,
 			} else {
 				/* Pick the one with the smallest age (oldest) */
 				if (bank->age < oldest_bank->age) {
-					/* Unlock the mutex of the oldest bank, since
+
+					/* First unlock the mutex of the oldest bank, since
 					   the test on the end of the loop prohibited it
-					   from being unlocked. */
+					   from being unlocked. That's intentional since
+					   we don't know if we are going to use the oldest_bank
+					   until the oldest one is correctly picked. */
 					nn_mutex_unlock( &oldest_bank->mutex );
+
 					/* Then replace oldest bank */
 					oldest_bank = bank;
+
 				}
 			}
 		}
 
-		/* Don't unlock oldest banks */
+		/* Don't unlock the mutex of the oldest bank, until we are
+		   sure we are not going to use it. */
 		if (oldest_bank != bank)
 			nn_mutex_unlock(&bank->mutex);
 	}
@@ -319,13 +325,13 @@ int ofi_mr_term( struct ofi_mr_manager * self )
  * smaller chunks.
  *
  */
-int ofi_mr_hint( struct ofi_mr_manager * self, void * base, size_t len )
+int ofi_mr_mark( struct ofi_mr_manager * self, void * base, size_t len )
 {
 	struct ofi_mr_bank * bank;
 	int ret;
 
 	/* Find a free bank */
-	ret = ofi_mr_free_bank( self, &bank );
+	ret = ofi_mr_get_free_bank( self, &bank );
 	if (ret) {
 		return ret;
 	}
@@ -344,6 +350,51 @@ int ofi_mr_hint( struct ofi_mr_manager * self, void * base, size_t len )
 
 	/* Success */
 	nn_mutex_lock(&bank->mutex);
+	return 0;
+}
+
+/**
+ * Invalidate the specified memory region, forcing intersecting memory
+ * registrations to be released.
+ *
+ * This is useful when you are releasing a pointer previously registered
+ * with `ofi_mr_mark`.
+ */
+int ofi_mr_invalidate( struct ofi_mr_manager * self, void * base, size_t len )
+{
+	int i;
+	void * ptr_end = ((uint8_t*)base) + len;
+
+	/* Invalidate intersecting banks */
+	for (i=0; i<self->size; ++i) {
+		struct ofi_mr_bank * bank = &self->banks[i];
+		nn_mutex_lock( &bank->mutex );
+		void * bank_end = ((uint8_t*)bank->base) + bank->len;
+
+		/* Check if bank intersects with the memory region specified */
+		if ( ((base >= bank->base) && (base <= bank_end)) ||
+			 ((ptr_end >= bank->base) && (ptr_end <= bank_end)) ||
+			 ((bank->base >= base) && (bank->base <= ptr_end)) ||
+			 ((bank_end >= base) && (bank_end <= ptr_end)) ) {
+
+			/* If this memory region is in use return EBUSY */
+			if (bank->ref > 0) {
+				nn_mutex_unlock( &bank->mutex );
+				return -EBUSY;
+			}
+
+			/* Unregister */
+			ofi_mr_unregister( self, bank );
+
+			/* Reset non-volatile flag (if any) */
+			bank->flags &= ~OFI_MR_BANK_NONVOLATILE;
+
+		}
+
+		nn_mutex_unlock( &bank->mutex );
+	}
+
+	/* Success */
 	return 0;
 }
 
@@ -456,7 +507,7 @@ int ofi_mr_release( void ** context )
 	/* Restore user context */
 	*context = ctx->user_context;
 
-	/* Release the memory regions reserved */
+	/* Decrement the reference counters to the memory banks */
 	for (i=0; i<ctx->size; i++) {
 		bank = ctx->banks[i];
 

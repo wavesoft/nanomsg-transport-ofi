@@ -23,8 +23,14 @@
 #ifndef NN_OFIAPI_INCLUDED
 #define NN_OFIAPI_INCLUDED
 
+/* Forward declarations */
+struct ofi_resources;
+struct ofi_fabric;
+struct ofi_domain;
+
 #include "oficommon.h"
 #include "ofiw.h"
+#include "ofimr.h"
 
 #include "../../utils/list.h"
 #include "../../utils/atomic.h"

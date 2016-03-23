@@ -38,6 +38,14 @@
 #define NN_SOFI_STATE_ACTIVE             1003
 #define NN_SOFI_STATE_CLOSING            1004
 
+/* FSM OUT State */
+#define NN_SOFI_STAGEOUT_STATE_IDLE      0
+#define NN_SOFI_STAGEOUT_STATE_STAGED    1
+
+/* FSM OUT State */
+#define NN_SOFI_OUT_STATE_IDLE           0
+#define NN_SOFI_OUT_STATE_ACTIVE         1
+
 /* FSM Sources */
 #define NN_SOFI_SRC_ENDPOINT             1101
 #define NN_SOFI_SRC_KEEPALIVE_TIMER      1102
@@ -85,12 +93,53 @@ static void nn_sofi_post_ingress_buffers( struct nn_sofi * self )
 }
 
 /**
+ * Check if egress queue can forward requests
+ */
+static int nn_sofi_egress_ready( struct nn_sofi * self )
+{
+    return 0;
+}
+
+/**
+ * Send staged data
+ */
+static int nn_sofi_egress_send( struct nn_sofi * self )
+{
+    nn_assert(self->out_state == NN_SOFI_OUT_STATE_ACTIVE);
+    nn_assert(self->stageout_state == NN_SOFI_STAGEOUT_STATE_STAGED);
+
+    /* TODO: Send self->outmsg */
+
+    /* Release staged data */
+    self->stageout_state = NN_SOFI_STAGEOUT_STATE_IDLE;
+
+    /* Data are sent, unlock pipebase for next request */
+    nn_pipebase_sent( &self->pipebase );
+    return 0;
+}
+
+/**
  * Post output buffers (AKA "send data"), and return
  * the number of bytes sent or the error occured.
  */
 static int nn_sofi_push_egress( struct nn_sofi * self, 
     struct nn_msg * msg )
 {
+
+    /* If the stage buffer is full, raise an error */
+    if (self->stageout_state != NN_SOFI_STAGEOUT_STATE_IDLE)
+        return -EBUSY;
+
+    /* Move the message to the local storage. */
+    nn_msg_term (&self->outmsg);
+    nn_msg_mv (&self->outmsg, msg);
+    self->stageout_state = NN_SOFI_STAGEOUT_STATE_STAGED;
+
+    /* Check if we can send right away */
+    if (self->out_state == NN_SOFI_OUT_STATE_ACTIVE) {
+        nn_sofi_egress_send( self );
+    }
+
     return 0;
 }
 
@@ -147,6 +196,8 @@ static int nn_sofi_handle_ingress( struct nn_sofi * self,
  */
 static void nn_sofi_critical_error( struct nn_sofi * self, int error )
 {
+    _ofi_debug("OFI[S]: Unrecoverable error #%i: %s\n", error,
+        fi_strerror((int) -error));
     /* Stop the FSM */
     nn_fsm_stop( &self->fsm );
 }
@@ -165,6 +216,8 @@ void nn_sofi_init ( struct nn_sofi *self, struct ofi_domain *domain,
     self->domain = domain;
     self->ep = NULL;
     self->epbase = epbase;
+    self->stageout_state = NN_SOFI_STAGEOUT_STATE_IDLE;
+    self->out_state = NN_SOFI_OUT_STATE_IDLE;
 
     /* ----------------------------------- */
     /*  NanoMSG Core Initialization        */
@@ -195,6 +248,9 @@ void nn_sofi_init ( struct nn_sofi *self, struct ofi_domain *domain,
     /* Reset properties */
     self->ticks_in = 0;
     self->ticks_out = 0;
+
+    /* Outgoing message */
+    nn_msg_init (&self->outmsg, 0);
 
     /* ----------------------------------- */
     /*  OFI Sub-Component Initialization   */
@@ -302,9 +358,13 @@ void nn_sofi_term (struct nn_sofi *self)
     /* Terminate list item */
     nn_list_item_term (&self->item);
 
+    /* Outgoing message */
+    nn_msg_term (&self->outmsg);
+
     /* Cleanup components */
     nn_pipebase_term (&self->pipebase);
     nn_fsm_term (&self->fsm);
+
 
     /* ----------------------------------- */
     /*  libFabric/HLAPI Termination        */
@@ -344,10 +404,6 @@ static int nn_sofi_send (struct nn_pipebase *pb, struct nn_msg *msg)
     int ret;
     struct nn_sofi *self;
     self = nn_cont (pb, struct nn_sofi, pipebase);
-
-    /* If we are not active return EPIPE */
-    if (nn_slow(self->state == NN_SOFI_STATE_ACTIVE))
-        return -EPIPE;
 
     /* We sent something */
     self->ticks_out = 0;
@@ -475,8 +531,8 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
             case NN_FSM_START:
 
                 /* Wait for connection to be established before starting pipe */
+                _ofi_debug("OFI[S]: FSM started, waiting for CONNECTED event\n");
                 self->state = NN_SOFI_STATE_CONNECTING;
-                nn_pipebase_start( &self->pipebase );
                 return;
 
             default:
@@ -502,11 +558,18 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
             case FI_CONNECTED:
 
                 /* The connection is established, start pipe */
+                _ofi_debug("OFI[S]: Endpoint connected, starting pipebase\n");
                 self->state = NN_SOFI_STATE_ACTIVE;
+                self->out_state = NN_SOFI_OUT_STATE_ACTIVE;
                 nn_pipebase_start( &self->pipebase );
 
                 /* Post input buffers */
                 nn_sofi_post_ingress_buffers( self );
+
+                /* Now it's time to send staged data */
+                if (self->stageout_state == NN_SOFI_STAGEOUT_STATE_STAGED) {
+                    nn_sofi_egress_send( self );
+                }
                 return;
 
             default:

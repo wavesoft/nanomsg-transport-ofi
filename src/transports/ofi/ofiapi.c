@@ -35,6 +35,13 @@
 /* ########################################################################## */
 
 /**
+ * Mac OSX Utility Functions
+ */
+#ifdef __APPLE__
+#include "platf/osx.c"
+#endif
+
+/**
  * Case-insensitive strcmp
  */
 static int strcicmp(char const *a, char const *b)
@@ -378,6 +385,7 @@ int ofi_domain_open( struct ofi_fabric * F, struct fi_info *fi,
 
     /* Prepare properties */
     item->parent = F;
+    item->fi = fi;
 
     /* Keep this domain on list */
     nn_list_item_init( &item->item );

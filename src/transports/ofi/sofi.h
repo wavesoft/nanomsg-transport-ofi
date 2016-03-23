@@ -88,6 +88,13 @@ struct nn_sofi {
     uint8_t                     ticks_in;
     uint8_t                     ticks_out;
 
+    /* Outgoing flags */
+    uint8_t                     stageout_state;
+    uint8_t                     out_state;
+
+    /*  Message being sent at the moment. */
+    struct nn_msg outmsg;
+
 };
 
 /*  Initialize the state machine */

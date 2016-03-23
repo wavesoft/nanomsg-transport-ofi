@@ -112,6 +112,7 @@ static int nn_bofi_start_accepting ( struct nn_bofi* self )
 
     /* We are listening */
     self->state = NN_BOFI_STATE_ACTIVE;
+    _ofi_debug("OFI[B]: We are listening for connections\n");
 
     /* Success */
     return 0;
@@ -379,10 +380,12 @@ static void nn_bofi_handler (struct nn_fsm *self, int src, int type,
                 alloc_assert (sofi);
 
                 /* Initialize SOFI */
+                _ofi_debug("OFI[B]: Initializing SOFI\n");
                 nn_sofi_init (sofi, bofi->domain, &bofi->epbase, 
                     NN_BOFI_SRC_SOFI, &bofi->fsm);
 
                 /* Tell SOFI to accept the endpoint connection */
+                _ofi_debug("OFI[B]: Starting SOFI in accept state\n");
                 ret = nn_sofi_start_accept( sofi, eq_cm );
                 if (ret) {
                     FT_PRINTERR("nn_sofi_start_accept", ret);

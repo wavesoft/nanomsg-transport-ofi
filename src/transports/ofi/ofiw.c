@@ -93,12 +93,17 @@ static void nn_ofiw_poller_thread( void *arg )
 
                             /* Feed event to the FSM */
                             nn_ctx_enter (worker->owner->ctx);
+                            nn_mutex_unlock( &self->mutex );
                             nn_fsm_feed (worker->owner, 
                                 item->src,
                                 NN_OFIW_COMPLETED,
                                 &item->data.cq_entry
                             );
                             nn_ctx_leave (worker->owner->ctx);
+
+                            /* Exit both loops, since workers list
+                               might have been altered from the FSM handler! */
+                            goto continue_outer;
 
                         } else if (nn_slow(ret != -FI_EAGAIN)) {
 
@@ -108,12 +113,17 @@ static void nn_ofiw_poller_thread( void *arg )
 
                             /* Feed event to the FSM */
                             nn_ctx_enter (worker->owner->ctx);
+                            nn_mutex_unlock( &self->mutex );
                             nn_fsm_feed (worker->owner, 
                                 item->src,
                                 NN_OFIW_ERROR,
                                 &item->data.cq_err_entry
                             );
                             nn_ctx_leave (worker->owner->ctx);
+
+                            /* Exit both loops, since workers list
+                               might have been altered from the FSM handler! */
+                            goto continue_outer;
 
                         }
 
@@ -131,12 +141,18 @@ static void nn_ofiw_poller_thread( void *arg )
 
                             /* Feed event to the FSM */
                             nn_ctx_enter (worker->owner->ctx);
+                            nn_mutex_unlock( &self->mutex );
                             nn_fsm_feed (worker->owner, 
                                 item->src,
                                 event,
                                 &item->data.eq_entry
                             );
                             nn_ctx_leave (worker->owner->ctx);
+
+
+                            /* Exit both loops, since workers list
+                               might have been altered from the FSM handler! */
+                            goto continue_outer;
 
                         }
                         break;
@@ -159,7 +175,12 @@ static void nn_ofiw_poller_thread( void *arg )
             }
         }
 
+        /* Unlock mutex */
         nn_mutex_unlock( &self->mutex );
+
+continue_outer:
+        continue;
+
     }
     _ofi_debug("OFI[w]: Exiting OFIW pool thread\n");
 
@@ -173,6 +194,9 @@ static void nn_ofiw_poller_thread( void *arg )
 int nn_ofiw_pool_init( struct nn_ofiw_pool * self, struct fid_fabric *fabric )
 {
     int ret;
+
+    /* Initialize properties */
+    self->fabric = fabric;
 
     /* Initialize structures */
     nn_list_init( &self->workers );
@@ -357,8 +381,8 @@ int nn_ofiw_add_eq( struct nn_ofiw * self, struct fid_eq * eq, int src )
 /* Wrapping function to fi_eq_open that properly registers the resulting EQ
    in the worker. This function might update EQ attributes accordingly in order
    to configure waitsets. */
-int nn_ofiw_open_eq( struct nn_ofiw * self, int src, struct fi_eq_attr *attr, 
-    void *context, struct fid_eq **eq )
+int nn_ofiw_open_eq( struct nn_ofiw * self, int src, void *context, 
+    struct fi_eq_attr *attr, struct fid_eq **eq )
 {
     int ret;
 
@@ -392,7 +416,7 @@ int nn_ofiw_open_eq( struct nn_ofiw * self, int src, struct fi_eq_attr *attr,
    in the worker. This function might update CQ attributes accordingly in order
    to configure waitsets. */
 int nn_ofiw_open_cq( struct nn_ofiw * self, int src, struct fid_domain *domain,
-    struct fi_cq_attr *attr, void *context, struct fid_cq **cq )
+    void *context, struct fi_cq_attr *attr, struct fid_cq **cq )
 {
     int ret;
 
@@ -441,6 +465,7 @@ int nn_ofiw_remove( struct nn_ofiw * self, void * fd )
             _ofi_debug("OFI[w]: Removed fd=%p from worker=%p\n", item, self);
 
             /* Free structure */
+            nn_list_erase( &self->items, &item->item );
             nn_list_item_term( &item->item );
             nn_free( item );
             

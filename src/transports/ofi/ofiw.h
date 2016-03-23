@@ -188,14 +188,14 @@ int nn_ofiw_add_eq( struct nn_ofiw * worker, struct fid_eq * eq, int src );
 /* Wrapping function to fi_eq_open that properly registers the resulting EQ
    in the worker. This function might update EQ attributes accordingly in order
    to configure waitsets. */
-int nn_ofiw_open_eq( struct nn_ofiw * self, int src, struct fi_eq_attr *attr, 
-    void *context, struct fid_eq **eq );
+int nn_ofiw_open_eq( struct nn_ofiw * self, int src, void *context, 
+    struct fi_eq_attr *attr, struct fid_eq **eq );
 
 /* Wrapping function to fi_cq_open that properly registers the resulting CQ
    in the worker. This function might update CQ attributes accordingly in order
    to configure waitsets. */
 int nn_ofiw_open_cq( struct nn_ofiw * self, int src, struct fid_domain *domain,
-    struct fi_cq_attr *attr, void *context, struct fid_cq **cq );
+    void *context, struct fi_cq_attr *attr, struct fid_cq **cq );
 
 /* Remove a particular file descriptor from the monitor */
 int nn_ofiw_remove( struct nn_ofiw * worker, void * fd );

@@ -117,6 +117,9 @@ static void nn_cofi_reap_sofi( struct nn_cofi * self )
  */
 static void nn_cofi_critical_error( struct nn_cofi * self, int error )
 {
+    _ofi_debug("OFI[C]: Unrecoverable error #%i: %s\n", error,
+        fi_strerror((int) -error));
+
     nn_fsm_stop( &self->fsm );
 }
 

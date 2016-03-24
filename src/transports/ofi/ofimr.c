@@ -520,6 +520,7 @@ int ofi_mr_invalidate( struct ofi_mr_manager * self, void * base, size_t len )
 			}
 
 			/* Unregister */
+			_ofi_debug("OFI[M]: Invalidating bank=%p\n", bank);
 			ofi_mr_unregister( self, bank );
 
 			/* Reset non-volatile flag (if any) */

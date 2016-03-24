@@ -62,8 +62,6 @@ static void nn_ofiw_poller_thread( void *arg )
             break;
         }
 
-        printf("--- Broken out of waitset (%i) ---\n", ret);
-
 #endif
 
         /* Enter critical region */
@@ -74,8 +72,6 @@ static void nn_ofiw_poller_thread( void *arg )
               it != nn_list_end (&self->workers);
               it = nn_list_next (&self->workers, it)) {
             worker = nn_cont (it, struct nn_ofiw, item);
-
-            printf("--- Worker %p\n", worker);
 
             /* Iterate over poll items */
             for (jt = nn_list_begin (&worker->items);
@@ -88,7 +84,6 @@ static void nn_ofiw_poller_thread( void *arg )
 
                     /* COMPLETION QUEUE MODE */
                     case NN_OFIW_ITEM_CQ:
-                        printf("--- Worker %p, CQ fd=%p\n", worker, item);
 
                         /* Read completion queue */
                         ret = fi_cq_read( (struct fid_cq *)item->fd,
@@ -140,7 +135,6 @@ static void nn_ofiw_poller_thread( void *arg )
 
                     /* EVENT QUEUE MODE */
                     case NN_OFIW_ITEM_EQ:
-                        printf("--- Worker %p, EQ fd=%p\n", worker, item);
 
                         /* Read event queue */
                         ret = fi_eq_read( (struct fid_eq *)item->fd, 
@@ -193,9 +187,6 @@ static void nn_ofiw_poller_thread( void *arg )
 
                         }
                         break;
-
-                    default:
-                        printf("--- Worker %p, UNKNOWN fd=%p\n", worker, item);
 
                 }
 

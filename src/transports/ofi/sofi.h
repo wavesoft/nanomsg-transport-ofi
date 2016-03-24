@@ -24,7 +24,6 @@
 #define NN_SOFI_INCLUDED
 
 #include "ofiapi.h"
-#include "utils/ring.h"
 
 #include "../../transport.h"
 #include "../../aio/fsm.h"
@@ -64,7 +63,7 @@ struct nn_sofi_handshake
 
 };
 
-/* Ingress buffer, part of the ring buffer */
+/* Ingress buffer for dual-buffered ingress */
 struct nn_sofi_buffer {
 
     /* Body chunk */

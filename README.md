@@ -1,8 +1,6 @@
-# nanomsg-transport-ofi (0.2.0b)
+# nanomsg-transport-ofi (1.0.0b)
 
 Nanomsg transport for interfacing with the OpenFabrics Interfaces (OFI) Library (libfabric).
-
-__WARNING: This project is still under development and should not be used in production!__
 
 ## Known Problems
 

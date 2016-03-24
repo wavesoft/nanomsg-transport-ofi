@@ -108,12 +108,38 @@ static void nn_sofi_critical_error( struct nn_sofi * self, int error )
 /* ########################################################################## */
 
 /**
+ * User pointer for the custom free functions
+ */
+struct nn_sofi_egress_freedata {
+
+    /* Chunk details for the deallocator */
+    struct ofi_mr_manager * mrm;
+    void * base;
+    size_t len;
+
+    /* Chained free function */
+    nn_chunk_free_fn free_fn;
+    void * free_ptr;
+
+    /* Pointer to the parent context */
+    void * ctx;
+
+};
+
+/**
  * The context used for transit operations
  */
 struct nn_sofi_egress_transit_context {
 
     /* The message in transit */
     struct nn_msg msg;
+
+    /* Helper data for the deallocator functions */
+    struct nn_sofi_egress_freedata freeptr[2];
+
+    /* Reference counter, used to deallocate the chunk
+       only when nobody is refering to it */
+    struct nn_atomic ref;
 
     /* This structure acts as a libfabric context */
     struct fi_context context;  
@@ -126,6 +152,21 @@ struct nn_sofi_egress_transit_context {
  */
 static void nn_sofi_mr_free( void *p, void *user )
 {
+    printf("OFI[S]: Free chunk helper called\n");
+    struct nn_sofi_egress_freedata * dat = user;
+    struct nn_sofi_egress_transit_context * ctx = dat->ctx;
+
+    /* Invalidate MR */
+    ofi_mr_invalidate( dat->mrm, dat->base, dat->len );
+
+    /* Chain free call */
+    dat->free_fn( p, dat->free_ptr );
+
+    /* Free only if not in use any more */
+    if (nn_atomic_dec(&ctx->ref, 1) == 1) {
+        nn_atomic_term(&ctx->ref);
+        nn_free(ctx);
+    }
 
 }
 
@@ -146,6 +187,7 @@ static int nn_sofi_post_egress_buffers( struct nn_sofi * self,
     ctx = nn_alloc( sizeof(struct nn_sofi_egress_transit_context),
         "sofi transit context" );
     nn_assert(ctx);
+    nn_atomic_init( &ctx->ref, 1 );
 
     /* Move message in context */
     nn_msg_mv(&ctx->msg, outmsg);
@@ -165,9 +207,28 @@ static int nn_sofi_post_egress_buffers( struct nn_sofi * self,
         msg.msg_iov = iov;
         msg.iov_count = 1;
 
-        /* TODO: Register custom deallocator function to hint memory 
-           manager when the chunk is freed. */
+        /* Notify memory registration manager when the chunk is deallocated */
+        if (iov[0].iov_len > NN_CHUNKREF_MAX) {
 
+            /* Keep dealloc information */
+            ctx->freeptr[0].ctx = ctx;
+            ctx->freeptr[0].mrm = &self->mrm_egress;
+            ctx->freeptr[0].base = iov[0].iov_base;
+            ctx->freeptr[0].len = iov[0].iov_len;
+
+            /* Replace free function */
+            ret = nn_chunk_replace_free_fn(
+                    nn_chunkref_getchunk(&outmsg->body),
+                    &nn_sofi_mr_free,
+                    &ctx->freeptr[0],
+                    &ctx->freeptr[0].free_fn,
+                    &ctx->freeptr[0].free_ptr
+                );
+
+            /* Increment ref counter if successful */
+            if (ret == 0) nn_atomic_inc(&ctx->ref, 1);
+
+        }
 
     } else {
 
@@ -179,8 +240,49 @@ static int nn_sofi_post_egress_buffers( struct nn_sofi * self,
         msg.msg_iov = iov;
         msg.iov_count = 2;
 
-        /* TODO: Register custom deallocator function to hint memory 
-           manager when the chunk is freed. */
+        /* Notify memory registration manager when the chunk is deallocated */
+        if (iov[0].iov_len > NN_CHUNKREF_MAX) {
+
+            /* Keep dealloc information */
+            ctx->freeptr[0].ctx = ctx;
+            ctx->freeptr[0].mrm = &self->mrm_egress;
+            ctx->freeptr[0].base = iov[0].iov_base;
+            ctx->freeptr[0].len = iov[0].iov_len;
+
+            /* Replace free function */
+            ret = nn_chunk_replace_free_fn(
+                    nn_chunkref_getchunk(&outmsg->body),
+                    &nn_sofi_mr_free,
+                    &ctx->freeptr[0],
+                    &ctx->freeptr[0].free_fn,
+                    &ctx->freeptr[0].free_ptr
+                );
+
+            /* Increment ref counter if successful */
+            if (ret == 0) nn_atomic_inc(&ctx->ref, 1);
+
+        }
+        if (iov[1].iov_len > NN_CHUNKREF_MAX) {
+
+            /* Keep dealloc information */
+            ctx->freeptr[1].ctx = ctx;
+            ctx->freeptr[1].mrm = &self->mrm_egress;
+            ctx->freeptr[1].base = iov[1].iov_base;
+            ctx->freeptr[1].len = iov[1].iov_len;
+
+            /* Replace free function */
+            ret = nn_chunk_replace_free_fn(
+                    nn_chunkref_getchunk(&outmsg->body),
+                    &nn_sofi_mr_free,
+                    &ctx->freeptr[1],
+                    &ctx->freeptr[1].free_fn,
+                    &ctx->freeptr[1].free_ptr
+                );
+
+            /* Increment ref counter if successful */
+            if (ret == 0) nn_atomic_inc(&ctx->ref, 1);
+
+        }
 
     }
 
@@ -223,7 +325,12 @@ static void nn_sofi_egress_handle( struct nn_sofi * self,
 
     /* Free message */
     nn_msg_term(&ctx->msg);
-    nn_free(ctx);
+
+    /* Free only if not in use any more */
+    if (nn_atomic_dec(&ctx->ref, 1) == 1) {
+        nn_atomic_term(&ctx->ref);
+        nn_free(ctx);
+    }
 
     /* Release back-pressure */
     c = nn_atomic_inc( &self->stageout_counter, 1);
@@ -279,7 +386,7 @@ static int nn_sofi_egress_stage( struct nn_sofi * self,
 
     /* If we are shutting down, don't accept staged messages */
     if (self->state == NN_SOFI_STATE_CLOSING)
-        return -EPIPE;
+        return -EINTR;
 
     /* Move the message to the local storage. */
     nn_msg_mv (&self->outmsg, msg);
@@ -849,9 +956,11 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
             switch (type) {
             case FI_SHUTDOWN:
 
+                _ofi_debug("OFI[S]: Remote endpoint disconnected!\n");
+
                 /* The connection is dropped from the remote end.
                    This is an unrecoverable error and we should terminate */
-                nn_sofi_critical_error( self, -EPIPE );
+                nn_sofi_critical_error( self, -EINTR );
                 return;
 
             default:

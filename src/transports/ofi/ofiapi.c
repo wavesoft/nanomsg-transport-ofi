@@ -143,6 +143,10 @@ static int ofi_match_fabric( const char * addr, enum ofi_fabric_addr_flags addf,
             }
         }
 
+        /* Found a choice? Pick */
+        if (f_pick)
+            break;
+
         /* Try next */
         f = f->next;
     };

@@ -62,6 +62,8 @@ static void nn_ofiw_poller_thread( void *arg )
             break;
         }
 
+        printf("--- Broken out of waitset (%i) ---\n", ret);
+
 #endif
 
         /* Enter critical region */
@@ -72,6 +74,8 @@ static void nn_ofiw_poller_thread( void *arg )
               it != nn_list_end (&self->workers);
               it = nn_list_next (&self->workers, it)) {
             worker = nn_cont (it, struct nn_ofiw, item);
+
+            printf("--- Worker %p\n", worker);
 
             /* Iterate over poll items */
             for (jt = nn_list_begin (&worker->items);
@@ -84,13 +88,14 @@ static void nn_ofiw_poller_thread( void *arg )
 
                     /* COMPLETION QUEUE MODE */
                     case NN_OFIW_ITEM_CQ:
+                        printf("--- Worker %p, CQ fd=%p\n", worker, item);
 
                         /* Read completion queue */
                         ret = fi_cq_read( (struct fid_cq *)item->fd,
                             &item->data.cq_entry, 1);
                         if (nn_slow(ret > 0)) {
-                            _ofi_debug("OFI[w]: Got CQ Event from worker=%p, fd=%p\n",
-                                worker, item);
+                            _ofi_debug("OFI[w]: Got CQ Event from src=%i, worker=%p, fd=%p\n",
+                                item->src, worker, item);
 
                             /* Feed event to the FSM */
                             nn_ctx_enter (worker->owner->ctx);
@@ -112,6 +117,9 @@ static void nn_ofiw_poller_thread( void *arg )
                             ret = fi_cq_readerr( (struct fid_cq *)item->fd,
                                 &item->data.cq_err_entry, 0);
 
+                            _ofi_debug("OFI[w]: Got CQ Error from src=%i, worker=%p, fd=%p\n",
+                                item->src, worker, item);
+
                             /* Feed event to the FSM */
                             nn_ctx_enter (worker->owner->ctx);
                             nn_mutex_unlock( &self->mutex );
@@ -132,6 +140,7 @@ static void nn_ofiw_poller_thread( void *arg )
 
                     /* EVENT QUEUE MODE */
                     case NN_OFIW_ITEM_EQ:
+                        printf("--- Worker %p, EQ fd=%p\n", worker, item);
 
                         /* Read event queue */
                         ret = fi_eq_read( (struct fid_eq *)item->fd, 
@@ -147,8 +156,8 @@ static void nn_ofiw_poller_thread( void *arg )
                                     break;
                                 }
 
-                                _ofi_debug("OFI[w]: Got EQ Error Event from worker=%p, fd=%p\n",
-                                    worker, item);
+                                _ofi_debug("OFI[w]: Got EQ Error Event from src=%i, worker=%p, fd=%p\n",
+                                    item->src, worker, item);
 
                                 /* Feed event to the FSM */
                                 nn_ctx_enter (worker->owner->ctx);
@@ -162,8 +171,8 @@ static void nn_ofiw_poller_thread( void *arg )
 
                             } else {
 
-                                _ofi_debug("OFI[w]: Got EQ Event from worker=%p, fd=%p\n",
-                                    worker, item);
+                                _ofi_debug("OFI[w]: Got EQ Event from src=%i, worker=%p, fd=%p\n",
+                                    item->src, worker, item);
 
                                 /* Feed event to the FSM */
                                 nn_ctx_enter (worker->owner->ctx);
@@ -184,6 +193,9 @@ static void nn_ofiw_poller_thread( void *arg )
 
                         }
                         break;
+
+                    default:
+                        printf("--- Worker %p, UNKNOWN fd=%p\n", worker, item);
 
                 }
 
@@ -234,7 +246,7 @@ int nn_ofiw_pool_init( struct nn_ofiw_pool * self, struct fid_fabric *fabric )
 
     /* Open a waitset */
     struct fi_wait_attr wait_attr = {
-        .wait_obj = FI_WAIT_NONE,
+        .wait_obj = FI_WAIT_UNSPEC,
         .flags = 0
     };
 

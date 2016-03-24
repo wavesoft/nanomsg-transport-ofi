@@ -149,7 +149,7 @@ static struct nn_optset *nn_ofi_optset (void)
 
     /*  Default values for OFI socket options (0=max). */
     optset->rx_queue_size = 2;
-    optset->tx_queue_size = 2;
+    optset->tx_queue_size = 0;
 
     return &optset->base;
 }

@@ -28,6 +28,7 @@
 
 #include "../../utils/err.h"
 #include "../../utils/cont.h"
+#include "../../utils/alloc.h"
 #include "../../utils/fast.h"
 #include "../../core/ep.h"
 #include "../../core/sock.h"
@@ -67,8 +68,9 @@
 #define NN_SOFI_KEEPALIVE_IN_TICKS       10
 
 /* Memory registration keys */
-#define NN_SOFI_MRM_SEND_KEY            0xF101
-#define NN_SOFI_MRM_RECV_KEY            0xF201
+#define NN_SOFI_MRM_SEND_KEY            0x0000
+#define NN_SOFI_MRM_RECV_KEY            0x0FFE
+#define NN_SOFI_MRM_KEY_PAGE            0x1000
 
 /* Forward Declarations */
 static void nn_sofi_handler (struct nn_fsm *self, int src, int type, 
@@ -106,6 +108,28 @@ static void nn_sofi_critical_error( struct nn_sofi * self, int error )
 /* ########################################################################## */
 
 /**
+ * The context used for transit operations
+ */
+struct nn_sofi_egress_transit_context {
+
+    /* The message in transit */
+    struct nn_msg msg;
+
+    /* This structure acts as a libfabric context */
+    struct fi_context context;  
+
+};
+
+/**
+ * Custom chunk deallocator function that also hints the memory registration 
+ * manager for the action.
+ */
+static void nn_sofi_mr_free( void *p, void *user )
+{
+
+}
+
+/**
  * Post output buffers (AKA "send data"), and return
  * the number of bytes sent or the error occured.
  */
@@ -115,7 +139,16 @@ static int nn_sofi_post_egress_buffers( struct nn_sofi * self,
     int ret;
     struct iovec iov [2];
     struct fi_msg msg;
+    struct nn_sofi_egress_transit_context * ctx;
     memset( &msg, 0, sizeof(msg) );
+
+    /* Allocate transit context */
+    ctx = nn_alloc( sizeof(struct nn_sofi_egress_transit_context),
+        "sofi transit context" );
+    nn_assert(ctx);
+
+    /* Move message in context */
+    nn_msg_mv(&ctx->msg, outmsg);
 
     /* Prepare SP Header */
     iov [0].iov_base = nn_chunkref_data (&outmsg->sphdr);
@@ -132,6 +165,10 @@ static int nn_sofi_post_egress_buffers( struct nn_sofi * self,
         msg.msg_iov = iov;
         msg.iov_count = 1;
 
+        /* TODO: Register custom deallocator function to hint memory 
+           manager when the chunk is freed. */
+
+
     } else {
 
         /* Prepare IOVs */
@@ -142,7 +179,13 @@ static int nn_sofi_post_egress_buffers( struct nn_sofi * self,
         msg.msg_iov = iov;
         msg.iov_count = 2;
 
+        /* TODO: Register custom deallocator function to hint memory 
+           manager when the chunk is freed. */
+
     }
+
+    /* Keep msg context */
+    msg.context = &ctx->context;
 
     /* Populate MR descriptions through MRM */
     ret = ofi_mr_describe( &self->mrm_egress, &msg );
@@ -168,9 +211,27 @@ static int nn_sofi_post_egress_buffers( struct nn_sofi * self,
 static void nn_sofi_egress_handle( struct nn_sofi * self,
     struct fi_cq_data_entry * cq_entry )
 {
+    int c;
+    struct nn_sofi_egress_transit_context * ctx;
 
     /* Release the MR resources associated with this MR */
     ofi_mr_release( &cq_entry->op_context );
+
+    /* Get operation context */
+    ctx = nn_cont(cq_entry->op_context, 
+        struct nn_sofi_egress_transit_context, context);
+
+    /* Free message */
+    nn_msg_term(&ctx->msg);
+    nn_free(ctx);
+
+    /* Release back-pressure */
+    c = nn_atomic_inc( &self->stageout_counter, 1);
+    if (c == 0) {
+        /* Operation was previously blocked because of back-pressure,
+           call `nn_pipebase_sent` to allow further transmission operations. */
+        nn_pipebase_sent( &self->pipebase );
+    }
 
 }
 
@@ -193,10 +254,17 @@ static int nn_sofi_egress_send( struct nn_sofi * self )
     /* Release staged data */
     self->stageout_state = NN_SOFI_STAGEOUT_STATE_IDLE;
 
-    /* TODO: Check for backpressure before calling the next fn */
+    /* Apply back-pressure */
+    if (nn_atomic_dec( &self->stageout_counter, 1) > 1) {
 
-    /* Data are sent, unlock pipebase for next request */
-    nn_pipebase_sent( &self->pipebase );
+        /* Data are sent, unlock pipebase for next request */
+        nn_pipebase_sent( &self->pipebase );
+
+    } else {
+        _ofi_debug("OFI[S]: Back-pressure from egress queue\n");
+    }
+
+    /* Success */
     return 0;
 }
 
@@ -214,7 +282,6 @@ static int nn_sofi_egress_stage( struct nn_sofi * self,
         return -EPIPE;
 
     /* Move the message to the local storage. */
-    nn_msg_term (&self->outmsg);
     nn_msg_mv (&self->outmsg, msg);
     self->stageout_state = NN_SOFI_STAGEOUT_STATE_STAGED;
 
@@ -236,7 +303,7 @@ static int nn_sofi_egress_stage( struct nn_sofi * self,
  */
 static int nn_sofi_egress_empty( struct nn_sofi * self )
 {
-    return 0;
+    return self->stageout_counter.n == 0;
 }
 
 /* ########################################################################## */
@@ -252,6 +319,23 @@ static int nn_sofi_egress_empty( struct nn_sofi * self )
  */
 static void nn_sofi_ingress_post( struct nn_sofi * self )
 {
+    int ret;
+    struct iovec iov[1];
+    struct fi_msg msg;
+    memset( &msg, 0, sizeof(msg) );
+
+    /* Prepare msg */
+    iov[0].iov_base = self->ingress_stage->chunk;
+    iov[0].iov_len = self->ingress_max_size;
+    msg.msg_iov = &iov[0];
+    msg.iov_count = 1;
+
+    /* Post receive buffers */
+    ret = ofi_recvmsg( self->ep, &msg, 0 );
+    if (ret) {
+        FT_PRINTERR("fi_mr_reg", ret);
+        nn_sofi_critical_error( self, ret );
+    }
 
 }
 
@@ -265,6 +349,22 @@ static void nn_sofi_ingress_post( struct nn_sofi * self )
 static int nn_sofi_ingress_handle( struct nn_sofi * self, 
     struct fi_cq_data_entry * cq_entry )
 {
+    struct nn_sofi_buffer * buf;
+
+    /* Swap ingress buffers */
+    buf = self->ingress_stage;
+    self->ingress_stage = self->ingress_process;
+    self->ingress_process = buf;
+
+    /* Prepare message */
+    nn_chunk_reset( buf->chunk, cq_entry->len );
+    nn_msg_init_chunk( &buf->msg, buf->chunk );
+    nn_chunk_addref( buf->chunk, 1 );
+
+    /* Raise event */
+    nn_pipebase_received( &self->pipebase );
+
+    /* Don't post buffers now */
     return -EAGAIN;
 }
 
@@ -274,6 +374,14 @@ static int nn_sofi_ingress_handle( struct nn_sofi * self,
 static int nn_sofi_ingress_fetch( struct nn_sofi * self,
     struct nn_msg * msg )
 {
+
+    /* Move message to output */
+    nn_msg_mv( msg, &self->ingress_process->msg );
+
+    /* Post receive buffers */
+    nn_sofi_ingress_post( self );
+
+    /* Return success */
     return 0;
 }
 
@@ -290,9 +398,11 @@ static int nn_sofi_ingress_empty( struct nn_sofi * self )
 /* ########################################################################## */
 
 /*  Initialize the state machine */
-void nn_sofi_init ( struct nn_sofi *self, struct ofi_domain *domain,
+void nn_sofi_init ( struct nn_sofi *self, struct ofi_domain *domain, int offset,
     struct nn_epbase *epbase, int src, struct nn_fsm *owner )
 {
+    const uint64_t mr_flags = FI_RECV | FI_READ | FI_REMOTE_WRITE;
+    uint64_t mr_page_offset = NN_SOFI_MRM_KEY_PAGE * offset;
     int ret;
 
     /* Initialize properties */
@@ -350,12 +460,48 @@ void nn_sofi_init ( struct nn_sofi *self, struct ofi_domain *domain,
     nn_epbase_getopt (epbase, NN_OFI, NN_OFI_RX_QUEUE_SIZE, &rx_queue, &opt_sz);
     nn_epbase_getopt (epbase, NN_SOL_SOCKET, NN_RCVBUF, &rx_msg_size, &opt_sz);
 
+    /* Put default values if set to AUTO */
+    if (tx_queue == 0) tx_queue = domain->fi->tx_attr->size;
+
     /* Get an OFI worker */
     self->worker = ofi_fabric_getworker( domain->parent, &self->fsm );
 
     /* Initialize egress MR Manager with 32 banks */
-    ofi_mr_init( &self->mrm_egress, self->domain, 32, OFI_MR_DIR_SEND, 
-        NN_SOFI_MRM_SEND_KEY );
+    struct ofi_mr_bank_attr mrattr_tx = {
+        .bank_count = tx_queue * 2,
+        .domain = self->domain,
+        .direction = OFI_MR_DIR_SEND,
+        .slab_count = tx_queue,
+        .slab_size = 256,
+        .base_key = mr_page_offset+NN_SOFI_MRM_SEND_KEY,
+    };
+    ofi_mr_init( &self->mrm_egress, &mrattr_tx );
+
+    /* Initialize throttle counters */
+    nn_atomic_init( &self->stageout_counter, tx_queue );
+
+    /* Initialize ingress double buffer chunks */
+    nn_chunk_alloc( rx_msg_size, 0, &self->ingress_buffers[0].chunk );
+    nn_chunk_alloc( rx_msg_size, 0, &self->ingress_buffers[1].chunk );
+
+    /* Register the chunks */
+    ret = fi_mr_reg(self->domain->domain, self->ingress_buffers[0].chunk, 
+        rx_msg_size, mr_flags, 0, mr_page_offset+NN_SOFI_MRM_RECV_KEY+0, 0, 
+        &self->ingress_buffers[0].mr, NULL);
+    if (ret) {
+        FT_PRINTERR("fi_mr_reg", ret);
+    }
+    ret = fi_mr_reg(self->domain->domain, self->ingress_buffers[1].chunk, 
+        rx_msg_size, mr_flags, 0, mr_page_offset+NN_SOFI_MRM_RECV_KEY+1, 0, 
+        &self->ingress_buffers[1].mr, NULL);
+    if (ret) {
+        FT_PRINTERR("fi_mr_reg", ret);
+    }
+
+    /* Setup ingress properties */
+    self->ingress_stage = &self->ingress_buffers[0];
+    self->ingress_process = &self->ingress_buffers[1];
+    self->ingress_max_size = rx_msg_size;
 
 }
 
@@ -449,6 +595,9 @@ void nn_sofi_term (struct nn_sofi *self)
 
     /* Stop timers */
     nn_timer_term (&self->timer_keepalive);
+
+    /* Stop throttles */
+    nn_atomic_term( &self->stageout_counter );
 
     /* ----------------------------------- */
     /*  NanoMSG Core Termination           */

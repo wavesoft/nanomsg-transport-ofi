@@ -53,10 +53,14 @@ struct ofi_mr_context;
 #define OFI_MR_BANK_NONVOLATILE     0x01
 #define OFI_MR_BANK_REGISTERED      0x02
 
+/* Slab flags */
+#define OFI_MR_SLAB_INUSE           0x01
+
 /* Maximum number of banks that can be managed in a single context.
    This limits the maximum number of vectors that can exist in a scatter-gather
    array. This number *MUST* be smaller than 255 */
 #define OFI_MR_MAX_BANKSPERCONTEXT  16
+#define OFI_MR_MAX_SLABSPERCONTEXT  16
 
 /**
  * The direction the MRM is used for. This defines the access
@@ -66,6 +70,31 @@ enum ofi_mr_direction {
     OFI_MR_DIR_SEND,  
     OFI_MR_DIR_RECV,
     OFI_MR_DIR_BOTH
+};
+
+/**
+ * OFI Memory Bank Attributes
+ */
+struct ofi_mr_bank_attr {
+
+    /* The domain were to perform MR operations */
+    struct ofi_domain *domain;
+
+    /* The number of banks to allocate */
+    size_t bank_count;
+
+    /* The number of slab slots to allocate */
+    size_t slab_count;
+
+    /* The size of each slab */
+    size_t slab_size;
+
+    /* The registration direction */
+    enum ofi_mr_direction direction;
+
+    /* The base key to assign to memory regions */
+    uint64_t base_key;
+
 };
 
 /**
@@ -95,48 +124,40 @@ struct ofi_mr_bank {
 };
 
 /**
+ * An OFI Memory Slab for small memory chunks
+ */
+struct ofi_mr_slab {
+
+    /* The base address */
+    void * addr;
+
+    /* The slab flags */
+    uint8_t flags;
+
+};
+
+/**
  * Core structure of the OFI Memory Region Manager
  */
 struct ofi_mr_manager {
 
     /* The available MR banks */
-    size_t size;
     struct ofi_mr_bank  *banks;
 
-    /* The domain associated with this MRM manager */
-    struct ofi_domain   *domain;
+    /* Attributes used to construct the manager */
+    struct ofi_mr_bank_attr attr;
 
     /* The access flags for the MR registration */
     uint64_t access_flags;
 
-    /* The base key for the MR registration */
-    uint64_t base_key;
-
     /* The age of the manager */
     uint32_t age;
 
-};
-
-/**
- * This structure is passed as a context to the `fi_msg` structure, when
- * it's managed by MRM. It carries various information for the in-transit
- * memory regions and should be given back to MRM when the Tx/Rx operation is
- * completed.
- */
-struct ofi_mr_context {
-
-    /* The original user's context */
-    void * user_context;
-
-    /* A dynamic array that will hold the pointers to the MR descriptors */
-    void ** descriptors;
-
-    /* How */
-    struct ofi_mr_bank *banks[ OFI_MR_MAX_BANKSPERCONTEXT ];
-    uint8_t size;
-
-    /* The structure used to make us a libfabric context */
-    struct fi_context context;
+    /* Properties for the slab logic */
+    struct nn_mutex slab_mutex;
+    struct ofi_mr_slab *slabs;
+    struct fid_mr *slab_mr;
+    void *slab_mem;
 
 };
 
@@ -148,8 +169,8 @@ struct ofi_mr_context {
  * Initialize the memory region manager with the specified capacity of memory
  * registration banks.
  */
-int ofi_mr_init( struct ofi_mr_manager * self, struct ofi_domain *domain, 
-    size_t size, enum ofi_mr_direction direction, uint64_t base_key );
+int ofi_mr_init( struct ofi_mr_manager * self, 
+    const struct ofi_mr_bank_attr * attr );
 
 /**
  * Clean-up the memory region manager resources

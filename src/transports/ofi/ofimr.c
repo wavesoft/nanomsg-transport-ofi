@@ -29,9 +29,85 @@
 #include "../../utils/cont.h"
 #include "../../utils/err.h"
 
+/**
+ * This structure is passed as a context to the `fi_msg` structure, when
+ * it's managed by MRM. It carries various information for the in-transit
+ * memory regions and should be given back to MRM when the Tx/Rx operation is
+ * completed.
+ */
+struct ofi_mr_context {
+
+    /* The original user's context */
+    void * user_context;
+
+    /* A dynamic array that will hold the pointers to the MR descriptors */
+    void ** descriptors;
+
+    /* Referred banks */
+    struct ofi_mr_bank *banks[ OFI_MR_MAX_BANKSPERCONTEXT ];
+    uint8_t nbanks;
+
+    /* Referred slabs */
+    struct ofi_mr_slab *slabs[ OFI_MR_MAX_SLABSPERCONTEXT ];
+    uint8_t nslabs;
+
+    /* The structure used to make us a libfabric context */
+    struct fi_context context;
+
+};
+
 /* ########################################################################## */
 /*  Helper Functions                                                          */
 /* ########################################################################## */
+
+/**
+ * Try to use the slab MR for this pointer
+ *
+ * This function will see if the data given are small enough to fit on the
+ * slab memory region. If yes, it will copy it to the appropriate buffer
+ * and return the pointer to it.
+ *
+ * Otherwise, this function will return -ENOMEM if there are no free slabs
+ * to accomodate this request, or -EFBIG if the data cannot fit on the slab
+ */
+static int ofi_mr_tryslab( struct ofi_mr_manager * self, void * ptr, size_t len, 
+	struct ofi_mr_slab ** outptr )
+{
+	int i;
+	struct ofi_mr_slab * slab;
+
+	/* Test size */
+	if (len > self->attr.slab_size)
+		return -EFBIG;
+
+	/* Find a free MR */
+	nn_mutex_lock(&self->slab_mutex);
+	for (i=0; i<self->attr.slab_count; ++i) {
+		slab = &self->slabs[i];
+
+		/* Check if this slab is free */
+		if (slab->flags == 0) {
+
+			/* Mark it as in use and release mutex to allow other
+			   searches while we copy the data */
+			slab->flags = OFI_MR_SLAB_INUSE;
+			nn_mutex_unlock(&self->slab_mutex);
+
+			/* Copy data into it */
+			memcpy( slab->addr, ptr, len );
+			*outptr = slab;
+
+			/* Found it */
+			return 0;
+
+		}
+	}
+
+	/* All slabs are busy */
+	nn_mutex_unlock(&self->slab_mutex);
+	return -ENOMEM;
+
+}
 
 /**
  * Unregister the memory region associated with the given bank
@@ -91,11 +167,11 @@ static int ofi_mr_register( struct ofi_mr_manager * self,
 	/* Calculate the index of this bank */
 	index = (int)(bank - &self->banks[0]);
 	_ofi_debug("OFI[M]: Registering base=%p, len=%lu, key=%04llx\n",
-		bank->base, bank->len, self->base_key+index);
+		bank->base, bank->len, self->attr.base_key + index + 1);
 
 	/* Try to register the memory region */
-    ret = fi_mr_reg(self->domain->domain, bank->base, bank->len, 
-        self->access_flags, 0, self->base_key + index, 0, 
+    ret = fi_mr_reg(self->attr.domain->domain, bank->base, bank->len, 
+        self->access_flags, 0, self->attr.base_key + index + 1, 0, 
         &bank->mr, NULL);
     if (ret) {
     	FT_PRINTERR("fi_mr_reg", ret);
@@ -124,7 +200,7 @@ static int ofi_mr_get_free_bank( struct ofi_mr_manager * self,
 	int i;
 
 	/* Initialize banks */
-	for (i=0; i<self->size; ++i) {
+	for (i=0; i<self->attr.bank_count; ++i) {
 		struct ofi_mr_bank * bank = &self->banks[i];
 		nn_mutex_lock(&bank->mutex);
 
@@ -157,7 +233,7 @@ static int ofi_mr_find_bank( struct ofi_mr_manager *self, void *ptr, size_t len,
 	struct ofi_mr_bank * oldest_bank = NULL;
 
 	/* Initialize banks */
-	for (i=0; i<self->size; ++i) {
+	for (i=0; i<self->attr.bank_count; ++i) {
 		struct ofi_mr_bank * bank = &self->banks[i];
 		void * bank_end = ((uint8_t*)bank->base) + bank->len;
 		nn_mutex_lock(&bank->mutex);
@@ -212,6 +288,8 @@ static int ofi_mr_find_bank( struct ofi_mr_manager *self, void *ptr, size_t len,
 		/* Register to the new region */
 		ret = ofi_mr_register( self, oldest_bank );
 		if (ret) {
+			FT_PRINTERR("ofi_mr_register", ret);
+			nn_mutex_unlock(&oldest_bank->mutex);
 			return ret;
 		}
 
@@ -237,23 +315,23 @@ static int ofi_mr_find_bank( struct ofi_mr_manager *self, void *ptr, size_t len,
  * Initialize the memory region manager with the specified capacity of memory
  * registration banks.
  */
-int ofi_mr_init( struct ofi_mr_manager * self, struct ofi_domain *domain, 
-	size_t size, enum ofi_mr_direction direction, uint64_t base_key )
+int ofi_mr_init( struct ofi_mr_manager * self, 
+	const struct ofi_mr_bank_attr * attr )
 {
 	int i;
+	int ret;
 
 	/* Allocate memory for the banks */
-	self->banks = nn_alloc( sizeof(struct ofi_mr_bank) * size, "ofi mrm banks");
+	self->banks = nn_alloc( sizeof(struct ofi_mr_bank) * attr->bank_count, 
+		"ofi mrm banks");
 	nn_assert(self->banks);
 
 	/* Initialize properties */
-	self->size = size;
+	memcpy( &self->attr, attr, sizeof(struct ofi_mr_bank_attr) );
 	self->age = 0;
-	self->domain = domain;
-	self->base_key = base_key;
 
 	/* Initialize mr access flags */
-	switch (direction) {
+	switch (attr->direction) {
 		case OFI_MR_DIR_SEND:
 			self->access_flags = FI_SEND | FI_WRITE | FI_REMOTE_READ;
 			break;
@@ -267,7 +345,7 @@ int ofi_mr_init( struct ofi_mr_manager * self, struct ofi_domain *domain,
 	}
 
 	/* Initialize banks */
-	for (i=0; i<self->size; ++i) {
+	for (i=0; i<self->attr.bank_count; ++i) {
 		struct ofi_mr_bank * bank = &self->banks[i];
 
 		/* Initialize properties */
@@ -279,6 +357,51 @@ int ofi_mr_init( struct ofi_mr_manager * self, struct ofi_domain *domain,
 
 		/* Initialize structures */
 		nn_mutex_init( &bank->mutex );
+	}
+
+	/* Initialize memory slabs for small memory regions */
+	if (attr->slab_count > 0) {
+
+		/* Allocate slab memory */
+		self->slab_mem = nn_alloc( attr->slab_count * attr->slab_size, 
+			"ofi mr slab memory" );
+		nn_assert( self->slab_mem );
+
+		/* Allocate slabs array */
+		self->slabs = nn_alloc( attr->slab_count * sizeof(struct ofi_mr_slab),
+			"ofi mr slab header");
+		nn_assert( self->slabs );
+
+		/* Initialize slabs array */
+		for (i=0; i<attr->slab_count; ++i) {
+
+			/* Get slab base address */
+			self->slabs[i].addr = 
+				(void*)( ((uint8_t*)self->slab_mem) + attr->slab_size * i );
+
+			/* Reset flags */
+			self->slabs[i].flags = 0;
+
+		}
+
+		/* Try to register the memory region */
+	    ret = fi_mr_reg(attr->domain->domain, self->slab_mem, 
+	    	attr->slab_count * attr->slab_size, self->access_flags, 0, 
+	    	attr->base_key, 0, &self->slab_mr, NULL);
+	    if (ret) {
+	    	FT_PRINTERR("fi_mr_reg", ret);
+	    	return ret;
+	    }
+
+	    /* Init mutex */
+	    nn_mutex_init( &self->slab_mutex );
+
+	} else {
+
+		/* Disable slab memory */
+		self->slab_mem = NULL;
+		self->slabs = NULL;
+
 	}
 
 	/* Success */
@@ -294,7 +417,7 @@ int ofi_mr_term( struct ofi_mr_manager * self )
 	int i;
 
 	/* Free banks */
-	for (i=0; i<self->size; ++i) {
+	for (i=0; i<self->attr.bank_count; ++i) {
 		struct ofi_mr_bank * bank = &self->banks[i];
 		nn_mutex_lock( &bank->mutex );
 
@@ -308,6 +431,14 @@ int ofi_mr_term( struct ofi_mr_manager * self )
 		nn_mutex_unlock( &bank->mutex );
 		nn_mutex_term( &bank->mutex );
 
+	}
+
+	/* Unregister slab resources */
+	if (self->attr.slab_count > 0) {
+		fi_close(&self->slab_mr->fid);
+		nn_free(self->slabs);
+		nn_free(self->slab_mem);
+		nn_mutex_term(&self->slab_mutex);
 	}
 
 	/* Free memory */
@@ -371,7 +502,7 @@ int ofi_mr_invalidate( struct ofi_mr_manager * self, void * base, size_t len )
 	void * ptr_end = ((uint8_t*)base) + len;
 
 	/* Invalidate intersecting banks */
-	for (i=0; i<self->size; ++i) {
+	for (i=0; i<self->attr.bank_count; ++i) {
 		struct ofi_mr_bank * bank = &self->banks[i];
 		nn_mutex_lock( &bank->mutex );
 		void * bank_end = ((uint8_t*)bank->base) + bank->len;
@@ -427,6 +558,7 @@ int ofi_mr_describe( struct ofi_mr_manager * self, struct fi_msg * msg )
 	int ret;
 	struct ofi_mr_context * context;
 	struct ofi_mr_bank * bank;
+	struct ofi_mr_slab * slab;
 
 	/* Perform some obvious tests */
 	if (msg->iov_count > OFI_MR_MAX_BANKSPERCONTEXT)
@@ -453,29 +585,48 @@ int ofi_mr_describe( struct ofi_mr_manager * self, struct fi_msg * msg )
 
 			/* Update context */
 			_ofi_debug("OFI[M]: IOV #%i : Empty\n", i);
-			context->banks[ context->size++ ] = NULL;
 			context->descriptors[i] = NULL;
 
 		} else {
 
-			/* Find or register a compatible bank */
-			ret = ofi_mr_find_bank( self, msg->msg_iov[i].iov_base, 
-				msg->msg_iov[i].iov_len, &bank );
-			if (ret) {
-				/* Unable to find a bank, clean what we did so far */
-				goto err;
+			/* Test if we can use a slab instead of a bank */
+			ret = ofi_mr_tryslab( self, msg->msg_iov[i].iov_base,
+				msg->msg_iov[i].iov_len, &slab);
+			if (nn_slow( ret == 0 )) {
+
+				/* Use slab */
+				context->slabs[ context->nslabs++ ] = slab;
+				
+				/* Override const to update iov address */
+				((struct iovec*)msg->msg_iov)[i].iov_base = slab->addr;
+
+				/* Use slab MR description */
+				context->descriptors[i] = fi_mr_desc( self->slab_mr );
+				_ofi_debug("OFI[M]: IOV #%i : Slab %p\n", i, slab);
+
+			} else {
+
+				/* Find or register a compatible bank */
+				ret = ofi_mr_find_bank( self, msg->msg_iov[i].iov_base, 
+					msg->msg_iov[i].iov_len, &bank );
+				if (ret) {
+					/* Unable to find a bank, clean what we did so far */
+					FT_PRINTERR("ofi_mr_find_bank", ret);
+					goto err;
+				}
+
+				/* Increment bank's reference counter */
+				_ofi_debug("OFI[M]: IOV #%i : Bank %p\n", i, bank);
+				bank->ref++;
+
+				/* Update context */
+				context->banks[ context->nbanks++ ] = bank;
+				context->descriptors[i] = fi_mr_desc( bank->mr );
+
+				/* Unlock bank mutex */
+				nn_mutex_unlock( &bank->mutex );
+
 			}
-
-			/* Increment bank's reference counter */
-			_ofi_debug("OFI[M]: IOV #%i : Bank %p\n", i, bank);
-			bank->ref++;
-
-			/* Update context */
-			context->banks[ context->size++ ] = bank;
-			context->descriptors[i] = fi_mr_desc( bank->mr );
-
-			/* Unlock bank mutex */
-			nn_mutex_unlock( &bank->mutex );
 
 		}
 
@@ -483,7 +634,9 @@ int ofi_mr_describe( struct ofi_mr_manager * self, struct fi_msg * msg )
 
 	/* Update message structures */
 	msg->desc = context->descriptors;
-	msg->context = context;
+	msg->context = &context->context;
+
+	_ofi_debug("OFI[M]: Acquired banks to ctx=%p\n", context);
 
 	/* Success */
 	return 0;
@@ -491,19 +644,27 @@ int ofi_mr_describe( struct ofi_mr_manager * self, struct fi_msg * msg )
 err:
 
 	/* Release the memory regions reserved */
-	for (i=0; i<context->size; i++) {
+	for (i=0; i<context->nbanks; ++i) {
 		bank = context->banks[i];
-
-		/* Acquire bank mutex */
-		nn_mutex_lock( &bank->mutex );
+		_ofi_debug("OFI[M]: Releasing bank=%p\n", bank);
 
 		/* Decrease reference counter */
+		nn_mutex_lock( &bank->mutex );
 		bank->ref--;
-
-		/* Release bank mutex */
 		nn_mutex_unlock( &bank->mutex );
 
 	}
+
+	/* Release the slabs reserved */
+	nn_mutex_lock( &self->slab_mutex );
+	for (i=0; i<context->nslabs; ++i) {
+		slab = context->slabs[i];
+		_ofi_debug("OFI[M]: Releasing slab=%p\n", slab);
+
+		/* Release flag */
+		slab->flags = 0;
+	}
+	nn_mutex_unlock( &self->slab_mutex );
 	
 	/* Failed */
 	return ret;
@@ -519,26 +680,36 @@ err:
 int ofi_mr_release( void ** context )
 {
 	int i;
-	struct ofi_mr_context * ctx = (struct ofi_mr_context *) *context;
+	struct ofi_mr_context * ctx;
 	struct ofi_mr_bank * bank;
+	struct ofi_mr_slab * slab;
+
+	/* Get context */
+    ctx = nn_cont( *context, struct ofi_mr_context, context);
+	_ofi_debug("OFI[M]: Releasing banks associated to ctx=%p\n", ctx);
 
 	/* Restore user context */
 	*context = ctx->user_context;
 
 	/* Decrement the reference counters to the memory banks */
-	for (i=0; i<ctx->size; i++) {
+	for (i=0; i<ctx->nbanks; i++) {
 		bank = ctx->banks[i];
-		if (!bank) continue;
-
-		/* Acquire bank mutex */
-		nn_mutex_lock( &bank->mutex );
+		_ofi_debug("OFI[M]: Releasing bank=%p\n", bank);
 
 		/* Decrease reference counter */
+		nn_mutex_lock( &bank->mutex );
 		bank->ref--;
-
-		/* Release bank mutex */
 		nn_mutex_unlock( &bank->mutex );
 
+	}
+
+	/* Release the slabs reserved */
+	for (i=0; i<ctx->nslabs; ++i) {
+		slab = ctx->slabs[i];
+		_ofi_debug("OFI[M]: Releasing slab=%p\n", slab);
+
+		/* Release flag */
+		slab->flags = 0;
 	}
 
 	/* Free memory */

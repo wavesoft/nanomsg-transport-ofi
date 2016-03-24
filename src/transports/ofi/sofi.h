@@ -55,12 +55,26 @@
                                         "\xce\x9a\x11\x7e\xce\x9a\x11\x7e" \
                                         "\xff\xff\xff\xff\xff\xff\xff\xff"
 
-/* Handshake information */
+/* Handshake information */ 
 struct nn_sofi_handshake
 {
 
     /* Protocol version */
     uint32_t                    version;
+
+};
+
+/* Ingress buffer, part of the ring buffer */
+struct nn_sofi_buffer {
+
+    /* Body chunk */
+    void * chunk;
+
+    /* Underlying message */
+    struct nn_msg msg;
+
+    /* Memory registration hint */
+    struct fid_mr *mr;
 
 };
 
@@ -90,11 +104,18 @@ struct nn_sofi {
     uint8_t                     ticks_in;
     uint8_t                     ticks_out;
 
-    /* Outgoing configuration */
+    /* Egress properties */
     struct nn_msg               outmsg;
     struct nn_mutex             stageout_mutex;
+    struct nn_atomic            stageout_counter;
     uint8_t                     stageout_state;
     uint8_t                     out_state;
+
+    /* Ingress properties */
+    struct nn_sofi_buffer       ingress_buffers[2];
+    struct nn_sofi_buffer       *ingress_stage;
+    struct nn_sofi_buffer       *ingress_process;
+    size_t                      ingress_max_size;
 
     /* Local and remote handshake information */
     struct nn_sofi_handshake    hs_local;
@@ -104,7 +125,7 @@ struct nn_sofi {
 };
 
 /*  Initialize the state machine */
-void nn_sofi_init (struct nn_sofi *self, struct ofi_domain *domain,
+void nn_sofi_init (struct nn_sofi *self, struct ofi_domain *domain, int offset,
     struct nn_epbase *epbase, int src, struct nn_fsm *owner);
 
 /* Start the state machine either in receiving or sending side */

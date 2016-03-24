@@ -381,7 +381,7 @@ static void nn_bofi_handler (struct nn_fsm *self, int src, int type,
 
                 /* Initialize SOFI */
                 _ofi_debug("OFI[B]: Initializing SOFI\n");
-                nn_sofi_init (sofi, bofi->domain, &bofi->epbase, 
+                nn_sofi_init (sofi, bofi->domain, 0, &bofi->epbase, 
                     NN_BOFI_SRC_SOFI, &bofi->fsm);
 
                 /* Tell SOFI to accept the endpoint connection */

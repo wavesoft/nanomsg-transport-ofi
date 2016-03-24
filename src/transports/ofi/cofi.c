@@ -88,7 +88,7 @@ static int nn_cofi_start_connecting( struct nn_cofi * self )
     int ret;
 
     /* Initialize a new SOFI */
-    nn_sofi_init( &self->sofi, self->domain,
+    nn_sofi_init( &self->sofi, self->domain, 0,
         &self->epbase, NN_COFI_SRC_SOFI, &self->fsm );
 
     /* Start SOFI */

@@ -128,9 +128,11 @@ struct nn_ofiw_item {
     /* Memory for temporary storing the CQ details
        until they are handled by the FSM */
     union { 
-        struct fi_eq_cm_entry   eq_entry;
-        struct fi_cq_err_entry  cq_err_entry;
+        struct fi_eq_entry      eq_entry;
+        struct fi_eq_cm_entry   eq_cm_entry;
+        struct fi_eq_err_entry  eq_err_entry;
         struct fi_cq_data_entry cq_entry;
+        struct fi_cq_err_entry  cq_err_entry;
     } data;
 
 };

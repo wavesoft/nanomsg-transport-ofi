@@ -43,6 +43,7 @@ static void nn_ofiw_poller_thread( void *arg )
     struct nn_ofiw_item *item;
     struct nn_ofiw *worker;
     struct nn_list_item *it, *jt;
+    ssize_t sret;
     int ret;
 
     struct fi_eq_cm_entry   eq_entry;
@@ -136,19 +137,46 @@ static void nn_ofiw_poller_thread( void *arg )
                         ret = fi_eq_read( (struct fid_eq *)item->fd, 
                             &event, &item->data.eq_entry, sizeof(item->data.eq_entry),0);
                         if (nn_slow(ret != -FI_EAGAIN)) {
-                            _ofi_debug("OFI[w]: Got EQ Event from worker=%p, fd=%p\n",
-                                worker, item);
 
-                            /* Feed event to the FSM */
-                            nn_ctx_enter (worker->owner->ctx);
-                            nn_mutex_unlock( &self->mutex );
-                            nn_fsm_feed (worker->owner, 
-                                item->src,
-                                event,
-                                &item->data.eq_entry
-                            );
-                            nn_ctx_leave (worker->owner->ctx);
+                            if (nn_slow( ret == -FI_EAVAIL )) {
 
+                                sret = fi_eq_readerr( (struct fid_eq *)item->fd,
+                                    &item->data.eq_err_entry, 0);
+                                if (nn_slow( sret != sizeof(struct fi_eq_err_entry) )) {
+                                    FT_PRINTERR("fi_eq_readerr", sret);
+                                    break;
+                                }
+
+                                _ofi_debug("OFI[w]: Got EQ Error Event from worker=%p, fd=%p\n",
+                                    worker, item);
+
+                                /* Feed event to the FSM */
+                                nn_ctx_enter (worker->owner->ctx);
+                                nn_mutex_unlock( &self->mutex );
+                                nn_fsm_feed (worker->owner, 
+                                    item->src,
+                                    -item->data.eq_err_entry.err,
+                                    &item->data.eq_err_entry
+                                );
+                                nn_ctx_leave (worker->owner->ctx);
+
+                            } else {
+
+                                _ofi_debug("OFI[w]: Got EQ Event from worker=%p, fd=%p\n",
+                                    worker, item);
+
+                                /* Feed event to the FSM */
+                                nn_ctx_enter (worker->owner->ctx);
+                                nn_mutex_unlock( &self->mutex );
+                                nn_fsm_feed (worker->owner, 
+                                    item->src,
+                                    event,
+                                    &item->data.eq_entry
+                                );
+                                nn_ctx_leave (worker->owner->ctx);
+
+
+                            }
 
                             /* Exit both loops, since workers list
                                might have been altered from the FSM handler! */

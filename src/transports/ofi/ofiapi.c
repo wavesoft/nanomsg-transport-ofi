@@ -144,8 +144,7 @@ static int ofi_match_fabric( const char * addr, enum ofi_fabric_addr_flags addf,
         }
 
         /* Try next */
-        f = fabrics->next;
-
+        f = f->next;
     };
 
     /* Check if nothing found */

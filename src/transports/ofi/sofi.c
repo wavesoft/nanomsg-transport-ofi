@@ -46,6 +46,10 @@
 #define NN_SOFI_OUT_STATE_IDLE           0
 #define NN_SOFI_OUT_STATE_ACTIVE         1
 
+/* FSM Handshake State */
+#define NN_SOFI_HS_STATE_LOCAL           0
+#define NN_SOFI_HS_STATE_FULL            1
+
 /* FSM Sources */
 #define NN_SOFI_SRC_ENDPOINT             1101
 #define NN_SOFI_SRC_KEEPALIVE_TIMER      1102
@@ -111,17 +115,34 @@ static int nn_sofi_post_egress_buffers( struct nn_sofi * self,
     int ret;
     struct iovec iov [2];
     struct fi_msg msg;
+    memset( &msg, 0, sizeof(msg) );
 
-    /* Prepare IOVs */
+    /* Prepare SP Header */
     iov [0].iov_base = nn_chunkref_data (&outmsg->sphdr);
     iov [0].iov_len = nn_chunkref_size (&outmsg->sphdr);
-    iov [1].iov_base = nn_chunkref_data (&outmsg->body);
-    iov [1].iov_len = nn_chunkref_size (&outmsg->body);
 
-    /* Prepare message */
-    memset( &msg, 0, sizeof(msg) );
-    msg.msg_iov = iov;
-    msg.iov_count = 2;
+    /* If SP Header is empty, use only 1 iov */
+    if (nn_fast( iov[0].iov_len == 0 )) {
+
+        /* Prepare IOVs */
+        iov [0].iov_base = nn_chunkref_data (&outmsg->body);
+        iov [0].iov_len = nn_chunkref_size (&outmsg->body);
+
+        /* Prepare message */
+        msg.msg_iov = iov;
+        msg.iov_count = 1;
+
+    } else {
+
+        /* Prepare IOVs */
+        iov [1].iov_base = nn_chunkref_data (&outmsg->body);
+        iov [1].iov_len = nn_chunkref_size (&outmsg->body);
+
+        /* Prepare message */
+        msg.msg_iov = iov;
+        msg.iov_count = 2;
+
+    }
 
     /* Populate MR descriptions through MRM */
     ret = ofi_mr_describe( &self->mrm_egress, &msg );
@@ -130,8 +151,14 @@ static int nn_sofi_post_egress_buffers( struct nn_sofi * self,
         return ret;
     }
 
-    /* TODO: Libfabric SEND */
+    /* Send Data */
+    ret = ofi_sendmsg( self->ep, &msg, 0 );
+    if (ret) {
+        FT_PRINTERR("ofi_sendmsg", ret);
+        return ret;
+    }
 
+    /* Return */
     return 0;
 }
 
@@ -275,6 +302,10 @@ void nn_sofi_init ( struct nn_sofi *self, struct ofi_domain *domain,
     self->stageout_state = NN_SOFI_STAGEOUT_STATE_IDLE;
     self->out_state = NN_SOFI_OUT_STATE_IDLE;
 
+    /* Initialize local handshake */
+    self->hs_local.version = 1;
+    self->hs_state = NN_SOFI_HS_STATE_LOCAL;
+
     /* ----------------------------------- */
     /*  NanoMSG Core Initialization        */
     /* ----------------------------------- */
@@ -343,9 +374,14 @@ int nn_sofi_start_accept( struct nn_sofi *self, struct fi_eq_cm_entry * conreq )
         return ret;
     }
 
-    /* Accept incoming connection */
-    ret = ofi_cm_accept( self->ep, 
-        NULL, 0 ); /* TODO: <<< Add handhsake information */
+    /* Receive remote handshake information */
+    memcpy( &self->hs_remote, conreq->data, sizeof(self->hs_remote) );
+    _ofi_debug("OFI[S]: Handshake with remote version=%i\n",
+        self->hs_remote.version);
+    self->hs_state = NN_SOFI_HS_STATE_FULL;
+
+    /* Accept incoming connection and send our side of the handshake */
+    ret = ofi_cm_accept( self->ep, &self->hs_local, sizeof(self->hs_local) );
     if (ret) {
         FT_PRINTERR("ofi_cm_accept", ret);
         return ret;
@@ -375,8 +411,8 @@ int nn_sofi_start_connect( struct nn_sofi *self )
     }
 
     /* Connect to the remote endpoint */
-    ret = ofi_cm_connect( self->ep, NULL,
-        NULL, 0 ); /* TODO: <<< Add handhsake information */
+    ret = ofi_cm_connect( self->ep, NULL, &self->hs_local, 
+        sizeof(self->hs_local) ); 
     if (ret) {
         FT_PRINTERR("ofi_cm_connect", ret);
         return ret;
@@ -560,6 +596,7 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
 {
     int ret;
     struct nn_sofi *self;
+    struct fi_eq_cm_entry * cq_cm_entry;
     struct fi_cq_data_entry * cq_entry;
     struct fi_cq_err_entry * cq_error;
 
@@ -585,7 +622,7 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
             case NN_FSM_START:
 
                 /* Wait for connection to be established before starting pipe */
-                _ofi_debug("OFI[S]: FSM started, waiting for CONNECTED event\n");
+                _ofi_debug("OFI[S]: FSM started, waiting for connection\n");
                 self->state = NN_SOFI_STATE_CONNECTING;
                 return;
 
@@ -610,6 +647,15 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
         case NN_SOFI_SRC_ENDPOINT | OFI_SRC_EQ:
             switch (type) {
             case FI_CONNECTED:
+
+                /* Receive remote handshake information */
+                cq_cm_entry = (struct fi_eq_cm_entry *) srcptr;
+                if (nn_slow( self->hs_state == NN_SOFI_HS_STATE_LOCAL )) {
+                    memcpy( &self->hs_remote, cq_cm_entry->data, 
+                        sizeof(self->hs_remote) );
+                    _ofi_debug("OFI[S]: Handshake with remote version=%i\n",
+                        self->hs_remote.version);
+                }
 
                 /* The connection is established, start pipe */
                 _ofi_debug("OFI[S]: Endpoint connected, starting pipebase\n");

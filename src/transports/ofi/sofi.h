@@ -24,6 +24,7 @@
 #define NN_SOFI_INCLUDED
 
 #include "ofiapi.h"
+#include "utils/ring.h"
 
 #include "../../transport.h"
 #include "../../aio/fsm.h"
@@ -89,12 +90,16 @@ struct nn_sofi {
     uint8_t                     ticks_in;
     uint8_t                     ticks_out;
 
-    /* Outgoing states */
+    /* Outgoing configuration */
+    struct nn_msg               outmsg;
+    struct nn_mutex             stageout_mutex;
     uint8_t                     stageout_state;
     uint8_t                     out_state;
 
-    /*  Message being sent at the moment. */
-    struct nn_msg outmsg;
+    /* Local and remote handshake information */
+    struct nn_sofi_handshake    hs_local;
+    struct nn_sofi_handshake    hs_remote;
+    int                         hs_state;
 
 };
 

@@ -790,3 +790,44 @@ void ofi_cm_shutdown( struct ofi_active_endpoint * ep )
 /*  Data Transmission Operations                                              */
 /* ########################################################################## */
 
+
+/**
+ * Perform send operation
+ *
+ * This operation will trigger a OFI_SRC_CQ_TX 
+ */
+int ofi_sendmsg( struct ofi_active_endpoint * ep, const struct fi_msg *msg,
+    uint64_t flags )
+{
+    int ret;
+
+    /* Try to send the message */
+    ret = fi_sendmsg( ep->ep, msg, flags );
+    if (ret) {
+        FT_PRINTERR("fi_sendmsg", ret);
+        return ret;
+    }
+
+    /* Success */
+    return 0;
+}
+
+/**
+ * Perform a receive operation
+ */
+int ofi_recvmsg( struct ofi_active_endpoint * ep, const struct fi_msg *msg,
+    uint64_t flags )
+{
+    int ret;
+
+    /* Try to send the message */
+    ret = fi_recvmsg( ep->ep, msg, flags );
+    if (ret) {
+        FT_PRINTERR("fi_recvmsg", ret);
+        return ret;
+    }
+
+    /* Success */
+    return 0;
+}
+

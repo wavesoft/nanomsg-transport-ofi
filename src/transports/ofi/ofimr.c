@@ -452,6 +452,7 @@ int ofi_mr_describe( struct ofi_mr_manager * self, struct fi_msg * msg )
 		if (msg->msg_iov[i].iov_len == 0) {
 
 			/* Update context */
+			_ofi_debug("OFI[M]: IOV #%i : Empty\n", i);
 			context->banks[ context->size++ ] = NULL;
 			context->descriptors[i] = NULL;
 
@@ -466,6 +467,7 @@ int ofi_mr_describe( struct ofi_mr_manager * self, struct fi_msg * msg )
 			}
 
 			/* Increment bank's reference counter */
+			_ofi_debug("OFI[M]: IOV #%i : Bank %p\n", i, bank);
 			bank->ref++;
 
 			/* Update context */

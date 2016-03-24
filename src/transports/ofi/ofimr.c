@@ -448,23 +448,34 @@ int ofi_mr_describe( struct ofi_mr_manager * self, struct fi_msg * msg )
 	/* Lookup memory regions */
 	for (i=0; i<msg->iov_count; ++i) {
 
-		/* Find or register a compatible bank */
-		ret = ofi_mr_find_bank( self, msg->msg_iov[i].iov_base, 
-			msg->msg_iov[i].iov_len, &bank );
-		if (ret) {
-			/* Unable to find a bank, clean what we did so far */
-			goto err;
+		/* If this is an empty iov, don't populate descriptor */
+		if (msg->msg_iov[i].iov_len == 0) {
+
+			/* Update context */
+			context->banks[ context->size++ ] = NULL;
+			context->descriptors[i] = NULL;
+
+		} else {
+
+			/* Find or register a compatible bank */
+			ret = ofi_mr_find_bank( self, msg->msg_iov[i].iov_base, 
+				msg->msg_iov[i].iov_len, &bank );
+			if (ret) {
+				/* Unable to find a bank, clean what we did so far */
+				goto err;
+			}
+
+			/* Increment bank's reference counter */
+			bank->ref++;
+
+			/* Update context */
+			context->banks[ context->size++ ] = bank;
+			context->descriptors[i] = fi_mr_desc( bank->mr );
+
+			/* Unlock bank mutex */
+			nn_mutex_unlock( &bank->mutex );
+
 		}
-
-		/* Increment bank's reference counter */
-		bank->ref++;
-
-		/* Update context */
-		context->banks[ context->size++ ] = bank;
-		context->descriptors[i] = fi_mr_desc( bank->mr );
-
-		/* Unlock bank mutex */
-		nn_mutex_unlock( &bank->mutex );
 
 	}
 
@@ -515,6 +526,7 @@ int ofi_mr_release( void ** context )
 	/* Decrement the reference counters to the memory banks */
 	for (i=0; i<ctx->size; i++) {
 		bank = ctx->banks[i];
+		if (!bank) continue;
 
 		/* Acquire bank mutex */
 		nn_mutex_lock( &bank->mutex );

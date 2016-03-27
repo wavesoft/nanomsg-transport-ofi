@@ -120,6 +120,7 @@ static void nn_cofi_critical_error( struct nn_cofi * self, int error )
     _ofi_debug("OFI[C]: Unrecoverable error #%i: %s\n", error,
         fi_strerror((int) -error));
 
+    nn_epbase_set_error( &self->epbase, error );
     nn_fsm_stop( &self->fsm );
 }
 
@@ -319,7 +320,6 @@ static void nn_cofi_handler (struct nn_fsm *fsm, int src, int type,
                 /* Disconnected from remote endpoint */
                 _ofi_debug("OFI[C]: SOFI Stopped error=%i. Restarting\n", 
                     self->sofi.error);
-                nn_epbase_set_error( &self->epbase, self->sofi.error );
 
                 /* TODO: Use back-off timer */
 

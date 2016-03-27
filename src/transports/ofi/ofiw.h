@@ -48,7 +48,7 @@
  * Turn on this flag if the libfabric provider you are using
  * supports waitsets in order to use the optimised version of the code.
  */
-#define OFI_USE_WAITSET
+// #define OFI_USE_WAITSET
 
 /**
  * Mask overlaied over the item ID 

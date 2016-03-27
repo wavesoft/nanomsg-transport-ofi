@@ -933,6 +933,16 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
                 return;
 
             default:
+            
+                /* CQ Error */
+                if (type < 0) {
+
+                    /* Unrecoverable comm error */
+                    nn_sofi_critical_error( self, type );
+                    return;
+
+                }
+
                 nn_fsm_bad_action (self->state, src, type);
             }
 
@@ -964,6 +974,16 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
                 return;
 
             default:
+
+                /* CQ Error */
+                if (type < 0) {
+
+                    /* Unrecoverable comm error */
+                    nn_sofi_critical_error( self, type );
+                    return;
+
+                }
+
                 nn_fsm_bad_action (self->state, src, type);
             }
 

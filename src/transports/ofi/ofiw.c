@@ -500,7 +500,7 @@ int nn_ofiw_remove( struct nn_ofiw * self, void * fd )
             nn_list_item_term( &item->item );
             nn_free( item );
             
-            /* Break */    
+            /* Break */
             break;
         }
 

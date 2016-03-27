@@ -88,6 +88,18 @@ static void nn_bofi_shutdown (struct nn_fsm *self, int src, int type,
 /* ########################################################################## */
 
 /**
+ * An unrecoverable error has occured
+ */
+static void nn_bofi_critical_error( struct nn_bofi * self, int error )
+{
+    _ofi_debug("OFI[B]: Unrecoverable error #%i: %s\n", error,
+        fi_strerror((int) -error));
+
+    nn_epbase_set_error( &self->epbase, error );
+    nn_fsm_stop( &self->fsm );
+}
+
+/**
  * Create a new passive endpoint and start listening for incoming connections
  * on the active fabric.
  */
@@ -328,7 +340,11 @@ static void nn_bofi_handler (struct nn_fsm *self, int src, int type,
             case NN_FSM_START:
 
                 /* Start accepting incoming connections */
-                nn_bofi_start_accepting( bofi );
+                ret = nn_bofi_start_accepting( bofi );
+                if (ret) {
+                    FT_PRINTERR("nn_bofi_start_accepting", ret);
+                    nn_bofi_critical_error( bofi, ret );
+                }
                 return;
 
             default:
@@ -399,7 +415,11 @@ static void nn_bofi_handler (struct nn_fsm *self, int src, int type,
                     nn_free( sofi );
 
                     /* Start waiting for a new incoming connection. */
-                    nn_bofi_start_accepting( bofi );
+                    ret = nn_bofi_start_accepting( bofi );
+                    if (ret) {
+                        FT_PRINTERR("nn_bofi_start_accepting", ret);
+                        nn_bofi_critical_error( bofi, ret );
+                    }
                     return;
 
                 }
@@ -413,7 +433,11 @@ static void nn_bofi_handler (struct nn_fsm *self, int src, int type,
                     nn_list_end (&bofi->sofis));
 
                 /* Start waiting for a new incoming connection. */
-                nn_bofi_start_accepting( bofi );
+                ret = nn_bofi_start_accepting( bofi );
+                if (ret) {
+                    FT_PRINTERR("nn_bofi_start_accepting", ret);
+                    nn_bofi_critical_error( bofi, ret );
+                }
                 return;
 
             default:

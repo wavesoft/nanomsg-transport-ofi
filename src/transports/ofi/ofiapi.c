@@ -474,14 +474,14 @@ int ofi_passive_endpoint_open( struct ofi_fabric * fabric, struct nn_ofiw * wrk,
     }
 
     /* Bind the EQ to the endpoint */
-    nn_mutex_lock( &wrk->mutex );
+    nn_mutex_lock( &wrk->parent->mutex );
     ret = fi_pep_bind(pep->ep, &pep->eq->fid, 0);
     if (ret) {
         FT_PRINTERR("fi_pep_bind", ret);
-        nn_mutex_unlock( &wrk->mutex );
+        nn_mutex_unlock( &wrk->parent->mutex );
         return ret;
     }
-    nn_mutex_unlock( &wrk->mutex );
+    nn_mutex_unlock( &wrk->parent->mutex );
 
     /* Success */
     *_pep = pep;
@@ -570,14 +570,14 @@ int ofi_active_endpoint_open( struct ofi_domain* domain, struct nn_ofiw* wrk,
     }
 
     /* Bind the EQ to the endpoint */
-    nn_mutex_lock( &wrk->mutex );
+    nn_mutex_lock( &wrk->parent->mutex );
     ret = fi_ep_bind(aep->ep, &aep->eq->fid, 0);
     if (ret) {
         FT_PRINTERR("fi_ep_bind[eq]", ret);
-        nn_mutex_unlock( &wrk->mutex );
+        nn_mutex_unlock( &wrk->parent->mutex );
         return ret;
     }
-    nn_mutex_unlock( &wrk->mutex );
+    nn_mutex_unlock( &wrk->parent->mutex );
 
     /* ###[ TX COMPLETION QUEUE ]############################################ */
 
@@ -602,14 +602,14 @@ int ofi_active_endpoint_open( struct ofi_domain* domain, struct nn_ofiw* wrk,
     }
 
     /* Bind the CQ to the endpoint */
-    nn_mutex_lock( &wrk->mutex );
+    nn_mutex_lock( &wrk->parent->mutex );
     ret = fi_ep_bind(aep->ep, &aep->cq_tx->fid, FI_TRANSMIT);
     if (ret) {
         FT_PRINTERR("fi_ep_bind[cq_tx]", ret);
-        nn_mutex_unlock( &wrk->mutex );
+        nn_mutex_unlock( &wrk->parent->mutex );
         return ret;
     }
-    nn_mutex_unlock( &wrk->mutex );
+    nn_mutex_unlock( &wrk->parent->mutex );
 
     /* ###[ RX COMPLETION QUEUE ]############################################ */
 
@@ -627,14 +627,14 @@ int ofi_active_endpoint_open( struct ofi_domain* domain, struct nn_ofiw* wrk,
     }
 
     /* Bind the CQ to the endpoint */
-    nn_mutex_lock( &wrk->mutex );
+    nn_mutex_lock( &wrk->parent->mutex );
     ret = fi_ep_bind(aep->ep, &aep->cq_rx->fid, FI_RECV);
     if (ret) {
         FT_PRINTERR("fi_ep_bind[cq_rx]", ret);
-        nn_mutex_unlock( &wrk->mutex );
+        nn_mutex_unlock( &wrk->parent->mutex );
         return ret;
     }
-    nn_mutex_unlock( &wrk->mutex );
+    nn_mutex_unlock( &wrk->parent->mutex );
 
     /* ###[ FINALIZATION ]################################################### */
 

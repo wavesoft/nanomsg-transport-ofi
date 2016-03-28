@@ -587,6 +587,7 @@ static int nn_sofi_ingress_fetch( struct nn_sofi * self,
     /* Check if we should post another nanomsg trigger */
     if (self->ingress_flags & NN_SOFI_IN_FLAG_NNLATER) {
         _ofi_debug("OFI[S]: Notifying NanoMsg (later)\n");
+        self->ingress_flags |= NN_SOFI_IN_FLAG_NNBUSY;
         nn_pipebase_received( &self->pipebase );
     }
 

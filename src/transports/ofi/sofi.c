@@ -505,6 +505,7 @@ static int nn_sofi_ingress_post( struct nn_sofi * self )
     memset( &msg, 0, sizeof(msg) );
     iov[0].iov_base = buf->chunk;
     iov[0].iov_len = self->ingress_buf_size;
+    msg.desc = &buf->mr_desc[0];
     msg.msg_iov = &iov[0];
     msg.iov_count = 1;
 
@@ -702,6 +703,10 @@ void nn_sofi_init ( struct nn_sofi *self, struct ofi_domain *domain, int offset,
         if (ret) {
             FT_PRINTERR("fi_mr_reg", ret);
         }
+
+        /* Get desc */
+        self->ingress_buffers[i].mr_desc[0] = 
+            fi_mr_desc(self->ingress_buffers[i].mr );
 
     }
 

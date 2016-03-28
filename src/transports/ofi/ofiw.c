@@ -51,6 +51,11 @@ static void nn_ofiw_poller_thread( void *arg )
     struct fi_eq_cm_entry   eq_entry;
     uint32_t                event;
 
+#ifndef OFI_USE_WAITSET
+    uint32_t                spinwait;
+    spinwait = 255;
+#endif
+
     _ofi_debug("OFI[w]: Starting OFIW pool thread\n");
     while (self->active) {
 
@@ -216,7 +221,10 @@ continue_outer:
 #ifndef OFI_USE_WAITSET
         
         /* Spinwait for short time */
-        usleep( 30 );
+        if (nn_slow( !--spinwait )) {
+            usleep( 200 );
+            spinwait = 255;
+        }
 
 #endif
 

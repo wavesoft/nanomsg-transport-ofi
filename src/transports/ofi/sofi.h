@@ -75,6 +75,9 @@ struct nn_sofi_buffer {
     /* Memory registration hint */
     struct fid_mr *mr;
 
+    /* MR Descriptor */
+    void * mr_desc[1];
+
 };
 
 /* Shared, Connected OFI FSM */

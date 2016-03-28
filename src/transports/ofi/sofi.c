@@ -166,7 +166,6 @@ static int nn_sofi_egress_empty( struct nn_sofi * self )
  */
 static void nn_sofi_mr_free( void *p, void *user )
 {
-    printf("OFI[S]: Free chunk helper called\n");
     struct nn_sofi_egress_freedata * dat = user;
     struct nn_sofi_egress_transit_context * ctx = dat->ctx;
 
@@ -671,6 +670,7 @@ void nn_sofi_init ( struct nn_sofi *self, struct ofi_domain *domain, int offset,
 
     /* Put default values if set to AUTO */
     if (tx_queue == 0) tx_queue = domain->fi->tx_attr->size;
+    if (rx_queue == 0) rx_queue = domain->fi->rx_attr->size;
 
     /* ####[ EGRESS ]#### */
 

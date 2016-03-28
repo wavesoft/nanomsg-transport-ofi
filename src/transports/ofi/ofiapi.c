@@ -375,7 +375,11 @@ int ofi_domain_open( struct ofi_fabric * F, struct fi_info *fi,
     nn_assert( item );
 
     /* Use fabric FI if fi missing */
-    if (!fi) fi = F->fi;
+    if (!fi) {
+        fi = fi_dupinfo( F->fi );
+    } else {
+        fi = fi_dupinfo( fi );
+    }
 
     /* Open new domain */
     ret = fi_domain(F->fabric, fi, &item->domain, NULL);
@@ -417,6 +421,7 @@ int ofi_domain_close( struct ofi_domain * domain )
     nn_list_item_term( &domain->item );
 
     /* Free memory */
+    fi_freeinfo( domain->fi );
     nn_free(domain);
 
     /* Success */

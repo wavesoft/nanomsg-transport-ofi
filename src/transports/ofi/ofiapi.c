@@ -535,10 +535,15 @@ int ofi_active_endpoint_open( struct ofi_domain* domain, struct nn_ofiw* wrk,
     nn_assert( aep );
 
     /* Use domain FI if fi missing */
-    if (!fi) fi = domain->fi;
+    if (!fi) {
+        aep->fi = fi_dupinfo( domain->fi );
+    } else {
+        aep->fi = fi_dupinfo( fi );
+        fi_freeinfo( fi );
+    }
 
     /* Open an active endpoint */
-    ret = fi_endpoint(domain->domain, fi, &aep->ep, context);
+    ret = fi_endpoint(domain->domain, aep->fi, &aep->ep, context);
     if (ret) {
         FT_PRINTERR("fi_endpoint", ret);
         nn_free(aep);
@@ -583,7 +588,7 @@ int ofi_active_endpoint_open( struct ofi_domain* domain, struct nn_ofiw* wrk,
 
     /* Prepare CQ attrib */
     struct fi_cq_attr cq_attr = {
-        .size = fi->tx_attr->size,
+        .size = aep->fi->tx_attr->size,
         .flags = 0,
         .format = FI_CQ_FORMAT_DATA,
         .wait_cond = FI_CQ_COND_NONE,
@@ -614,7 +619,7 @@ int ofi_active_endpoint_open( struct ofi_domain* domain, struct nn_ofiw* wrk,
     /* ###[ RX COMPLETION QUEUE ]############################################ */
 
     /* Prepare CQ attrib */
-    cq_attr.size = fi->rx_attr->size;
+    cq_attr.size = aep->fi->rx_attr->size;
 
     /* Open an event queue for this endpoint, through poller */
     ret = nn_ofiw_open_cq( wrk, src | OFI_SRC_CQ_RX, domain->domain, context, 
@@ -679,6 +684,7 @@ int ofi_active_endpoint_close( struct ofi_active_endpoint * aep )
     FT_CLOSE_FID( aep->ep );
 
     /* Free memory */
+    fi_freeinfo( aep->fi );
     nn_free( aep );
     return 0;
 }

@@ -20,6 +20,8 @@
     IN THE SOFTWARE.
 */
 
+#include <unistd.h>
+
 #include "ofiw.h"
 #include "ofi.h"
 
@@ -210,7 +212,13 @@ static void nn_ofiw_poller_thread( void *arg )
         nn_mutex_unlock( &self->mutex );
 
 continue_outer:
-        continue;
+
+#ifndef OFI_USE_WAITSET
+        
+        /* Spinwait for short time */
+        usleep( 30 );
+
+#endif
 
     }
     _ofi_debug("OFI[w]: Exiting OFIW pool thread\n");

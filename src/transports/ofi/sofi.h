@@ -111,10 +111,14 @@ struct nn_sofi {
     uint8_t                     out_state;
 
     /* Ingress properties */
-    struct nn_sofi_buffer       ingress_buffers[2];
-    struct nn_sofi_buffer       *ingress_stage;
-    struct nn_sofi_buffer       *ingress_process;
-    size_t                      ingress_max_size;
+    struct nn_sofi_buffer       *ingress_buffers;
+    int                         ingress_max;
+    int                         ingress_len;
+    int                         ingress_head;
+    int                         ingress_tail;
+    int                         ingress_active;
+    size_t                      ingress_buf_size;
+    uint8_t                     ingress_flags;
 
     /* Local and remote handshake information */
     struct nn_sofi_handshake    hs_local;

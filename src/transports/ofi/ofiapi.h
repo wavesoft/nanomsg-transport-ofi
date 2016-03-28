@@ -55,6 +55,9 @@ struct ofi_domain;
 #define MAX_DOMAIN_LEN  255
 #define MAX_SERVICE_LEN 16
 
+/* Use one domain per endpoint */
+#define OFI_DOMAIN_PER_EP
+
 /* ########################################################################## */
 /*  Global Macros                                                             */
 /* ########################################################################## */
@@ -265,6 +268,9 @@ struct ofi_active_endpoint {
     /* The domain this endpoint belongs to */
     struct ofi_domain   *domain;
 
+    /* The domain info */
+    struct fi_info      *fi;
+    
 };
 
 /**

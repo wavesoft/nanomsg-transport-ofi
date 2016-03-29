@@ -758,6 +758,7 @@ void nn_sofi_init ( struct nn_sofi *self, struct ofi_domain *domain, int offset,
 
     /* Get an OFI worker */
     self->worker = ofi_fabric_getworker( domain->parent, &self->fsm );
+    nn_ofiw_lock( self->worker );
 
     /* Initialize egress MR Manager with 32 banks */
     struct ofi_mr_bank_attr mrattr_tx = {
@@ -831,6 +832,9 @@ int nn_sofi_start_accept( struct nn_sofi *self, struct fi_eq_cm_entry * conreq )
         self->hs_remote.version);
     self->hs_state = NN_SOFI_HS_STATE_FULL;
 
+    /* Unlock worker */
+    nn_ofiw_unlock( self->worker );
+
     /* Accept incoming connection and send our side of the handshake */
     self->socket_state = NN_SOFI_STATE_CONNECTING;
     ret = ofi_cm_accept( self->ep, &self->hs_local, sizeof(self->hs_local) );
@@ -862,6 +866,9 @@ int nn_sofi_start_connect( struct nn_sofi *self )
         FT_PRINTERR("ofi_active_endpoint_open", ret);
         return ret;
     }
+
+    /* Unlock worker */
+    nn_ofiw_unlock( self->worker );
 
     /* Connect to the remote endpoint */
     self->socket_state = NN_SOFI_STATE_CONNECTING;

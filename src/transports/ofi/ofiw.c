@@ -80,6 +80,10 @@ static void nn_ofiw_poller_thread( void *arg )
               it = nn_list_next (&self->workers, it)) {
             worker = nn_cont (it, struct nn_ofiw, item);
 
+            /* Skip locked workers */
+            if (worker->locked)
+                continue;
+
             /* Iterate over poll items */
             for (jt = nn_list_begin (&worker->items);
                   jt != nn_list_end (&worker->items);
@@ -328,6 +332,7 @@ struct nn_ofiw * nn_ofiw_pool_getworker( struct nn_ofiw_pool * self,
 
     /* Initialize */
     worker->owner = owner;
+    worker->locked = 0;
     worker->parent = self;
     nn_list_init( &worker->items );
 
@@ -342,7 +347,17 @@ struct nn_ofiw * nn_ofiw_pool_getworker( struct nn_ofiw_pool * self,
     return worker;
 }
 
-/* Close a worker */
+/* Lock/Unlock functions */
+void nn_ofiw_lock( struct nn_ofiw * self )
+{
+    self->locked = 1;
+}
+void nn_ofiw_unlock( struct nn_ofiw * self )
+{
+    self->locked = 0;
+}
+
+/* Terminate a worker */
 void nn_ofiw_term( struct nn_ofiw * self )
 {
     struct nn_ofiw_pool * pool = self->parent;

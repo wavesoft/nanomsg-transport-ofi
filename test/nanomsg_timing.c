@@ -97,9 +97,6 @@ int run_tests( int sock, int direction, size_t msg_len )
 	// Calculate overall lattency
 	u_bw_finalize( &bw );
 
-	// Wait 500 ms (hack to flush queue)
-	usleep(500000);
-
 	// Display bandwidth/lattency results
 	u_bw_display( &bw );
 
@@ -115,11 +112,12 @@ int node0 ( const char *url, size_t msg_len )
     int len = msg_len;
 	assert (sock >= 0);
     assert (!nn_setsockopt(sock, NN_SOL_SOCKET, NN_RCVBUF, &len, sizeof(len)) );
-	assert (nn_bind (sock, url) >= 0);
+	assert (nn_bind(sock, url) >= 0);
 	printf("TIM: I will be receiving\n");
 	run_tests(sock, DIRECTION_IN, msg_len);
 	printf(">>> SHUTDOWN\n");
-	nn_shutdown (sock, 0);
+	nn_close (sock);
+	printf(">>> END\n");
 	return 0;
 }
 
@@ -132,11 +130,12 @@ int node1 ( const char *url, size_t msg_len )
     int len = msg_len;
 	assert (sock >= 0);
     assert (!nn_setsockopt(sock, NN_SOL_SOCKET, NN_SNDBUF, &len, sizeof(len)) );
-	assert (nn_connect (sock, url) >= 0);
+	assert (nn_connect(sock, url) >= 0);
 	printf("TIM: I will be sending\n");
 	run_tests(sock, DIRECTION_OUT, msg_len);
 	printf(">>> SHUTDOWN\n");
-	nn_shutdown (sock, 0);
+	nn_close (sock);
+	printf(">>> END\n");
 	return 0;
 }
 

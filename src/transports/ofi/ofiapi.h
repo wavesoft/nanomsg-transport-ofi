@@ -226,6 +226,9 @@ struct ofi_passive_endpoint {
     /* The fabric this endpoint belongs to */
     struct ofi_fabric   *fabric;
 
+    /* The endpoint info */
+    struct fi_info      *fi;
+
 };
 
 /**
@@ -268,7 +271,7 @@ struct ofi_active_endpoint {
     /* The domain this endpoint belongs to */
     struct ofi_domain   *domain;
 
-    /* The domain info */
+    /* The endpoint info */
     struct fi_info      *fi;
     
 };

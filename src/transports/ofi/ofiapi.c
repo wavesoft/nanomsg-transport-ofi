@@ -387,6 +387,7 @@ int ofi_domain_open( struct ofi_fabric * F, struct fi_info *fi,
     } else {
         fi = fi_dupinfo( fi );
     }
+    nn_assert( fi );
 
     /* Open new domain */
     ret = fi_domain(F->fabric, fi, &item->domain, NULL);
@@ -453,8 +454,12 @@ int ofi_passive_endpoint_open( struct ofi_fabric * fabric, struct nn_ofiw * wrk,
     pep = nn_alloc( sizeof(struct ofi_passive_endpoint), "ofi passive ep" );
     nn_assert( pep );
 
+    /* Copy fabric info */
+    pep->fi = fi_dupinfo( fabric->fi );
+    nn_assert( pep->fi );
+
     /* Open a passive endpoint */
-    ret = fi_passive_ep(fabric->fabric, fabric->fi, &pep->ep, context);
+    ret = fi_passive_ep(fabric->fabric, pep->fi, &pep->ep, context);
     if (ret) {
         FT_PRINTERR("fi_passive_ep", ret);
         nn_free(pep);
@@ -522,6 +527,7 @@ int ofi_passive_endpoint_close( struct ofi_passive_endpoint * pep )
     FT_CLOSE_FID( pep->ep );
 
     /* Free structures */
+    fi_freeinfo( pep->fi );
     nn_free( pep );
 
     /* Success */
@@ -553,6 +559,7 @@ int ofi_active_endpoint_open( struct ofi_domain* domain, struct nn_ofiw* wrk,
         aep->fi = fi_dupinfo( fi );
         fi_freeinfo( fi );
     }
+    nn_assert( aep->fi );
 
     /* Open an active endpoint */
     ret = fi_endpoint(domain->domain, aep->fi, &aep->ep, context);

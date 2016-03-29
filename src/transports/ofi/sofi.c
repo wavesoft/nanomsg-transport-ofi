@@ -1130,10 +1130,16 @@ static void nn_sofi_shutdown (struct nn_fsm *fsm, int src, int type,
             NN_SOFI_TIMEOUT_SHUTDOWN );
         return;
 
+    } else if (self->socket_state == NN_SOFI_STATE_CONNECTING) {
+
+        /* The socket never managed to connect */
+        _ofi_debug("OFI[S]: Socket never connected\n");
+
     } else if (self->socket_state != NN_SOFI_SOCKET_STATE_CLOSED) {
 
-        /* Wait for timeout or EQ event */
-        return;
+        _ofi_debug("OFI[S]: Unexpected socket_state=%i\n",
+            self->socket_state);
+        nn_fsm_bad_source (self->state, src, type);
 
     }
 

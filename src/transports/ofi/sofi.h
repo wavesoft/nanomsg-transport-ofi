@@ -87,6 +87,7 @@ struct nn_sofi {
     struct nn_fsm               fsm;
     struct nn_epbase            *epbase;
     int                         state;
+    int                         socket_state;
     int                         error;
 
     /* This member can be used by owner to keep individual sofis in a list. */
@@ -100,6 +101,9 @@ struct nn_sofi {
     struct ofi_mr_manager       mrm_egress;
     struct ofi_active_endpoint  *ep;
     struct nn_ofiw              *worker;
+
+    /* Shutdown timer */
+    struct nn_timer             timer_shutdown;
 
     /* Keepalive mechanism */
     struct nn_timer             timer_keepalive;

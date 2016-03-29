@@ -201,8 +201,12 @@ static void nn_cofi_destroy (struct nn_epbase *self)
     struct nn_cofi *cofi;
     cofi = nn_cont(self, struct nn_cofi, epbase);
 
-    /* Stop OFI (sofi also closes endpoint) */
+    /* Stop SOFI (sofi also closes endpoint) */
     nn_sofi_term(&cofi->sofi);
+
+    /* Clean-up OFI resources */
+    nn_ofiw_term( cofi->worker );
+    ofi_domain_close( cofi->domain );
 
     /* Cleanup other resources */
     nn_fsm_term (&cofi->fsm);

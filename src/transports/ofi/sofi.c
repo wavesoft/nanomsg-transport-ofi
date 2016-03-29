@@ -38,6 +38,7 @@
 #define NN_SOFI_STATE_CONNECTING         1002
 #define NN_SOFI_STATE_ACTIVE             1003
 #define NN_SOFI_STATE_CLOSING            1004
+#define NN_SOFI_STATE_CLOSED             1005
 
 /* FSM OUT State */
 #define NN_SOFI_STAGEOUT_STATE_IDLE      0
@@ -56,13 +57,22 @@
 #define NN_SOFI_HS_STATE_LOCAL           0
 #define NN_SOFI_HS_STATE_FULL            1
 
+/* Socket states */
+#define NN_SOFI_SOCKET_STATE_IDLE        0
+#define NN_SOFI_SOCKET_STATE_CONNECTING  1
+#define NN_SOFI_SOCKET_STATE_CONNECTED   2
+#define NN_SOFI_SOCKET_STATE_CLOSING     3
+#define NN_SOFI_SOCKET_STATE_CLOSED      4
+
 /* FSM Sources */
 #define NN_SOFI_SRC_ENDPOINT             1101
 #define NN_SOFI_SRC_KEEPALIVE_TIMER      1102
+#define NN_SOFI_SRC_SHUTDOWN_TIMER       1103
 
 /* Timeout values */
 #define NN_SOFI_TIMEOUT_HANDSHAKE        1000
 #define NN_SOFI_TIMEOUT_KEEPALIVE_TICK   500
+#define NN_SOFI_TIMEOUT_SHUTDOWN         500
 
 /* How many ticks to wait before sending
    an keepalive packet to remote end. */
@@ -331,19 +341,17 @@ static int nn_sofi_egress_post_buffers( struct nn_sofi * self,
 }
 
 /**
- * Acknowledge the fact that the ougoing data are sent
+ * Release data associated with egress context
  */
-static void nn_sofi_egress_handle( struct nn_sofi * self,
-    struct fi_cq_data_entry * cq_entry )
+static void nn_sofi_egress_release_context( void ** context )
 {
-    int c;
     struct nn_sofi_egress_transit_context * ctx;
 
     /* Release the MR resources associated with this MR */
-    ofi_mr_release( &cq_entry->op_context );
+    ofi_mr_release( context );
 
     /* Get operation context */
-    ctx = nn_cont(cq_entry->op_context, 
+    ctx = nn_cont(*context, 
         struct nn_sofi_egress_transit_context, context);
 
     /* Free message */
@@ -354,6 +362,30 @@ static void nn_sofi_egress_handle( struct nn_sofi * self,
         nn_atomic_term(&ctx->ref);
         nn_free(ctx);
     }
+}
+
+/**
+ * Handle an error egress event (mainly memory releasing)
+ */
+static void nn_sofi_egress_handle_error( struct nn_sofi * self,
+    struct fi_cq_err_entry * cq_entry )
+{
+
+    /* Release associated resources */
+    nn_sofi_egress_release_context( &cq_entry->op_context );
+
+}
+
+/**
+ * Acknowledge the fact that the ougoing data are sent
+ */
+static void nn_sofi_egress_handle( struct nn_sofi * self,
+    struct fi_cq_data_entry * cq_entry )
+{
+    int c;
+
+    /* Release associated resources */
+    nn_sofi_egress_release_context( &cq_entry->op_context );
 
     /* Release back-pressure */
     c = nn_atomic_inc( &self->stageout_counter, 1);
@@ -438,6 +470,24 @@ static int nn_sofi_egress_stage( struct nn_sofi * self,
 static int nn_sofi_ingress_empty( struct nn_sofi * self )
 {
     return (self->ingress_len == 0);
+}
+
+/**
+ * Discard active ingress buffer
+ */
+static void nn_sofi_ingress_discard( struct nn_sofi * self )
+{
+    /* Roll-back ingress head if we are correct */
+    if (self->ingress_active == self->ingress_head-1) {
+        self->ingress_head--;
+        if (self->ingress_head < 0)
+            self->ingress_head = self->ingress_max-1;
+
+        /* Decrement length */
+        self->ingress_len--;
+    } else {
+        _ofi_debug("OFI[S]: Head is not active, so skipping discard\n");
+    }
 }
 
 /**
@@ -537,6 +587,15 @@ static int nn_sofi_ingress_post( struct nn_sofi * self )
 
     /* Success */
     return 0;
+}
+
+/**
+ * Handle an ingress error event
+ */
+static void nn_sofi_ingress_handle_error( struct nn_sofi * self, 
+    struct fi_cq_err_entry * cq_entry )
+{
+    /* Nothing really to do here */
 }
 
 /**
@@ -660,6 +719,7 @@ void nn_sofi_init ( struct nn_sofi *self, struct ofi_domain *domain, int offset,
 
     /* Reset properties */
     self->state = NN_SOFI_STATE_IDLE;
+    self->socket_state = NN_SOFI_STATE_IDLE;
     self->error = 0;
 
     /* ----------------------------------- */
@@ -668,6 +728,8 @@ void nn_sofi_init ( struct nn_sofi *self, struct ofi_domain *domain, int offset,
 
     /* Initialize timers */
     nn_timer_init(&self->timer_keepalive, NN_SOFI_SRC_KEEPALIVE_TIMER,
+        &self->fsm);
+    nn_timer_init(&self->timer_shutdown, NN_SOFI_SRC_SHUTDOWN_TIMER,
         &self->fsm);
 
     /* Reset properties */
@@ -770,9 +832,11 @@ int nn_sofi_start_accept( struct nn_sofi *self, struct fi_eq_cm_entry * conreq )
     self->hs_state = NN_SOFI_HS_STATE_FULL;
 
     /* Accept incoming connection and send our side of the handshake */
+    self->socket_state = NN_SOFI_STATE_CONNECTING;
     ret = ofi_cm_accept( self->ep, &self->hs_local, sizeof(self->hs_local) );
     if (ret) {
         FT_PRINTERR("ofi_cm_accept", ret);
+        self->socket_state = NN_SOFI_STATE_CLOSED;
         return ret;
     }
 
@@ -800,10 +864,12 @@ int nn_sofi_start_connect( struct nn_sofi *self )
     }
 
     /* Connect to the remote endpoint */
+    self->socket_state = NN_SOFI_STATE_CONNECTING;
     ret = ofi_cm_connect( self->ep, NULL, &self->hs_local, 
         sizeof(self->hs_local) ); 
     if (ret) {
         FT_PRINTERR("ofi_cm_connect", ret);
+        self->socket_state = NN_SOFI_STATE_CLOSED;
         return ret;
     }
 
@@ -853,6 +919,7 @@ void nn_sofi_term (struct nn_sofi *self)
 
     /* Stop timers */
     nn_timer_term (&self->timer_keepalive);
+    nn_timer_term (&self->timer_shutdown);
 
     /* Stop throttles */
     nn_atomic_term( &self->stageout_counter );
@@ -863,9 +930,6 @@ void nn_sofi_term (struct nn_sofi *self)
 
     /* Terminate list item */
     nn_list_item_term (&self->item);
-
-    /* Outgoing message */
-    nn_msg_term (&self->outmsg);
 
     /* Cleanup components */
     nn_pipebase_term (&self->pipebase);
@@ -946,6 +1010,9 @@ static void nn_sofi_shutdown (struct nn_fsm *fsm, int src, int type,
     if (nn_slow (src == NN_FSM_ACTION && type == NN_FSM_STOP)) {
         _ofi_debug("OFI[S]: We are now closing\n");
 
+        /* Discard active ingress item */
+        nn_sofi_ingress_discard( self );
+
         /* If we are not connected, discard staged messages */
         if (self->state == NN_SOFI_STATE_CONNECTING) {
             _ofi_debug("OFI[S]: Discarding panding ingress & egress buffers\n");
@@ -960,15 +1027,56 @@ static void nn_sofi_shutdown (struct nn_fsm *fsm, int src, int type,
 
         /* Handle Tx Events. Other Tx events won't be accepted because our
            state is now in NN_SOFI_STATE_CLOSING */
-        _ofi_debug("OFI[S]: Handling drain egress event\n");
-        nn_sofi_egress_handle( self, cq_entry );
+        _ofi_debug("OFI[S]: Draining egress CQ event\n");
+        if (type == NN_OFIW_COMPLETED) {
+            /* Handle completed event */
+            cq_entry = (struct fi_cq_data_entry *) srcptr;
+            nn_sofi_egress_handle( self, cq_entry );
+
+        } else if (type == NN_OFIW_ERROR) {
+            /* Handle error event */
+            cq_error = (struct fi_cq_err_entry *) srcptr;
+            nn_sofi_egress_handle_error( self, cq_error );
+
+        } else {
+            nn_fsm_bad_action (self->state, src, type);
+
+        }
 
     } else if (nn_slow(src == (NN_SOFI_SRC_ENDPOINT | OFI_SRC_CQ_RX) )) {
 
         /* Handle Rx Events, but don't post new input buffers */
-        _ofi_debug("OFI[S]: Handling drain ingress event\n");
-        cq_entry = (struct fi_cq_data_entry *) srcptr;
-        nn_sofi_ingress_handle( self, cq_entry );
+        _ofi_debug("OFI[S]: Draining ingress CQ event\n");
+        if (type == NN_OFIW_COMPLETED) {
+            /* Handle completed event */
+            cq_entry = (struct fi_cq_data_entry *) srcptr;
+            nn_sofi_ingress_handle( self, cq_entry );
+
+        } else if (type == NN_OFIW_ERROR) {
+            /* Handle error event */
+            cq_error = (struct fi_cq_err_entry *) srcptr;
+            nn_sofi_ingress_handle_error( self, cq_error );
+
+        } else {
+            nn_fsm_bad_action (self->state, src, type);
+
+        }
+
+    } else if (nn_slow(src == (NN_SOFI_SRC_ENDPOINT | OFI_SRC_EQ) )) {
+
+        /* Handle endpoint events */
+        _ofi_debug("OFI[S]: Draining endpoint EQ event\n");
+        if (type == FI_SHUTDOWN) {
+
+            /* We can now safely close the socket */
+            _ofi_debug("OFI[S]: Socket is closed\n");
+            self->socket_state = NN_SOFI_SOCKET_STATE_CLOSED;
+            nn_timer_stop( &self->timer_shutdown );
+
+        } else {
+            /* We also accept error */
+            if (type > 0) nn_fsm_bad_action (self->state, src, type);
+        }
 
     } else if (nn_slow(src == NN_SOFI_SRC_KEEPALIVE_TIMER)) {
 
@@ -978,24 +1086,57 @@ static void nn_sofi_shutdown (struct nn_fsm *fsm, int src, int type,
 
         _ofi_debug("OFI[S]: Keepalive timer stopped\n");
 
+    } else if (nn_slow(src == NN_SOFI_SRC_SHUTDOWN_TIMER)) {
+
+        /* Wait for timer to stop */
+        if (nn_fast( type == NN_TIMER_TIMEOUT )) {
+            _ofi_debug("OFI[S]: Timed out waiting for shutdown EQ event\n");
+            self->socket_state = NN_SOFI_SOCKET_STATE_CLOSED;
+            nn_timer_stop( &self->timer_shutdown );
+            return;
+
+        } else if (nn_slow( type != NN_TIMER_STOPPED )) {
+            nn_fsm_bad_action (self->state, src, type);
+        }
+
     } else {
         nn_fsm_bad_source (self->state, src, type);
     }
+
 
     /* Wait for all outstanding transmissions or receptions to complete
        and for all resources to be stopped */
     if (!nn_sofi_egress_empty( self ) || 
         !nn_sofi_ingress_empty( self ) ||
-        !nn_timer_isidle( &self->timer_keepalive )) {
-        _ofi_debug("OFI[S]: Delaying close: egress=%i, ingress=%i, isidle=%i\n",
+        !nn_timer_isidle( &self->timer_keepalive ) ||
+        !nn_timer_isidle( &self->timer_shutdown) ) {
+        _ofi_debug("OFI[S]: Delaying close: egress=%i, ingress=%i, isidle=%i"
+            ",%i\n",
             nn_sofi_egress_empty( self ), nn_sofi_ingress_empty( self ),
-            nn_timer_isidle( &self->timer_keepalive ));
+            nn_timer_isidle( &self->timer_keepalive ),
+            nn_timer_isidle( &self->timer_shutdown ));
         return;
     }
 
-    /* Shutdown connection & close endpoint */
-    _ofi_debug("OFI[S]: Stopping endpoint\n");
-    ofi_cm_shutdown( self->ep );
+    if (self->socket_state == NN_SOFI_SOCKET_STATE_CONNECTED) {
+
+        /* Shutdown connection & close endpoint */
+        _ofi_debug("OFI[S]: Stopping endpoint\n");
+        ofi_cm_shutdown( self->ep );
+
+        /* Wait for the EQ event, or timeout */
+        self->socket_state = NN_SOFI_SOCKET_STATE_CLOSING;
+        nn_timer_start( &self->timer_shutdown, 
+            NN_SOFI_TIMEOUT_SHUTDOWN );
+        return;
+
+    } else if (self->socket_state != NN_SOFI_SOCKET_STATE_CLOSED) {
+        nn_fsm_bad_state (self->state, src, type);
+
+    }
+
+    /* Close endpoint */
+    _ofi_debug("OFI[S]: Closing endpoint\n");
     ofi_active_endpoint_close( self->ep );
 
     /* Stop nanomsg components */
@@ -1077,6 +1218,7 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
                 /* The connection is established, start pipe */
                 _ofi_debug("OFI[S]: Endpoint connected, starting pipebase\n");
                 self->state = NN_SOFI_STATE_ACTIVE;
+                self->socket_state = NN_SOFI_SOCKET_STATE_CONNECTED;
                 self->out_state = NN_SOFI_OUT_STATE_ACTIVE;
                 nn_pipebase_start( &self->pipebase );
 
@@ -1128,6 +1270,7 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
             case FI_SHUTDOWN:
 
                 _ofi_debug("OFI[S]: Remote endpoint disconnected!\n");
+                self->socket_state = NN_SOFI_STATE_CLOSED;
 
                 /* The connection is dropped from the remote end.
                    This is an unrecoverable error and we should terminate */
@@ -1178,6 +1321,7 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
                 cq_error = (struct fi_cq_err_entry *) srcptr;
 
                 /* Unrecoverable error while receiving data */
+                nn_sofi_ingress_handle_error( self, cq_error );
                 nn_sofi_critical_error( self, -cq_error->err );
 
                 return;
@@ -1207,6 +1351,7 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
                 cq_error = (struct fi_cq_err_entry *) srcptr;
 
                 /* Unrecoverable error while sending data */
+                nn_sofi_egress_handle_error( self, cq_error );
                 nn_sofi_critical_error( self, -cq_error->err );
                 return;
 

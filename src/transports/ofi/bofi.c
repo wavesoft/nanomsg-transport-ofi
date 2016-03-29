@@ -203,7 +203,7 @@ int nn_bofi_create (void *hint, struct nn_epbase **epbase,
  */
 static void nn_bofi_stop (struct nn_epbase *self)
 {
-    _ofi_debug("OFI[B]: Stopping OFI\n");
+    _ofi_debug("OFI[B]: Stopping BOFI\n");
 
     /* Get reference to the bofi structure */
     struct nn_bofi *bofi;
@@ -256,6 +256,7 @@ static void nn_bofi_shutdown (struct nn_fsm *self, int src, int type,
         bofi->state = NN_BOFI_STATE_STOPPING;
 
         /* Close the passive endpoint. */
+        _ofi_debug("OFI[B]: Stopping passive endpoint\n");
         ofi_passive_endpoint_close( bofi->pep );
 
         /* Send the stop event to all SOFIs */

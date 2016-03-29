@@ -100,8 +100,8 @@ static void nn_ofiw_poller_thread( void *arg )
                                 item->src, worker, item);
 
                             /* Feed event to the FSM */
-                            nn_ctx_enter (worker->owner->ctx);
                             nn_mutex_unlock( &self->mutex );
+                            nn_ctx_enter (worker->owner->ctx);
                             nn_fsm_feed (worker->owner, 
                                 item->src,
                                 NN_OFIW_COMPLETED,
@@ -123,8 +123,8 @@ static void nn_ofiw_poller_thread( void *arg )
                                 item->src, worker, item);
 
                             /* Feed event to the FSM */
-                            nn_ctx_enter (worker->owner->ctx);
                             nn_mutex_unlock( &self->mutex );
+                            nn_ctx_enter (worker->owner->ctx);
                             nn_fsm_feed (worker->owner, 
                                 item->src,
                                 NN_OFIW_ERROR,
@@ -161,8 +161,8 @@ static void nn_ofiw_poller_thread( void *arg )
                                     item->src, worker, item);
 
                                 /* Feed event to the FSM */
-                                nn_ctx_enter (worker->owner->ctx);
                                 nn_mutex_unlock( &self->mutex );
+                                nn_ctx_enter (worker->owner->ctx);
                                 nn_fsm_feed (worker->owner, 
                                     item->src,
                                     -item->data.eq_err_entry.err,
@@ -176,8 +176,8 @@ static void nn_ofiw_poller_thread( void *arg )
                                     item->src, worker, item);
 
                                 /* Feed event to the FSM */
-                                nn_ctx_enter (worker->owner->ctx);
                                 nn_mutex_unlock( &self->mutex );
+                                nn_ctx_enter (worker->owner->ctx);
                                 nn_fsm_feed (worker->owner, 
                                     item->src,
                                     event,
@@ -208,6 +208,7 @@ static void nn_ofiw_poller_thread( void *arg )
 
                 case FI_NN_SHUTDOWN:
                     /* Exit thread */
+                    _ofi_debug("OFI[w]: Got worker shutdown event, breaking\n");
                     break;
 
             }
@@ -305,7 +306,6 @@ int nn_ofiw_pool_term( struct nn_ofiw_pool * self )
     struct fi_eq_cm_entry entry = {0};
     ssize_t rd;
     rd = fi_eq_write( self->eq, FI_NN_SHUTDOWN, &entry, sizeof(entry), 0 );
-    nn_assert(rd != sizeof(entry));
 
     /* Stop thread */
     self->active = 0;
@@ -356,12 +356,11 @@ void nn_ofiw_term( struct nn_ofiw * self )
     nn_list_item_term( &self->item );
 
     /* Dispose all items */
-    for (it = nn_list_begin (&self->items);
-          it != nn_list_end (&self->items);
-          it = nn_list_next (&self->items, it)) {
+    while ((it = nn_list_begin (&self->items)) != nn_list_end (&self->items)) {
         item = nn_cont (it, struct nn_ofiw_item, item);
 
         /* Free structure */
+        nn_list_erase( &self->items, &item->item );
         nn_list_item_term( &item->item );
         nn_free( item );
 

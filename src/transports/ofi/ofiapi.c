@@ -214,9 +214,7 @@ int ofi_term( struct ofi_resources * R )
     struct nn_list_item *it;
 
     /* Close fabrics */
-    for (it = nn_list_begin (&R->fabrics);
-          it != nn_list_end (&R->fabrics);
-          it = nn_list_next (&R->fabrics, it)) {
+    while ((it = nn_list_begin (&R->fabrics)) != nn_list_end (&R->fabrics)) {
         item = nn_cont (it, struct ofi_fabric, item);
 
         /* Close domains */
@@ -329,9 +327,7 @@ int ofi_fabric_close( struct ofi_fabric * F )
         return 0;
 
     /* Close domains */
-    for (it = nn_list_begin (&F->domains);
-          it != nn_list_end (&F->domains);
-          it = nn_list_next (&F->domains, it)) {
+    while ((it = nn_list_begin (&F->domains)) != nn_list_end (&F->domains)) {
         item = nn_cont (it, struct ofi_domain, item);
 
         /* Close domains */
@@ -424,8 +420,6 @@ int ofi_domain_close( struct ofi_domain * domain )
 
     /* Remove domain from list */
     nn_list_erase (&domain->parent->domains, &domain->item);
-
-    /* Free nanomsg structures */
     nn_list_item_term( &domain->item );
 
     /* Free memory */
@@ -684,6 +678,9 @@ int ofi_active_endpoint_close( struct ofi_active_endpoint * aep )
     nn_ofiw_remove( aep->worker, aep->cq_tx );
     nn_ofiw_remove( aep->worker, aep->cq_rx );
 
+    /* Cancel I/O operations on the endpoint */
+    fi_cancel( &(aep->ep)->fid, NULL );
+
     /* Drain event queue */
     struct fi_eq_cm_entry entry;
     uint32_t event;
@@ -822,8 +819,6 @@ void ofi_cm_shutdown( struct ofi_active_endpoint * ep )
 {
     /* Shutdown */
     fi_shutdown( ep->ep, 0 );
-    /* Cancel I/O operations on the endpoint */
-    fi_cancel( &(ep->ep)->fid, NULL );
 }
 
 /* ########################################################################## */

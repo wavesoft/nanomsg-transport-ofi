@@ -112,6 +112,7 @@ struct nn_sofi {
     struct nn_atomic            stageout_counter;
     uint8_t                     stageout_state;
     uint8_t                     out_state;
+    int                         egress_max;
 
     /* Ingress properties */
     struct nn_sofi_buffer       *ingress_buffers;

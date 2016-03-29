@@ -104,7 +104,8 @@ static void nn_sofi_critical_error( struct nn_sofi * self, int error )
 {
     _ofi_debug("OFI[S]: Unrecoverable error #%i: %s\n", error,
         fi_strerror((int) -error));
-    /* Stop the FSM */
+    /* Set error & stop the FSM */
+    self->error = error;
     nn_fsm_stop( &self->fsm );
 }
 
@@ -157,7 +158,16 @@ struct nn_sofi_egress_transit_context {
  */
 static int nn_sofi_egress_empty( struct nn_sofi * self )
 {
-    return self->stageout_counter.n == 0;
+    return self->stageout_counter.n == self->egress_max;
+}
+
+/**
+ * Flush egress queue, discarding all pending messages
+ */
+static void nn_sofi_egress_flush( struct nn_sofi * self )
+{
+    /* Free possinble pending outmsg */
+    nn_msg_term( &self->outmsg );
 }
 
 /**
@@ -427,7 +437,17 @@ static int nn_sofi_egress_stage( struct nn_sofi * self,
  */
 static int nn_sofi_ingress_empty( struct nn_sofi * self )
 {
-    return (self->ingress_len > 0);
+    return (self->ingress_len == 0);
+}
+
+/**
+ * Flush ingress queue, discarding all pending messages
+ */
+static void nn_sofi_ingress_flush( struct nn_sofi * self )
+{
+    /* Discard all items on ingress buffer */
+    self->ingress_len = 0;
+    self->ingress_head = self->ingress_tail;
 }
 
 /**
@@ -690,6 +710,7 @@ void nn_sofi_init ( struct nn_sofi *self, struct ofi_domain *domain, int offset,
 
     /* Initialize throttle counters */
     nn_atomic_init( &self->stageout_counter, tx_queue );
+    self->egress_max = tx_queue;
 
     /* ####[ INGRESS ]#### */
 
@@ -799,6 +820,7 @@ int nn_sofi_start_connect( struct nn_sofi *self )
  */
 void nn_sofi_term (struct nn_sofi *self)
 {
+    int i, ret;
     _ofi_debug("OFI[S]: Cleaning-up SOFI\n");
 
     /* ----------------------------------- */
@@ -810,6 +832,20 @@ void nn_sofi_term (struct nn_sofi *self)
 
     /* Terminate MR manager */
     ofi_mr_term( &self->mrm_egress );
+
+    /* Free chunks */
+    for (i=0; i<self->ingress_max; ++i) {
+
+        /* Unregister memory */
+        ret = fi_close(&self->ingress_buffers[i].mr->fid);
+        if (ret) {
+            FT_PRINTERR("fi_mr_reg", ret);
+        }
+
+        /* Free chunk */
+        nn_chunk_free( self->ingress_buffers[i].chunk );
+
+    }
 
     /* ----------------------------------- */
     /*  NanoMsg Component Termination      */
@@ -910,6 +946,13 @@ static void nn_sofi_shutdown (struct nn_fsm *fsm, int src, int type,
     if (nn_slow (src == NN_FSM_ACTION && type == NN_FSM_STOP)) {
         _ofi_debug("OFI[S]: We are now closing\n");
 
+        /* If we are not connected, discard staged messages */
+        if (self->state == NN_SOFI_STATE_CONNECTING) {
+            _ofi_debug("OFI[S]: Discarding panding ingress & egress buffers\n");
+            nn_sofi_egress_flush( self );
+            nn_sofi_ingress_flush( self );
+        }
+
         /* Shutdown the endpoint */
         self->state = NN_SOFI_STATE_CLOSING;
 
@@ -944,6 +987,9 @@ static void nn_sofi_shutdown (struct nn_fsm *fsm, int src, int type,
     if (!nn_sofi_egress_empty( self ) || 
         !nn_sofi_ingress_empty( self ) ||
         !nn_timer_isidle( &self->timer_keepalive )) {
+        _ofi_debug("OFI[S]: Delaying close: egress=%i, ingress=%i, isidle=%i\n",
+            nn_sofi_egress_empty( self ), nn_sofi_ingress_empty( self ),
+            nn_timer_isidle( &self->timer_keepalive ));
         return;
     }
 

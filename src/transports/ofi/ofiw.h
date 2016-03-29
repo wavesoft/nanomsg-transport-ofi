@@ -155,6 +155,9 @@ struct nn_ofiw {
 
     /* === Local variables === */
 
+    /* Locked flag */
+    uint8_t                 locked;
+
     /* The parent pool */
     struct nn_ofiw_pool     *parent;
 
@@ -176,6 +179,10 @@ struct nn_ofiw * nn_ofiw_pool_getworker( struct nn_ofiw_pool * pool,
 
 /* Close a worker */
 void nn_ofiw_term( struct nn_ofiw * self );
+
+/* Lock/Unlock functions */
+void nn_ofiw_lock( struct nn_ofiw * self );
+void nn_ofiw_unlock( struct nn_ofiw * self );
 
 /* ####################################### */
 

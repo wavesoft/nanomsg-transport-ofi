@@ -538,6 +538,8 @@ int ofi_active_endpoint_open( struct ofi_domain* domain, struct nn_ofiw* wrk,
 {
     int ret;
     struct ofi_active_endpoint * aep;
+    struct fid_domain * ep_domain;
+    ep_domain = domain->domain;
 
     /* Allocate new endpoint */
     aep = nn_alloc( sizeof(struct ofi_active_endpoint), "ofi active ep" );
@@ -546,14 +548,33 @@ int ofi_active_endpoint_open( struct ofi_domain* domain, struct nn_ofiw* wrk,
     /* Use domain FI if fi missing */
     if (!fi) {
         aep->fi = fi_dupinfo( domain->fi );
+
     } else {
+
         aep->fi = fi_dupinfo( fi );
         fi_freeinfo( fi );
+
+#ifdef OFI_DOMAIN_PER_EP
+
+        /* Create new domain for this endpoint */
+        ret = fi_domain(domain->parent->fabric, aep->fi, &aep->fdomain, NULL);
+        if (ret) {
+            FT_PRINTERR("fi_domain", ret);
+            nn_free(aep);
+            *a = NULL;
+            return ret;
+        }
+
+        /* Use the new domain for the endpoint */
+        ep_domain = aep->fdomain;
+
+#endif
+
     }
     nn_assert( aep->fi );
 
     /* Open an active endpoint */
-    ret = fi_endpoint(domain->domain, aep->fi, &aep->ep, context);
+    ret = fi_endpoint(ep_domain, aep->fi, &aep->ep, context);
     if (ret) {
         FT_PRINTERR("fi_endpoint", ret);
         nn_free(aep);
@@ -604,7 +625,7 @@ int ofi_active_endpoint_open( struct ofi_domain* domain, struct nn_ofiw* wrk,
     };
 
     /* Open an event queue for this endpoint, through poller */
-    ret = nn_ofiw_open_cq( wrk, src | OFI_SRC_CQ_TX, domain->domain, context, 
+    ret = nn_ofiw_open_cq( wrk, src | OFI_SRC_CQ_TX, ep_domain, context, 
         &cq_attr, &aep->cq_tx );
     if (ret) {
         FT_PRINTERR("nn_ofiw_open_cq", ret);
@@ -626,7 +647,7 @@ int ofi_active_endpoint_open( struct ofi_domain* domain, struct nn_ofiw* wrk,
     cq_attr.size = aep->fi->rx_attr->size;
 
     /* Open an event queue for this endpoint, through poller */
-    ret = nn_ofiw_open_cq( wrk, src | OFI_SRC_CQ_RX, domain->domain, context, 
+    ret = nn_ofiw_open_cq( wrk, src | OFI_SRC_CQ_RX, ep_domain, context, 
         &cq_attr, &aep->cq_rx );
     if (ret) {
         FT_PRINTERR("nn_ofiw_open_cq", ret);
@@ -686,6 +707,13 @@ int ofi_active_endpoint_close( struct ofi_active_endpoint * aep )
 
     /* Close endpoint */
     FT_CLOSE_FID( aep->ep );
+
+#ifdef OFI_DOMAIN_PER_EP
+
+    /* Release endpoint domain */
+    FT_CLOSE_FID( aep->fdomain );
+
+#endif
 
     /* Free memory */
     fi_freeinfo( aep->fi );

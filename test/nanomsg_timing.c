@@ -97,7 +97,7 @@ int run_tests( int sock, int direction, size_t msg_len )
 	// Calculate overall lattency
 	u_bw_finalize( &bw );
 
-	// Wait 500 ms
+	// Wait 500 ms (hack to flush queue)
 	usleep(500000);
 
 	// Display bandwidth/lattency results

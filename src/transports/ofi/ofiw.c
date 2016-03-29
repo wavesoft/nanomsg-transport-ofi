@@ -226,6 +226,11 @@ continue_outer:
             spinwait = 255;
         }
 
+#else
+
+        /* We need a dummy instruction for the label */
+        continue;
+
 #endif
 
     }

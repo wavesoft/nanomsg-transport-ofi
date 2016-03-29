@@ -281,12 +281,19 @@ int ofi_fabric_open( struct ofi_resources * R, const char * address,
     /* Initialize properties */
     item->parent = R;
 
+    /* Initialize worker pool on this fabric */
+    ret = nn_ofiw_pool_init( &item->pool, item->fabric );
+    if (ret) {
+        FT_PRINTERR("nn_ofiw_pool_init", ret);
+        fi_freeinfo(item->fi);
+        nn_free(item);
+        *F = NULL;
+        return ret;
+    }
+
     /* Initialize structures */
     nn_list_init( &item->domains );
     nn_atomic_init( &item->ref, 1 );
-
-    /* Initialize worker pool on this fabric */
-    nn_ofiw_pool_init( &item->pool, item->fabric );
 
     /* Keep this fabric on list */
     nn_list_item_init( &item->item );

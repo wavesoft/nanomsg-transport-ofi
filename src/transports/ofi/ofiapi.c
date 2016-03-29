@@ -750,11 +750,14 @@ int ofi_cm_accept( struct ofi_active_endpoint * ep, const void *data,
     int ret;
 
     /* Accept the incoming connection */
+    nn_mutex_lock( &ep->worker->parent->mutex );
     ret = fi_accept(ep->ep, data, datalen);
     if (ret) {
+        nn_mutex_unlock( &ep->worker->parent->mutex );
         FT_PRINTERR("fi_accept", ret);
         return ret;
     }
+    nn_mutex_unlock( &ep->worker->parent->mutex );
 
     /* Success */
     return 0;
@@ -780,11 +783,14 @@ int ofi_cm_connect( struct ofi_active_endpoint * ep, void *addr,
         addr = ep->domain->fi->dest_addr;
 
     /* Connect to server */
+    nn_mutex_lock( &ep->worker->parent->mutex );
     ret = fi_connect(ep->ep, addr, data, datalen);
     if (ret) {
+        nn_mutex_unlock( &ep->worker->parent->mutex );
         FT_PRINTERR("fi_connect", ret);
         return ret;
     }
+    nn_mutex_unlock( &ep->worker->parent->mutex );
 
     /* Success */
     return 0;
@@ -798,11 +804,14 @@ int ofi_cm_reject( struct ofi_passive_endpoint * pep, struct fi_info * fi )
     int ret;
 
     /* Reject */
+    nn_mutex_lock( &pep->worker->parent->mutex );
     ret = fi_reject(pep->ep, fi->handle, NULL, 0);
     if (ret) {
+        nn_mutex_unlock( &pep->worker->parent->mutex );
         FT_PRINTERR("fi_reject", ret);
         return ret;
     }
+    nn_mutex_unlock( &pep->worker->parent->mutex );
 
     /* Success */
     return 0;

@@ -1134,6 +1134,7 @@ static void nn_sofi_shutdown (struct nn_fsm *fsm, int src, int type,
 
         /* The socket never managed to connect */
         _ofi_debug("OFI[S]: Socket never connected\n");
+        self->socket_state = NN_SOFI_STATE_CLOSED;
 
     } else if (self->socket_state != NN_SOFI_SOCKET_STATE_CLOSED) {
 

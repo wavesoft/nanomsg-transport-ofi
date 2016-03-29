@@ -1131,7 +1131,9 @@ static void nn_sofi_shutdown (struct nn_fsm *fsm, int src, int type,
         return;
 
     } else if (self->socket_state != NN_SOFI_SOCKET_STATE_CLOSED) {
-        nn_fsm_bad_state (self->state, src, type);
+
+        /* Wait for timeout or EQ event */
+        return;
 
     }
 
@@ -1237,7 +1239,7 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
 
             default:
             
-                /* CQ Error */
+                /* EQ Error */
                 if (type < 0) {
 
                     /* Unrecoverable comm error */
@@ -1279,7 +1281,7 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
 
             default:
 
-                /* CQ Error */
+                /* EQ Error */
                 if (type < 0) {
 
                     /* Unrecoverable comm error */

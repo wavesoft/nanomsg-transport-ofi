@@ -37,9 +37,6 @@
  */
 struct ofi_mr_context {
 
-    /* The original user's context */
-    void * user_context;
-
     /* A dynamic array that will hold the pointers to the MR descriptors */
     void ** descriptors;
 
@@ -50,9 +47,6 @@ struct ofi_mr_context {
     /* Referred slabs */
     struct ofi_mr_slab *slabs[ OFI_MR_MAX_SLABSPERCONTEXT ];
     uint8_t nslabs;
-
-    /* The structure used to make us a libfabric context */
-    struct fi_context context;
 
 };
 
@@ -553,7 +547,8 @@ int ofi_mr_invalidate( struct ofi_mr_manager * self, void * base, size_t len )
  * `ofi_mr_release` function in order to make the banks available for re-use!
  *
  */
-int ofi_mr_describe( struct ofi_mr_manager * self, struct fi_msg * msg )
+int ofi_mr_describe( struct ofi_mr_manager * self, struct fi_msg * msg,
+	void ** handle )
 {
 	int i;
 	int ret;
@@ -562,16 +557,15 @@ int ofi_mr_describe( struct ofi_mr_manager * self, struct fi_msg * msg )
 	struct ofi_mr_slab * slab;
 
 	/* Perform some obvious tests */
-	if (msg->iov_count > OFI_MR_MAX_BANKSPERCONTEXT)
+	if (msg->iov_count > OFI_MR_MAX_BANKSPERCONTEXT) {
+		*handle = NULL;
 		return -E2BIG;
+	}
 
 	/* Allocate a context for this operation */
 	context = nn_alloc( sizeof(struct ofi_mr_context), "ofi mr context" );
 	nn_assert( context );
 	memset( context, 0, sizeof(struct ofi_mr_context) );
-
-	/* Prepare properties */
-	context->user_context = msg->context;
 
 	/* Allocate the memory that will hold the memory region descriptors */
 	context->descriptors = nn_alloc( sizeof(void*) * msg->iov_count, 
@@ -635,7 +629,7 @@ int ofi_mr_describe( struct ofi_mr_manager * self, struct fi_msg * msg )
 
 	/* Update message structures */
 	msg->desc = context->descriptors;
-	msg->context = &context->context;
+	*handle = context;
 
 	_ofi_debug("OFI[M]: Acquired banks to ctx=%p\n", context);
 
@@ -668,6 +662,7 @@ err:
 	nn_mutex_unlock( &self->slab_mutex );
 	
 	/* Failed */
+	*handle = NULL;
 	return ret;
 }
 
@@ -678,7 +673,7 @@ err:
  * This function will also replace the passed context with the original
  * context the user specified in the `fi_msg` structure.
  */
-int ofi_mr_release( void ** context )
+int ofi_mr_release( void * handle )
 {
 	int i;
 	struct ofi_mr_context * ctx;
@@ -686,11 +681,8 @@ int ofi_mr_release( void ** context )
 	struct ofi_mr_slab * slab;
 
 	/* Get context */
-    ctx = nn_cont( *context, struct ofi_mr_context, context);
+    ctx = (struct ofi_mr_context *) handle;
 	_ofi_debug("OFI[M]: Releasing banks associated to ctx=%p\n", ctx);
-
-	/* Restore user context */
-	*context = ctx->user_context;
 
 	/* Decrement the reference counters to the memory banks */
 	for (i=0; i<ctx->nbanks; i++) {

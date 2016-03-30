@@ -157,8 +157,10 @@ static void nn_ofiw_poller_thread( void *arg )
                                     break;
                                 }
 
-                                _ofi_debug("OFI[w]: Got EQ Error Event from src=%i, worker=%p, fd=%p\n",
-                                    item->src, worker, item);
+                                _ofi_debug("OFI[w]: Got EQ Error Event from "
+                                    "src=%i, worker=%p, fd=%p, error=%i\n",
+                                    item->src, worker, item,
+                                    item->data.eq_err_entry.err);
 
                                 /* Feed event to the FSM */
                                 nn_mutex_unlock( &self->mutex );
@@ -172,8 +174,9 @@ static void nn_ofiw_poller_thread( void *arg )
 
                             } else {
 
-                                _ofi_debug("OFI[w]: Got EQ Event from src=%i, worker=%p, fd=%p\n",
-                                    item->src, worker, item);
+                                _ofi_debug("OFI[w]: Got EQ Event from src=%i, "
+                                    "worker=%p, fd=%p, event=%i\n",
+                                    item->src, worker, item, event);
 
                                 /* Feed event to the FSM */
                                 nn_mutex_unlock( &self->mutex );
@@ -345,10 +348,11 @@ struct nn_ofiw * nn_ofiw_pool_getworker( struct nn_ofiw_pool * self,
 /* Terminate a worker */
 void nn_ofiw_term( struct nn_ofiw * self )
 {
-    struct nn_ofiw_pool * pool = self->parent;
+    struct nn_ofiw_pool * pool;
     struct nn_ofiw_item *item;
     struct nn_list_item *it;
 
+    pool = self->parent;
     nn_mutex_lock( &pool->mutex );
 
     /* Remove from worker list */

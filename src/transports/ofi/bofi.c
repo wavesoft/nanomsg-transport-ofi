@@ -57,6 +57,10 @@ struct nn_bofi {
     struct ofi_domain *domain;
     struct ofi_passive_endpoint *pep;
 
+    /* Helper to find offsets */
+    uint8_t *sofi_offsets;
+    int sofi_offsets_size;
+
     /* The Connected OFIs */
     struct nn_list sofis;
 
@@ -100,6 +104,46 @@ static void nn_bofi_critical_error( struct nn_bofi * self, int error )
 }
 
 /**
+ * Find and return a free SOFI offset
+ */
+static int nn_bofi_new_sofi_offset( struct nn_bofi * self )
+{
+    int i;
+    int base;
+
+    /* Find a free sot */
+    for (i=0; i<self->sofi_offsets_size; ++i) {
+
+        /* If found a free, mark and return */
+        if (self->sofi_offsets[i] == 0) {
+            self->sofi_offsets[i] = 1;
+            return i;
+        }
+
+    }
+
+    /* Not found in the range, so allocate a few more */
+    base = self->sofi_offsets_size;
+    self->sofi_offsets_size += 64;
+    self->sofi_offsets = nn_realloc( self->sofi_offsets, 
+        sizeof(uint8_t) * self->sofi_offsets_size );
+    memset( &self->sofi_offsets[base], 0, sizeof(uint8_t)*64 );
+
+    /* Return new ID */
+    return base;
+}
+
+static void nn_bofi_free_sofi_offset( struct nn_bofi * self, int offset )
+{
+    int i;
+
+    /* Free slot */
+    nn_assert( offset < self->sofi_offsets_size );
+    self->sofi_offsets[offset] = 0;
+
+}
+
+/**
  * Create a new passive endpoint and start listening for incoming connections
  * on the active fabric.
  */
@@ -138,6 +182,9 @@ static void nn_bofi_reap_sofi(struct nn_bofi *self, struct nn_sofi *sofi)
 {
     /* The SOFI fsm was stopped */
     _ofi_debug("OFI[B]: Reaping stopped SOFI\n");
+
+    /* Release the offset */
+    nn_bofi_free_sofi_offset( self, sofi->offset );
 
     /* Remove item from list */
     nn_list_erase (&self->sofis, &sofi->item);
@@ -182,6 +229,11 @@ int nn_bofi_create (void *hint, struct nn_epbase **epbase,
     /* Initialize properties */
     self->pep = NULL;
     nn_list_init (&self->sofis);
+
+    /* Allocate a couple of offset slots */
+    self->sofi_offsets = nn_alloc( sizeof(uint8_t) * 64, "offsets" );
+    self->sofi_offsets_size = 64;
+    memset( self->sofi_offsets, 0, sizeof(uint8_t)*64 );
 
     /*  Initialise the root FSM. */
     nn_fsm_init_root(&self->fsm, 
@@ -306,27 +358,6 @@ static void nn_bofi_handler (struct nn_fsm *self, int src, int type,
     _ofi_debug("OFI[B]: nn_bofi_handler state=%i, src=%i, type=%i\n", 
         bofi->state, src, type);
 
-    /* Events from children SOFIs are handled separately */
-    if (src == NN_BOFI_SRC_SOFI) {
-        switch (type) {
-
-            case NN_SOFI_STOPPED:
-
-                /* The SOFI fsm was stopped */
-                _ofi_debug("OFI[B]: Marking SOFI as inactive\n");
-
-                /* Remove item from list */
-                nn_list_erase (&bofi->sofis, &sofi->item);
-
-                /* Cleanup */
-                nn_sofi_term(sofi);
-                nn_free(sofi);
-                return;
-
-        }
-        return;
-    }
-
     /* Handle new state */
     switch (bofi->state) {
 
@@ -365,7 +396,7 @@ static void nn_bofi_handler (struct nn_fsm *self, int src, int type,
 
         /* Reap dead SOFIs */
         case NN_BOFI_SRC_SOFI:
-        switch (type) {
+            switch (type) {
 
             /* A SOFI has stopped */
             case NN_SOFI_STOPPED:
@@ -373,7 +404,7 @@ static void nn_bofi_handler (struct nn_fsm *self, int src, int type,
                 /* Reap the dead SOFI */                
                 sofi = (struct nn_sofi *) srcptr;
                 nn_bofi_reap_sofi( bofi, sofi );
-                break;
+                return;
 
             default:
                 nn_fsm_bad_action (bofi->state, src, type);
@@ -398,7 +429,8 @@ static void nn_bofi_handler (struct nn_fsm *self, int src, int type,
 
                 /* Initialize SOFI */
                 _ofi_debug("OFI[B]: Initializing SOFI\n");
-                nn_sofi_init (sofi, bofi->domain, 0, &bofi->epbase, 
+                nn_sofi_init (sofi, bofi->domain, 
+                    nn_bofi_new_sofi_offset(bofi), &bofi->epbase, 
                     NN_BOFI_SRC_SOFI, &bofi->fsm);
 
                 /* Tell SOFI to accept the endpoint connection */

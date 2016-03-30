@@ -74,17 +74,21 @@
 #define NN_SOFI_TIMEOUT_KEEPALIVE_TICK   500
 #define NN_SOFI_TIMEOUT_SHUTDOWN         500
 
+/* Ingress Buffer Flags */
+#define NN_SOFI_INGRESS_ANCILLARY        1
+
 /* How many ticks to wait before sending
    an keepalive packet to remote end. */
-#define NN_SOFI_KEEPALIVE_OUT_TICKS      5
+#define NN_SOFI_KEEPALIVE_OUT_TICKS      2
 
 /* How many ticks to wait for any incoming
    message (assumed keepalive) from remote end */
-#define NN_SOFI_KEEPALIVE_IN_TICKS       10
+#define NN_SOFI_KEEPALIVE_IN_TICKS       4
 
 /* Memory registration keys */
-#define NN_SOFI_MRM_SEND_KEY            0x0000
-#define NN_SOFI_MRM_RECV_KEY            0x0FFE
+#define NN_SOFI_MRM_LOCAL_KEY           0x0000
+#define NN_SOFI_MRM_SEND_KEY            0x0001
+#define NN_SOFI_MRM_RECV_KEY            0x0FFD
 #define NN_SOFI_MRM_KEY_PAGE            0x1000
 
 /* Forward Declarations */
@@ -160,6 +164,15 @@ struct nn_sofi_egress_transit_context {
     /* This structure acts as a libfabric context */
     struct fi_context context;  
 
+    /* Pointer to SOFI */
+    struct nn_sofi * sofi;
+
+    /* List item for book-keeping */
+    struct nn_list_item item;
+
+    /* The MRM handle */
+    void * mr_handle;
+
 };
 
 
@@ -169,15 +182,6 @@ struct nn_sofi_egress_transit_context {
 static int nn_sofi_egress_empty( struct nn_sofi * self )
 {
     return self->stageout_counter.n == self->egress_max;
-}
-
-/**
- * Flush egress queue, discarding all pending messages
- */
-static void nn_sofi_egress_flush( struct nn_sofi * self )
-{
-    /* Free possinble pending outmsg */
-    nn_msg_term( &self->outmsg );
 }
 
 /**
@@ -195,9 +199,75 @@ static void nn_sofi_mr_free( void *p, void *user )
     /* Chain free call */
     dat->free_fn( p, dat->free_ptr );
 
-    /* Free only if not in use any more */
+    /* Free message context structure only if not used any more
+       (ex. other chunks that compose the message, or the OFI Tx operation) */
     if (nn_atomic_dec(&ctx->ref, 1) == 1) {
         nn_atomic_term(&ctx->ref);
+
+        /* SOFI Will become 'null' at SOFI shutdown (through book-keeping),
+           therefore we don't need to notify SOFI about this operation */
+        if (ctx->sofi) {
+            nn_list_erase(&ctx->sofi->egress_bookkeeping, &ctx->item);
+        }
+
+        nn_list_item_term(&ctx->item);
+        nn_free(ctx);
+    }
+
+}
+
+/**
+ * Send the contents of the aux buffer
+ */
+static int nn_sofi_egress_post_aux( struct nn_sofi * self, size_t len )
+{
+    int ret;
+    struct iovec iov [1];
+    struct fi_msg msg;
+
+    /* Prepare msg IOVs */
+    iov[0].iov_base = self->aux_buf;
+    iov[0].iov_len = len;
+    msg.msg_iov = iov;
+    msg.iov_count = 1;
+    msg.context = NULL;
+
+    /* Send data, without generating a CQ */
+    ret = ofi_sendmsg( self->ep, &msg, 0 );
+    if (ret) {
+        FT_PRINTERR("ofi_sendmsg", ret);
+        return ret;
+    }
+
+    /* Success */
+    return 0;
+
+}
+
+/**
+ * Release data associated with egress context
+ */
+static void nn_sofi_egress_release_context( 
+    struct nn_sofi_egress_transit_context * ctx )
+{
+
+    /* Release the MR resources associated with this context */
+    ofi_mr_release( ctx->mr_handle );
+
+    /* Free message */
+    nn_msg_term(&ctx->msg);
+
+    /* Free message context structure only if not used any more
+       (ex. other chunks that compose the message, or the OFI Tx operation) */
+    if (nn_atomic_dec(&ctx->ref, 1) == 1) {
+        nn_atomic_term(&ctx->ref);
+
+        /* sofi is defined only when the item is placed in bookkeeping */
+        if (ctx->sofi) {
+            nn_list_erase(&ctx->sofi->egress_bookkeeping, &ctx->item);
+        }
+
+        nn_list_item_term(&ctx->item);
         nn_free(ctx);
     }
 
@@ -221,6 +291,9 @@ static int nn_sofi_egress_post_buffers( struct nn_sofi * self,
         "sofi transit context" );
     nn_assert(ctx);
     nn_atomic_init( &ctx->ref, 1 );
+    nn_list_item_init( &ctx->item );
+    ctx->sofi = NULL;
+    ctx->mr_handle = NULL;
 
     /* Move message in context */
     nn_msg_mv(&ctx->msg, outmsg);
@@ -323,45 +396,28 @@ static int nn_sofi_egress_post_buffers( struct nn_sofi * self,
     msg.context = &ctx->context;
 
     /* Populate MR descriptions through MRM */
-    ret = ofi_mr_describe( &self->mrm_egress, &msg );
+    ret = ofi_mr_describe( &self->mrm_egress, &msg, &ctx->mr_handle );
     if (ret) {
         FT_PRINTERR("ofi_mr_describe", ret);
+        nn_sofi_egress_release_context( ctx );
         return ret;
     }
 
-    /* Send Data */
-    ret = ofi_sendmsg( self->ep, &msg, 0 );
+    /* Send Data and generate CQ upon completed transmission */
+    ret = ofi_sendmsg( self->ep, &msg, FI_COMPLETION | FI_DELIVERY_COMPLETE );
     if (ret) {
         FT_PRINTERR("ofi_sendmsg", ret);
+        nn_sofi_egress_release_context( ctx );
         return ret;
     }
+
+    /* Put context in book-keeping */
+    ctx->sofi = self;
+    nn_list_insert (&self->egress_bookkeeping, &ctx->item,
+        nn_list_end (&self->egress_bookkeeping));
 
     /* Return */
     return 0;
-}
-
-/**
- * Release data associated with egress context
- */
-static void nn_sofi_egress_release_context( void ** context )
-{
-    struct nn_sofi_egress_transit_context * ctx;
-
-    /* Release the MR resources associated with this MR */
-    ofi_mr_release( context );
-
-    /* Get operation context */
-    ctx = nn_cont(*context, 
-        struct nn_sofi_egress_transit_context, context);
-
-    /* Free message */
-    nn_msg_term(&ctx->msg);
-
-    /* Free only if not in use any more */
-    if (nn_atomic_dec(&ctx->ref, 1) == 1) {
-        nn_atomic_term(&ctx->ref);
-        nn_free(ctx);
-    }
 }
 
 /**
@@ -372,7 +428,9 @@ static void nn_sofi_egress_handle_error( struct nn_sofi * self,
 {
 
     /* Release associated resources */
-    nn_sofi_egress_release_context( &cq_entry->op_context );
+    struct nn_sofi_egress_transit_context * ctx = nn_cont( cq_entry->op_context, 
+        struct nn_sofi_egress_transit_context, context );
+    nn_sofi_egress_release_context( ctx );
 
 }
 
@@ -384,8 +442,13 @@ static void nn_sofi_egress_handle( struct nn_sofi * self,
 {
     int c;
 
+    /* Reset keepalive timer */
+    self->ticks_out = 0;
+
     /* Release associated resources */
-    nn_sofi_egress_release_context( &cq_entry->op_context );
+    struct nn_sofi_egress_transit_context * ctx = nn_cont( cq_entry->op_context, 
+        struct nn_sofi_egress_transit_context, context );
+    nn_sofi_egress_release_context( ctx );
 
     /* Release back-pressure */
     c = nn_atomic_inc( &self->stageout_counter, 1);
@@ -393,6 +456,30 @@ static void nn_sofi_egress_handle( struct nn_sofi * self,
         /* Operation was previously blocked because of back-pressure,
            call `nn_pipebase_sent` to allow further transmission operations. */
         nn_pipebase_sent( &self->pipebase );
+    }
+
+}
+
+/**
+ * Flush egress queue, discarding all pending messages
+ */
+static void nn_sofi_egress_flush( struct nn_sofi * self )
+{
+    struct nn_sofi_egress_transit_context *item;
+    struct nn_list_item *it;
+
+    /* Release all transit contexts in book-keeping */
+    while ((it = nn_list_begin (&self->egress_bookkeeping)) 
+              != nn_list_end (&self->egress_bookkeeping)) {
+        item = nn_cont (it, struct nn_sofi_egress_transit_context, item);
+
+        /* Release context */
+        nn_sofi_egress_release_context( item );
+        item->sofi = NULL;
+
+        /* Increment stageout counters */
+        nn_atomic_inc( &self->stageout_counter, 1 );
+
     }
 
 }
@@ -441,7 +528,7 @@ static int nn_sofi_egress_stage( struct nn_sofi * self,
 
     /* If we are shutting down, don't accept staged messages */
     if (self->state == NN_SOFI_STATE_CLOSING)
-        return -EINTR;
+        return 0;
 
     /* Move the message to the local storage. */
     nn_msg_mv (&self->outmsg, msg);
@@ -452,7 +539,8 @@ static int nn_sofi_egress_stage( struct nn_sofi * self,
         ret = nn_sofi_egress_send( self );
         if (ret) {
             FT_PRINTERR("nn_sofi_egress_send", ret);
-            return ret;
+            nn_sofi_critical_error( self, ret );
+            return 0;
         }
     }
 
@@ -470,24 +558,6 @@ static int nn_sofi_egress_stage( struct nn_sofi * self,
 static int nn_sofi_ingress_empty( struct nn_sofi * self )
 {
     return (self->ingress_len == 0);
-}
-
-/**
- * Discard active ingress buffer
- */
-static void nn_sofi_ingress_discard( struct nn_sofi * self )
-{
-    /* Roll-back ingress head if we are correct */
-    if (self->ingress_active == self->ingress_head-1) {
-        self->ingress_head--;
-        if (self->ingress_head < 0)
-            self->ingress_head = self->ingress_max-1;
-
-        /* Decrement length */
-        self->ingress_len--;
-    } else {
-        _ofi_debug("OFI[S]: Head is not active, so skipping discard\n");
-    }
 }
 
 /**
@@ -609,10 +679,40 @@ static void nn_sofi_ingress_handle( struct nn_sofi * self,
     struct fi_cq_data_entry * cq_entry )
 {
     struct nn_sofi_buffer * buf;
+
+    /* Reset keepalive timer */
+    self->ticks_in = 0;
  
     /* Get the posted ingress buffer */
     _ofi_debug("OFI[S]: Handling ingress=%i\n", self->ingress_active);
     buf = &self->ingress_buffers[self->ingress_active];
+
+    /* Check if this is a keepalive message */
+    if (cq_entry->len == NN_SOFI_KEEPALIVE_PACKET_LEN) {
+
+        /* Test payload contents */
+        if (memcmp( buf->chunk, NN_SOFI_KEEPALIVE_PACKET, 
+            NN_SOFI_KEEPALIVE_PACKET_LEN ) == 0)
+        {
+
+            /* Mark this buffer as ANCILLARY, which means that it
+               will get discarded when popped from queue. */
+            _ofi_debug("OFI[S]: Received KEEPALIVE\n");
+            buf->flags |= NN_SOFI_INGRESS_ANCILLARY;
+
+            /* TODO: Currently we don't have any back-pressure from
+                     nanomsg, so one push equals to one pop. This 
+                     means that wen we pop now, we will pop the posted
+                     and received message (the keepalive) */
+
+            nn_sofi_ingress_buf_tail( self );
+            buf->flags &= ~NN_SOFI_INGRESS_ANCILLARY;
+
+            return;
+
+        }
+
+    }
 
     /* Prepare message from the active staged buffer */
     nn_chunk_reset( buf->chunk, cq_entry->len );
@@ -641,12 +741,24 @@ static int nn_sofi_ingress_fetch( struct nn_sofi * self,
     struct nn_sofi_buffer * buf;
     nn_assert(nn_fast( self->ingress_flags & NN_SOFI_IN_FLAG_NNBUSY ));
 
-    /* Pick buffer to send */
-    ret = nn_sofi_ingress_buf_tail( self );
-    _ofi_debug("OFI[S]: Sending to nanomsg ingress=%i\n", ret);
-    buf = &self->ingress_buffers[ret];
+    /* Pick buffer to send, discarding ancillary packets */
+    while (1) {
+
+        /* Pick buffer from tail */
+        ret = nn_sofi_ingress_buf_tail( self );
+        buf = &self->ingress_buffers[ret];
+
+        /* Skip ancillary buffers */
+        if (buf->flags & NN_SOFI_INGRESS_ANCILLARY) {
+            buf->flags &= ~NN_SOFI_INGRESS_ANCILLARY;
+            _ofi_debug("OFI[S]: Skipping ancillary buffer\n");
+        } else {
+            break;
+        }
+    }
 
     /* Move message to output */
+    _ofi_debug("OFI[S]: Sending to nanomsg ingress=%i\n", ret);
     nn_msg_mv( msg, &buf->msg );
 
     /* If we have a POSTLATER flag, post now */
@@ -695,6 +807,7 @@ void nn_sofi_init ( struct nn_sofi *self, struct ofi_domain *domain, int offset,
     /* Initialize properties */
     self->domain = domain;
     self->ep = NULL;
+    self->offset = offset;
     self->epbase = epbase;
     self->stageout_state = NN_SOFI_STAGEOUT_STATE_IDLE;
     self->out_state = NN_SOFI_OUT_STATE_IDLE;
@@ -754,6 +867,21 @@ void nn_sofi_init ( struct nn_sofi *self, struct ofi_domain *domain, int offset,
     if (tx_queue == 0) tx_queue = domain->fi->tx_attr->size;
     if (rx_queue == 0) rx_queue = domain->fi->rx_attr->size;
 
+    /* ####[ ANCILLARY ]#### */
+
+    /* Register ancillary data */
+    ret = fi_mr_reg(self->domain->domain, self->aux_buf, NN_SOFI_ANCILLARY_SIZE, 
+        FI_RECV| FI_READ| FI_REMOTE_WRITE| FI_SEND| FI_WRITE| FI_REMOTE_READ, 
+        0, mr_page_offset+NN_SOFI_MRM_LOCAL_KEY, 0, &self->aux_mr, NULL);
+    if (ret) {
+        FT_PRINTERR("fi_mr_reg", ret);
+    }
+
+    /* Currently AUX buffer is only used for keepalive message,
+       so for optimisation reasons, write it's contents once now */
+    memcpy( self->aux_buf, NN_SOFI_KEEPALIVE_PACKET, 
+        NN_SOFI_KEEPALIVE_PACKET_LEN );
+
     /* ####[ EGRESS ]#### */
 
     /* Get an OFI worker */
@@ -773,6 +901,9 @@ void nn_sofi_init ( struct nn_sofi *self, struct ofi_domain *domain, int offset,
     /* Initialize throttle counters */
     nn_atomic_init( &self->stageout_counter, tx_queue );
     self->egress_max = tx_queue;
+
+    /* Bookkeeping for in-transit messages */
+    nn_list_init( &self->egress_bookkeeping );
 
     /* ####[ INGRESS ]#### */
 
@@ -797,6 +928,9 @@ void nn_sofi_init ( struct nn_sofi *self, struct ofi_domain *domain, int offset,
         /* Get desc */
         self->ingress_buffers[i].mr_desc[0] = 
             fi_mr_desc(self->ingress_buffers[i].mr );
+
+        /* Reset flags */
+        self->ingress_buffers[i].flags = 0;
 
     }
 
@@ -836,7 +970,7 @@ int nn_sofi_start_accept( struct nn_sofi *self, struct fi_eq_cm_entry * conreq )
     ret = ofi_cm_accept( self->ep, &self->hs_local, sizeof(self->hs_local) );
     if (ret) {
         FT_PRINTERR("ofi_cm_accept", ret);
-        self->socket_state = NN_SOFI_STATE_CLOSED;
+        self->socket_state = NN_SOFI_SOCKET_STATE_CLOSED;
         return ret;
     }
 
@@ -869,7 +1003,7 @@ int nn_sofi_start_connect( struct nn_sofi *self )
         sizeof(self->hs_local) ); 
     if (ret) {
         FT_PRINTERR("ofi_cm_connect", ret);
-        self->socket_state = NN_SOFI_STATE_CLOSED;
+        self->socket_state = NN_SOFI_SOCKET_STATE_CLOSED;
         return ret;
     }
 
@@ -913,6 +1047,12 @@ void nn_sofi_term (struct nn_sofi *self)
 
     }
 
+    /* Unregister ancillary MR */
+    ret = fi_close(&self->aux_mr->fid);
+    if (ret) {
+        FT_PRINTERR("fi_mr_reg", ret);
+    }
+
     /* ----------------------------------- */
     /*  NanoMsg Component Termination      */
     /* ----------------------------------- */
@@ -923,6 +1063,9 @@ void nn_sofi_term (struct nn_sofi *self)
 
     /* Stop throttles */
     nn_atomic_term( &self->stageout_counter );
+
+    /* Stop lists */
+    nn_list_term( &self->egress_bookkeeping );
 
     /* ----------------------------------- */
     /*  NanoMSG Core Termination           */
@@ -1010,14 +1153,18 @@ static void nn_sofi_shutdown (struct nn_fsm *fsm, int src, int type,
     if (nn_slow (src == NN_FSM_ACTION && type == NN_FSM_STOP)) {
         _ofi_debug("OFI[S]: We are now closing\n");
 
-        /* Discard active ingress item */
-        nn_sofi_ingress_discard( self );
+        /* Stop keepalive timer */
+        nn_timer_stop( &self->timer_keepalive );
 
-        /* If we are not connected, discard staged messages */
-        if (self->state == NN_SOFI_STATE_CONNECTING) {
-            _ofi_debug("OFI[S]: Discarding panding ingress & egress buffers\n");
+        /* Flush ingress queue */
+        _ofi_debug("OFI[S]: Discarding panding ingress buffers\n");
+        nn_sofi_ingress_flush( self );
+
+        /* If we are not connected, or if we are closing due to an 
+           error, discard all staged egress messages */
+        if ((self->state == NN_SOFI_STATE_CONNECTING) || (self->error != 0)) {
+            _ofi_debug("OFI[S]: Discarding panding egress buffers\n");
             nn_sofi_egress_flush( self );
-            nn_sofi_ingress_flush( self );
         }
 
         /* Shutdown the endpoint */
@@ -1027,39 +1174,34 @@ static void nn_sofi_shutdown (struct nn_fsm *fsm, int src, int type,
 
         /* Handle Tx Events. Other Tx events won't be accepted because our
            state is now in NN_SOFI_STATE_CLOSING */
-        _ofi_debug("OFI[S]: Draining egress CQ event\n");
-        if (type == NN_OFIW_COMPLETED) {
-            /* Handle completed event */
-            cq_entry = (struct fi_cq_data_entry *) srcptr;
-            nn_sofi_egress_handle( self, cq_entry );
 
-        } else if (type == NN_OFIW_ERROR) {
-            /* Handle error event */
-            cq_error = (struct fi_cq_err_entry *) srcptr;
-            nn_sofi_egress_handle_error( self, cq_error );
-
+        /* Wait for successful egress completion only on clean shutdown */
+        if (self->error == 0) {
+            _ofi_debug("OFI[S]: Draining egress CQ event\n");
+            if (type == NN_OFIW_COMPLETED) {
+                /* Handle completed event */
+                cq_entry = (struct fi_cq_data_entry *) srcptr;
+                nn_sofi_egress_handle( self, cq_entry );
+            } else if (type == NN_OFIW_ERROR) {
+                /* Handle error event */
+                cq_error = (struct fi_cq_err_entry *) srcptr;
+                nn_sofi_egress_handle_error( self, cq_error );
+            } else {
+                nn_fsm_bad_action (self->state, src, type);
+            }
         } else {
-            nn_fsm_bad_action (self->state, src, type);
-
+            _ofi_debug("OFI[S]: Discarding egress CQ event due to error\n");
+            if ((type != NN_OFIW_COMPLETED) && (type != NN_OFIW_ERROR)) {
+                nn_fsm_bad_action (self->state, src, type);
+            }
         }
 
     } else if (nn_slow(src == (NN_SOFI_SRC_ENDPOINT | OFI_SRC_CQ_RX) )) {
 
         /* Handle Rx Events, but don't post new input buffers */
-        _ofi_debug("OFI[S]: Draining ingress CQ event\n");
-        if (type == NN_OFIW_COMPLETED) {
-            /* Handle completed event */
-            cq_entry = (struct fi_cq_data_entry *) srcptr;
-            nn_sofi_ingress_handle( self, cq_entry );
-
-        } else if (type == NN_OFIW_ERROR) {
-            /* Handle error event */
-            cq_error = (struct fi_cq_err_entry *) srcptr;
-            nn_sofi_ingress_handle_error( self, cq_error );
-
-        } else {
+        _ofi_debug("OFI[S]: Discarding ingress CQ event\n");
+        if ((type != NN_OFIW_COMPLETED) && (type != NN_OFIW_ERROR)) {
             nn_fsm_bad_action (self->state, src, type);
-
         }
 
     } else if (nn_slow(src == (NN_SOFI_SRC_ENDPOINT | OFI_SRC_EQ) )) {
@@ -1111,14 +1253,21 @@ static void nn_sofi_shutdown (struct nn_fsm *fsm, int src, int type,
         !nn_timer_isidle( &self->timer_keepalive ) ||
         !nn_timer_isidle( &self->timer_shutdown) ) {
         _ofi_debug("OFI[S]: Delaying close: egress=%i, ingress=%i, isidle=%i"
-            ",%i\n",
+            ",%i, egress_left=%i\n",
             nn_sofi_egress_empty( self ), nn_sofi_ingress_empty( self ),
             nn_timer_isidle( &self->timer_keepalive ),
-            nn_timer_isidle( &self->timer_shutdown ));
+            nn_timer_isidle( &self->timer_shutdown ),
+            self->egress_max - self->stageout_counter.n);
         return;
     }
 
     if (self->socket_state == NN_SOFI_SOCKET_STATE_CONNECTED) {
+
+        /* TODO: This is a hack to allow pending messages to be flushed,
+                 I don't know why I need this, but it seems that even after I
+                 have received the CQs from all outgoing messages, they haven't
+                 been delivered to the other end! */
+        usleep(50000);
 
         /* Shutdown connection & close endpoint */
         _ofi_debug("OFI[S]: Stopping endpoint\n");
@@ -1134,7 +1283,7 @@ static void nn_sofi_shutdown (struct nn_fsm *fsm, int src, int type,
 
         /* The socket never managed to connect */
         _ofi_debug("OFI[S]: Socket never connected\n");
-        self->socket_state = NN_SOFI_STATE_CLOSED;
+        self->socket_state = NN_SOFI_SOCKET_STATE_CLOSED;
 
     } else if (self->socket_state != NN_SOFI_SOCKET_STATE_CLOSED) {
 
@@ -1231,6 +1380,11 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
                 self->out_state = NN_SOFI_OUT_STATE_ACTIVE;
                 nn_pipebase_start( &self->pipebase );
 
+                /* Start keepalive timer */
+                _ofi_debug("OFI[S]: Starting keepalive timer\n");
+                nn_timer_start( &self->timer_keepalive, 
+                    NN_SOFI_TIMEOUT_KEEPALIVE_TICK );
+
                 /* Post input buffers */
                 nn_sofi_ingress_post( self );
 
@@ -1279,7 +1433,7 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
             case FI_SHUTDOWN:
 
                 _ofi_debug("OFI[S]: Remote endpoint disconnected!\n");
-                self->socket_state = NN_SOFI_STATE_CLOSED;
+                self->socket_state = NN_SOFI_SOCKET_STATE_CLOSED;
 
                 /* The connection is dropped from the remote end.
                    This is an unrecoverable error and we should terminate */
@@ -1378,7 +1532,34 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
                 /* Handhsake phase is completely terminated */
                 _ofi_debug("OFI[S]: Keepalive tick\n");
 
-                /* TODO: Handle keepalive ticks */
+                /* Check if connection timed out */
+                if (++self->ticks_in > NN_SOFI_KEEPALIVE_IN_TICKS) {
+                    _ofi_debug("OFI[S]: Keepalive expired, dropping connection\n");
+                    
+                    /* Reset and stop timer */
+                    self->ticks_in = 0;
+                    nn_timer_stop( &self->timer_keepalive );
+
+                    /* Drop connection through a critical error */
+                    nn_sofi_critical_error( self, -ETIMEDOUT );
+                    return;
+                }
+
+                /* Check if we should send a keepalive packet */
+                if (++self->ticks_out > NN_SOFI_KEEPALIVE_OUT_TICKS) {
+                    self->ticks_out = 0;
+
+                    /* Send aux packet */
+                    _ofi_debug("OFI[S]: Sending KEEPALIVE\n");
+                    ret = nn_sofi_egress_post_aux( self, 
+                        NN_SOFI_KEEPALIVE_PACKET_LEN );
+                    if (ret) {
+                        FT_PRINTERR("nn_sofi_egress_post_aux", ret);
+                        nn_sofi_critical_error( self, ret );
+                        return;
+                    }
+
+                }
 
                 /* Stop Keepalive timer only to be started later */
                 nn_timer_stop( &self->timer_keepalive );

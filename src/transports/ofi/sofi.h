@@ -54,6 +54,9 @@
                                         "\xce\x9a\x11\x7e\xce\x9a\x11\x7e" \
                                         "\xff\xff\xff\xff\xff\xff\xff\xff"
 
+/* The size of the local buffer for ancillary data I/O */
+#define NN_SOFI_ANCILLARY_SIZE          4096
+
 /* Handshake information */ 
 struct nn_sofi_handshake
 {
@@ -78,6 +81,9 @@ struct nn_sofi_buffer {
     /* MR Descriptor */
     void * mr_desc[1];
 
+    /* Buffer flags */
+    uint8_t flags;
+
 };
 
 /* Shared, Connected OFI FSM */
@@ -89,6 +95,7 @@ struct nn_sofi {
     int                         state;
     int                         socket_state;
     int                         error;
+    int                         offset;
 
     /* This member can be used by owner to keep individual sofis in a list. */
     struct nn_list_item         item;
@@ -110,6 +117,10 @@ struct nn_sofi {
     uint8_t                     ticks_in;
     uint8_t                     ticks_out;
 
+    /* Ancillary buffer */
+    uint8_t                     aux_buf[NN_SOFI_ANCILLARY_SIZE];
+    struct fid_mr               *aux_mr;
+
     /* Egress properties */
     struct nn_msg               outmsg;
     struct nn_mutex             stageout_mutex;
@@ -117,6 +128,7 @@ struct nn_sofi {
     uint8_t                     stageout_state;
     uint8_t                     out_state;
     int                         egress_max;
+    struct nn_list              egress_bookkeeping;
 
     /* Ingress properties */
     struct nn_sofi_buffer       *ingress_buffers;

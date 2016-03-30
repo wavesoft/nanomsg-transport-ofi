@@ -225,7 +225,7 @@ int ofi_mr_invalidate( struct ofi_mr_manager * self, void * base, size_t len );
  * `ofi_mr_release` function in order to make the banks available for re-use!
  *
  */
-int ofi_mr_describe( struct ofi_mr_manager * self, struct fi_msg * msg );
+int ofi_mr_describe( struct ofi_mr_manager * self, struct fi_msg * msg, void ** handle );
 
 /**
  * Re-use the memory registration banks used for the particular transmission
@@ -234,6 +234,6 @@ int ofi_mr_describe( struct ofi_mr_manager * self, struct fi_msg * msg );
  * This function will also replace the passed context with the original
  * context the user specified in the `fi_msg` structure.
  */
-int ofi_mr_release( void ** context );
+int ofi_mr_release( void * handle );
 
 #endif

@@ -635,7 +635,7 @@ int ofi_active_endpoint_open( struct ofi_domain* domain, struct nn_ofiw* wrk,
     }
 
     /* Bind the CQ to the endpoint */
-    ret = fi_ep_bind(aep->ep, &aep->cq_tx->fid, FI_TRANSMIT);
+    ret = fi_ep_bind(aep->ep, &aep->cq_tx->fid, FI_TRANSMIT | FI_SELECTIVE_COMPLETION);
     if (ret) {
         FT_PRINTERR("fi_ep_bind[cq_tx]", ret);
         return ret;
@@ -792,8 +792,9 @@ int ofi_cm_connect( struct ofi_active_endpoint * ep, void *addr,
     int ret;
 
     /* Get domain's dest address if addr is null */
-    if (!addr)
+    if (!addr) {
         addr = ep->domain->fi->dest_addr;
+    }
 
     /* Connect to server */
     ret = fi_connect(ep->ep, addr, data, datalen);

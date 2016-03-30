@@ -37,9 +37,11 @@
     #include <pthread.h>
     /* Enable debug */
     #define _ofi_debug(...)   { \
+        struct timespec ts; \
+        clock_gettime(CLOCK_MONOTONIC, &ts); \
         char __msg[1024]; \
         sprintf(__msg, __VA_ARGS__); \
-        printf("[%012i] %s", (int)pthread_self(), __msg); \
+        printf("[%010li.%06li] %s", ts.tv_sec, ts.tv_nsec, __msg); \
         fflush(stdout); \
     };
     // #define _ofi_debug(...)     printf(__VA_ARGS__)

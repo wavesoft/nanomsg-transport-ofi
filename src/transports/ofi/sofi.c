@@ -403,7 +403,7 @@ static int nn_sofi_egress_post_buffers( struct nn_sofi * self,
     }
 
     /* Send Data and generate CQ upon completed transmission */
-    ret = ofi_sendmsg( self->ep, &msg, FI_COMPLETION | FI_DELIVERY_COMPLETE );
+    ret = ofi_sendmsg( self->ep, &msg, FI_COMPLETION );
     if (ret) {
         FT_PRINTERR("ofi_sendmsg", ret);
         nn_sofi_egress_release_context( ctx );

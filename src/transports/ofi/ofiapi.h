@@ -28,6 +28,7 @@ struct ofi_resources;
 struct ofi_fabric;
 struct ofi_domain;
 
+#include "ofi.h"
 #include "oficommon.h"
 #include "ofiw.h"
 #include "ofimr.h"
@@ -54,9 +55,6 @@ struct ofi_domain;
 /* Maximum size of domain specifications */
 #define MAX_DOMAIN_LEN  255
 #define MAX_SERVICE_LEN 16
-
-/* Use one domain per endpoint */
-// #define OFI_DOMAIN_PER_EP
 
 /* ########################################################################## */
 /*  Global Macros                                                             */

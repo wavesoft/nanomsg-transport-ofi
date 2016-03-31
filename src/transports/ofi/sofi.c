@@ -23,7 +23,6 @@
 #include <unistd.h>
 #include <errno.h>
 #include "../../ofi.h"
-#include "ofi.h"
 #include "sofi.h"
 
 #include "../../utils/err.h"
@@ -814,7 +813,10 @@ void nn_sofi_init ( struct nn_sofi *self, struct ofi_domain *domain, int offset,
 
     /* Initialize local handshake */
     self->hs_local.version = 1;
+
+#ifndef OFI_DISABLE_HANDSHAKE
     self->hs_state = NN_SOFI_HS_STATE_LOCAL;
+#endif
 
     /* ----------------------------------- */
     /*  NanoMSG Core Initialization        */
@@ -960,14 +962,20 @@ int nn_sofi_start_accept( struct nn_sofi *self, struct fi_eq_cm_entry * conreq )
     }
 
     /* Receive remote handshake information */
+#ifndef OFI_DISABLE_HANDSHAKE
     memcpy( &self->hs_remote, conreq->data, sizeof(self->hs_remote) );
     _ofi_debug("OFI[S]: Handshake with remote version=%i\n",
         self->hs_remote.version);
     self->hs_state = NN_SOFI_HS_STATE_FULL;
+#endif
 
     /* Accept incoming connection and send our side of the handshake */
     self->socket_state = NN_SOFI_STATE_CONNECTING;
+#ifdef OFI_DISABLE_HANDSHAKE
+    ret = ofi_cm_accept( self->ep, NULL, 0 );
+#else
     ret = ofi_cm_accept( self->ep, &self->hs_local, sizeof(self->hs_local) );
+#endif
     if (ret) {
         FT_PRINTERR("ofi_cm_accept", ret);
         self->socket_state = NN_SOFI_SOCKET_STATE_CLOSED;
@@ -999,8 +1007,12 @@ int nn_sofi_start_connect( struct nn_sofi *self )
 
     /* Connect to the remote endpoint */
     self->socket_state = NN_SOFI_STATE_CONNECTING;
+#ifdef OFI_DISABLE_HANDSHAKE
+    ret = ofi_cm_connect( self->ep, NULL, NULL, 0 ); 
+#else
     ret = ofi_cm_connect( self->ep, NULL, &self->hs_local, 
         sizeof(self->hs_local) ); 
+#endif
     if (ret) {
         FT_PRINTERR("ofi_cm_connect", ret);
         self->socket_state = NN_SOFI_SOCKET_STATE_CLOSED;
@@ -1366,12 +1378,14 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
 
                 /* Receive remote handshake information */
                 cq_cm_entry = (struct fi_eq_cm_entry *) srcptr;
+#ifndef OFI_DISABLE_HANDSHAKE
                 if ( self->hs_state == NN_SOFI_HS_STATE_LOCAL ) {
                     memcpy( &self->hs_remote, cq_cm_entry->data, 
                         sizeof(self->hs_remote) );
                     _ofi_debug("OFI[S]: Handshake with remote version=%i\n",
                         self->hs_remote.version);
                 }
+#endif
 
                 /* The connection is established, start pipe */
                 _ofi_debug("OFI[S]: Endpoint connected, starting pipebase\n");

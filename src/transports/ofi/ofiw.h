@@ -23,6 +23,7 @@
 #ifndef nn_ofiw_INCLUDED
 #define nn_ofiw_INCLUDED
 
+#include "ofi.h"
 #include "oficommon.h"
 
 #include "../../utils/list.h"
@@ -43,12 +44,6 @@
  * configured, that is used to receive events in the most optimal way.
  *
  */
-
-/**
- * Turn on this flag if the libfabric provider you are using
- * supports waitsets in order to use the optimised version of the code.
- */
-// #define OFI_USE_WAITSET
 
 /**
  * Mask overlaied over the item ID 

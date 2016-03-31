@@ -23,6 +23,7 @@
 #ifndef NN_SOFI_INCLUDED
 #define NN_SOFI_INCLUDED
 
+#include "ofi.h"
 #include "ofiapi.h"
 
 #include "../../transport.h"
@@ -143,7 +144,9 @@ struct nn_sofi {
     /* Local and remote handshake information */
     struct nn_sofi_handshake    hs_local;
     struct nn_sofi_handshake    hs_remote;
+#ifndef OFI_DISABLE_HANDSHAKE
     int                         hs_state;
+#endif
 
 };
 

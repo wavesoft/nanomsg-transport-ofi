@@ -28,8 +28,21 @@
 #include "../../transport.h"
 #endif
 
-/* Uncomment the following to force verose messages for debugging */
+/* The following flags enable various source paths.
+   You can specify them as compiler definitions */
+
+/* Enable debug logs */
 #define OFI_DEBUG_LOG
+
+/* Open one domain per endpoint */
+// #define OFI_DOMAIN_PER_EP
+
+/* Enable waitsets (on providers that supports it) for 
+   a more optimized worker polling */
+// #define OFI_USE_WAITSET
+
+/* Disable handshake negotiation (usnic fix) */
+#define OFI_DISABLE_HANDSHAKE
 
 /* Helper macro to enable or disable verbose logs on console */
 #ifdef OFI_DEBUG_LOG

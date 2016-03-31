@@ -1396,8 +1396,8 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
 
                 /* Start keepalive timer */
                 _ofi_debug("OFI[S]: Starting keepalive timer\n");
-                nn_timer_start( &self->timer_keepalive, 
-                    NN_SOFI_TIMEOUT_KEEPALIVE_TICK );
+                // nn_timer_start( &self->timer_keepalive, 
+                //     NN_SOFI_TIMEOUT_KEEPALIVE_TICK );
 
                 /* Post input buffers */
                 nn_sofi_ingress_post( self );

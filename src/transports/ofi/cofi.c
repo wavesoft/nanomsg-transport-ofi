@@ -31,15 +31,19 @@
 #include "../../utils/err.h"
 #include "../../utils/cont.h"
 #include "../../utils/alloc.h"
+#include "../utils/backoff.h"
 
 /* State machine states */
 #define NN_COFI_STATE_IDLE              1
 #define NN_COFI_STATE_ACTIVE            2
-#define NN_COFI_STATE_STOPPING          3
+#define NN_COFI_STATE_RETRYING          3
+#define NN_COFI_STATE_STOPPING_BACKOFF  4
+#define NN_COFI_STATE_STOPPING          5
 
 /* State machine sources */
 #define NN_COFI_SRC_SOFI                NN_OFI_SRC_SOFI
 #define NN_COFI_SRC_ENDPOINT            5100
+#define NN_COFI_SRC_RECONNECT_TIMER     5101
 
 /* nn_epbase virtual interface implementation. */
 static void nn_cofi_stop (struct nn_epbase *self);
@@ -69,6 +73,9 @@ struct nn_cofi {
     /*  This object is a specific type of endpoint.
         Thus it is derived from epbase. */
     struct nn_epbase epbase;
+
+    /*  Reconnect backoff timer */
+    struct nn_backoff retry;
 
     /*  State machine that handles the active part of the connection
         lifetime. */
@@ -135,6 +142,9 @@ int nn_cofi_create (void *hint, struct nn_epbase **epbase,
     struct ofi_fabric * fabric)
 {
     int ret;
+    size_t sz;
+    int reconnect_ivl;
+    int reconnect_ivl_max;
     struct nn_cofi *self;
 
     _ofi_debug("OFI[C]: Creating connected OFI socket\n");
@@ -164,6 +174,19 @@ int nn_cofi_create (void *hint, struct nn_epbase **epbase,
         nn_cofi_handler, 
         nn_cofi_shutdown,
         nn_epbase_getctx( &self->epbase ));
+
+    /* Get reconnect parameters */
+    sz = sizeof (reconnect_ivl);
+    nn_epbase_getopt (&self->epbase, NN_SOL_SOCKET, NN_RECONNECT_IVL,
+        &reconnect_ivl, &sz);
+    nn_assert (sz == sizeof (reconnect_ivl));
+    sz = sizeof (reconnect_ivl_max);
+    nn_epbase_getopt (&self->epbase, NN_SOL_SOCKET, NN_RECONNECT_IVL_MAX,
+        &reconnect_ivl_max, &sz);
+
+    /* Initialize back-off timer */
+    nn_backoff_init (&self->retry, NN_COFI_SRC_RECONNECT_TIMER,
+        reconnect_ivl, reconnect_ivl_max, &self->fsm);
 
     /* Start FSM. */
     self->state = NN_COFI_STATE_IDLE;
@@ -201,6 +224,9 @@ static void nn_cofi_destroy (struct nn_epbase *self)
     struct nn_cofi *cofi;
     cofi = nn_cont(self, struct nn_cofi, epbase);
 
+    /* Stop back-off timer */
+    nn_backoff_term (&cofi->retry);
+
     /* Stop SOFI (sofi also closes endpoint) */
     nn_sofi_term(&cofi->sofi);
 
@@ -235,12 +261,38 @@ static void nn_cofi_shutdown (struct nn_fsm *self, int src, int type,
         /* Enter stopping state */
         cofi->state = NN_COFI_STATE_STOPPING;
 
+        /* Stop back-off timer */
+        nn_backoff_stop( &cofi->retry );
+
         /* Stop SOFI if not already stopped */
         if (!nn_sofi_isidle (&cofi->sofi)) {
             _ofi_debug("OFI[C]: SOFI is not idle, shutting down\n");
             nn_sofi_stop (&cofi->sofi);
             return;
         }
+    }
+
+    /* Wait for SOFI STOPPED event if needed */
+    if (nn_slow( src == NN_COFI_SRC_SOFI )) {
+        /* Anything else is invalid */
+        if (nn_slow( type != NN_SOFI_STOPPED )) {
+            nn_fsm_bad_action (self->state, src, type);
+        }
+
+    /* Wait for a Back-off timer STOPPED event if needed */
+    } else if (nn_slow( src == NN_COFI_SRC_RECONNECT_TIMER )) {
+        /* Anything else is invalid */
+        if (nn_slow( type != NN_BACKOFF_STOPPED)) {
+            nn_fsm_bad_action (self->state, src, type);
+        }
+    } else {
+        nn_fsm_bad_source (cofi->state, src, type);
+    }
+
+    /* Wait till all resources are idle */
+    if (!nn_backoff_isidle(&cofi->retry) ||
+        !nn_sofi_isidle(&cofi->sofi)) {
+        return;
     }
 
     /* If we are in shutting down state, stop everyhing else */
@@ -325,15 +377,73 @@ static void nn_cofi_handler (struct nn_fsm *fsm, int src, int type,
                 _ofi_debug("OFI[C]: SOFI Stopped error=%i. Restarting\n", 
                     self->sofi.error);
 
-                /* TODO: Use back-off timer */
-
-                /* Start another SOFI */
+                /* Reap dead sofi */
                 nn_cofi_reap_sofi( self );
+
+                /* Use back-off timer to re-try */
+                self->state = NN_COFI_STATE_RETRYING;
+                nn_backoff_start( &self->retry );
+                return;
+
+            default:
+                nn_fsm_bad_action (self->state, src, type);
+            }
+
+        default:
+            nn_fsm_bad_source (self->state, src, type);
+        }
+
+/******************************************************************************/
+/*  NN_COFI_STATE_RETRYING state.                                             */
+/*  We are waiting for a back-off timeout before re-trying to connect         */
+/******************************************************************************/
+    case NN_COFI_STATE_RETRYING:
+        switch (src) {
+
+        /* ========================= */
+        /*  Back-off timer           */
+        /* ========================= */
+        case NN_COFI_SRC_RECONNECT_TIMER:
+            switch (type) {
+
+            /* The back-off timer timed out */
+            case NN_BACKOFF_TIMEOUT:
+
+                /* Stop back-off timer before re-trying */
+                self->state = NN_COFI_STATE_STOPPING_BACKOFF;
+                nn_backoff_stop( &self->retry );
+                return;
+
+            default:
+                nn_fsm_bad_action (self->state, src, type);
+            }
+
+        default:
+            nn_fsm_bad_source (self->state, src, type);
+        }
+
+/******************************************************************************/
+/*  NN_COFI_STATE_STOPPING_BACKOFF state.                                     */
+/*  We are waiting for a back-off STOP event, before re-trying to conenct     */
+/******************************************************************************/
+    case NN_COFI_STATE_STOPPING_BACKOFF:
+        switch (src) {
+
+        /* ========================= */
+        /*  Back-off timer           */
+        /* ========================= */
+        case NN_COFI_SRC_RECONNECT_TIMER:
+            switch (type) {
+
+            /* The back-off timer stopped, start connecting */
+            case NN_BACKOFF_STOPPED:
+
+                /* Stop back-off timer before re-trying */
+                self->state = NN_COFI_STATE_ACTIVE;
                 ret = nn_cofi_start_connecting( self );
                 if (ret) {
                     nn_cofi_critical_error( self, ret );
                 }
-
                 return;
 
             default:

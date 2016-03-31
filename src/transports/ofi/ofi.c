@@ -40,6 +40,7 @@ struct nn_ofi_optset {
     struct nn_optset base;
     int rx_queue_size;
     int tx_queue_size;
+    size_t mem_align;
 };
 
 /* Optset interface */
@@ -150,6 +151,7 @@ static struct nn_optset *nn_ofi_optset (void)
     /*  Default values for OFI socket options (0=max). */
     optset->rx_queue_size = 2;
     optset->tx_queue_size = 0;
+    optset->mem_align = 1;
 
     return &optset->base;
 }
@@ -177,14 +179,19 @@ static int nn_ofi_optset_setopt (struct nn_optset *self, int option,
 
     switch (option) {
     case NN_OFI_RX_QUEUE_SIZE:
-        if (nn_slow (val == 0))
+        if (nn_slow (val < 2))
             return -EINVAL;
         optset->rx_queue_size = val;
         return 0;
     case NN_OFI_TX_QUEUE_SIZE:
-        if (nn_slow (val == 0))
+        if (nn_slow (val < 0))
             return -EINVAL;
         optset->tx_queue_size = val;
+        return 0;
+    case NN_OFI_MEM_ALIGN:
+        if (nn_slow (val < 1))
+            return -EINVAL;
+        optset->mem_align = val * sizeof(void*);
         return 0;
     default:
         return -ENOPROTOOPT;
@@ -205,6 +212,9 @@ static int nn_ofi_optset_getopt (struct nn_optset *self, int option,
         break;
     case NN_OFI_TX_QUEUE_SIZE:
         intval = optset->tx_queue_size;
+        break;
+    case NN_OFI_MEM_ALIGN:
+        intval = optset->mem_align / sizeof(void*);
         break;
     default:
         return -ENOPROTOOPT;

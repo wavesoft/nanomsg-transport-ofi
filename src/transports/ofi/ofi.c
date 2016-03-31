@@ -33,6 +33,7 @@
 #include "../../utils/cont.h"
 #include "../../utils/list.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 /* OFI-Specific socket options */
@@ -151,7 +152,11 @@ static struct nn_optset *nn_ofi_optset (void)
     /*  Default values for OFI socket options (0=max). */
     optset->rx_queue_size = 2;
     optset->tx_queue_size = 0;
-    optset->mem_align = 1;
+#if _POSIX_C_SOURCE >= 200112L
+    optset->mem_align = sysconf(_SC_PAGESIZE);
+#else
+    optset->mem_align = sizeof(void*);
+#endif
 
     return &optset->base;
 }

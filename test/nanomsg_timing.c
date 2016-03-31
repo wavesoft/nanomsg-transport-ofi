@@ -39,18 +39,32 @@
 #define NODE0 "node0"
 #define NODE1 "node1"
 
+/* Custom free function */
+static void freefn (void *p, void *user)
+{
+	free(p);
+}
+
 /**
  */
 int run_tests( int sock, int direction, size_t msg_len )
 {
 	struct u_bw_timing bw;
-	void * msg = NULL;
+	void * msg = NULL, *ptr;
 	int iterations = ITERATIONS;
 	int sz_n, i;
 
 	// When sending, start counting before transmittion
-	if (direction == DIRECTION_OUT)
+	if (direction == DIRECTION_OUT) {
 		u_bw_init( &bw, "OUT: ");
+#if _POSIX_C_SOURCE >= 200112L
+	assert( posix_memalign(&ptr, sysconf(_SC_PAGESIZE), msg_len) == 0);
+#else
+	ptr = malloc( msg_len );
+	assert( ptr );
+#endif
+		msg = nn_allocmsg_ptr( ptr, msg_len, freefn, NULL );
+	}
 
 
 	// Exchange messages
@@ -59,8 +73,8 @@ int run_tests( int sock, int direction, size_t msg_len )
 		// Send or receive
 		if (direction == DIRECTION_OUT) {
 
-			// Alloc message
-			msg = nn_allocmsg( msg_len, 0 );
+			// Re-use single message pointer
+			nn_chunk_addref( msg, 1 );
 
 			// Send message
 			printf("-- Sending %i\n", i);

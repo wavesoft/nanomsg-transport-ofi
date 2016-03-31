@@ -227,9 +227,6 @@ static void nn_cofi_destroy (struct nn_epbase *self)
     /* Stop back-off timer */
     nn_backoff_term (&cofi->retry);
 
-    /* Stop SOFI (sofi also closes endpoint) */
-    nn_sofi_term(&cofi->sofi);
-
     /* Clean-up OFI resources */
     nn_ofiw_term( cofi->worker );
     ofi_domain_close( cofi->domain );
@@ -278,6 +275,9 @@ static void nn_cofi_shutdown (struct nn_fsm *self, int src, int type,
         if (nn_slow( type != NN_SOFI_STOPPED )) {
             nn_fsm_bad_action (self->state, src, type);
         }
+
+        /* Reap SOFI */
+        nn_cofi_reap_sofi( cofi );
 
     /* Wait for a Back-off timer STOPPED event if needed */
     } else if (nn_slow( src == NN_COFI_SRC_RECONNECT_TIMER )) {

@@ -20,6 +20,7 @@
     IN THE SOFTWARE.
 */
 
+#include <stdlib.h>
 #include <unistd.h>
 #include <errno.h>
 #include "../../ofi.h"
@@ -859,10 +860,11 @@ void nn_sofi_init ( struct nn_sofi *self, struct ofi_domain *domain, int offset,
     /* ----------------------------------- */
 
     /* Get options */
-    int rx_queue, tx_queue, rx_msg_size;
+    int rx_queue, tx_queue, rx_msg_size, mem_align;
     size_t opt_sz = sizeof(int);
     nn_epbase_getopt (epbase, NN_OFI, NN_OFI_TX_QUEUE_SIZE, &tx_queue, &opt_sz);
     nn_epbase_getopt (epbase, NN_OFI, NN_OFI_RX_QUEUE_SIZE, &rx_queue, &opt_sz);
+    nn_epbase_getopt (epbase, NN_OFI, NN_OFI_MEM_ALIGN, &mem_align, &opt_sz);
     nn_epbase_getopt (epbase, NN_SOL_SOCKET, NN_RCVBUF, &rx_msg_size, &opt_sz);
 
     /* Put default values if set to AUTO */
@@ -910,8 +912,15 @@ void nn_sofi_init ( struct nn_sofi *self, struct ofi_domain *domain, int offset,
     /* ####[ INGRESS ]#### */
 
     /* Allocate ingress buffers */
+#if _POSIX_C_SOURCE >= 200112L
+    ret = posix_memalign( &self->ingress_buffers, mem_align, 
+        sizeof(struct nn_sofi_buffer) * rx_queue );
+    nn_assert( ret == 0 );
+#else
     self->ingress_buffers = nn_alloc( sizeof(struct nn_sofi_buffer) * rx_queue, 
         "ingress sofi buffer" );
+    nn_assert( self->ingress_buffers );
+#endif
 
     /* Allocate chunks */
     for (i=0; i<rx_queue; ++i) {
@@ -1032,6 +1041,8 @@ int nn_sofi_start_connect( struct nn_sofi *self )
  */
 void nn_sofi_term (struct nn_sofi *self)
 {
+    struct nn_sofi_egress_transit_context *item;
+    struct nn_list_item *it;
     int i, ret;
     _ofi_debug("OFI[S]: Cleaning-up SOFI\n");
 
@@ -1075,6 +1086,15 @@ void nn_sofi_term (struct nn_sofi *self)
 
     /* Stop throttles */
     nn_atomic_term( &self->stageout_counter );
+
+    /* Release all transit contexts in book-keeping */
+    while ((it = nn_list_begin (&self->egress_bookkeeping)) 
+              != nn_list_end (&self->egress_bookkeeping)) {
+        item = nn_cont (it, struct nn_sofi_egress_transit_context, item);
+        _ofi_debug("OFI[S]: Stale data in the egress bookkeeping"
+            " (a message pointer was not freed)\n");
+        nn_list_erase(&self->egress_bookkeeping, &item->item);
+    }
 
     /* Stop lists */
     nn_list_term( &self->egress_bookkeeping );

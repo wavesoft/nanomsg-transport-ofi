@@ -23,6 +23,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <errno.h>
+
 #include "../../ofi.h"
 #include "sofi.h"
 
@@ -913,7 +914,7 @@ void nn_sofi_init ( struct nn_sofi *self, struct ofi_domain *domain, int offset,
 
     /* Allocate ingress buffers */
 #if _POSIX_C_SOURCE >= 200112L
-    ret = posix_memalign( &self->ingress_buffers, mem_align, 
+    ret = posix_memalign( (void**)&self->ingress_buffers, mem_align, 
         sizeof(struct nn_sofi_buffer) * rx_queue );
     nn_assert( ret == 0 );
 #else

@@ -20,6 +20,10 @@
     IN THE SOFTWARE.
 */
 
+#include <stdlib.h>
+#include <unistd.h>
+#include <string.h>
+
 #include "ofi.h"
 #include "bofi.h"
 #include "cofi.h"
@@ -32,9 +36,6 @@
 #include "../../utils/fast.h"
 #include "../../utils/cont.h"
 #include "../../utils/list.h"
-
-#include <stdlib.h>
-#include <string.h>
 
 /* OFI-Specific socket options */
 struct nn_ofi_optset {

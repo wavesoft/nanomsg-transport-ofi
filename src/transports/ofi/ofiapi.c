@@ -514,8 +514,8 @@ int ofi_passive_endpoint_close( struct ofi_passive_endpoint * pep )
     } while ((int)rd == 0);
 
     /* Close FIDs */
-    FT_CLOSE_FID( pep->eq );
     FT_CLOSE_FID( pep->ep );
+    FT_CLOSE_FID( pep->eq );
 
     /* Free structures */
     fi_freeinfo( pep->fi );
@@ -698,15 +698,15 @@ int ofi_active_endpoint_close( struct ofi_active_endpoint * aep )
         rd = fi_eq_read(aep->eq, &event, &entry, sizeof entry, 0);
     } while ((int)rd == 0);
 
+    /* Close endpoint */
+    FT_CLOSE_FID( aep->ep );
+
     /* Close EQ */
     FT_CLOSE_FID( aep->eq );
 
     /* Close CQs */
     FT_CLOSE_FID( aep->cq_tx );
     FT_CLOSE_FID( aep->cq_rx );
-
-    /* Close endpoint */
-    FT_CLOSE_FID( aep->ep );
 
 #ifdef OFI_DOMAIN_PER_EP
 

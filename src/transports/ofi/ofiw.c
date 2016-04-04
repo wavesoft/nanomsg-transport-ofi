@@ -121,7 +121,6 @@ static void nn_ofiw_poller_thread( void *arg )
 
             /* Skip inactive workers */
             if (nn_slow( worker->active == 0 )) {
-                _ofi_debug("OFI[w]: Skipping worker %p\n", worker);
                 continue;
             }
 

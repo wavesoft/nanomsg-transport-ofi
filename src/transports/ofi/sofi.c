@@ -963,6 +963,9 @@ int nn_sofi_start_accept( struct nn_sofi *self, struct fi_eq_cm_entry * conreq )
 {
     int ret;
 
+    /* Disable worker */
+    nn_ofiw_stop( self->worker );
+
     /* Open active endpoint */
     ret = ofi_active_endpoint_open( self->domain, self->worker,
         NN_SOFI_SRC_ENDPOINT, NULL, conreq->info, &self->ep );
@@ -996,6 +999,9 @@ int nn_sofi_start_accept( struct nn_sofi *self, struct fi_eq_cm_entry * conreq )
     _ofi_debug("OFI[S]: Starting Accepted FSM \n");
     nn_fsm_start (&self->fsm);
 
+    /* Start worker */
+    nn_ofiw_start( self->worker );
+
     /* Success */
     return 0;
 }
@@ -1006,6 +1012,9 @@ int nn_sofi_start_accept( struct nn_sofi *self, struct fi_eq_cm_entry * conreq )
 int nn_sofi_start_connect( struct nn_sofi *self )
 {
     int ret;
+
+    /* Disable worker */
+    nn_ofiw_stop( self->worker );
 
     /* Open active endpoint */
     ret = ofi_active_endpoint_open( self->domain, self->worker,
@@ -1032,6 +1041,9 @@ int nn_sofi_start_connect( struct nn_sofi *self )
     /* Start FSM */
     _ofi_debug("OFI[S]: Starting Connected FSM \n");
     nn_fsm_start (&self->fsm);
+
+    /* Enable worker */
+    nn_ofiw_start( self->worker );
 
     /* Success */
     return 0;

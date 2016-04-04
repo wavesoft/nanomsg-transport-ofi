@@ -151,6 +151,9 @@ static int nn_bofi_start_accepting ( struct nn_bofi* self )
 {
     int ret;
 
+    /* Disable worker */
+    nn_ofiw_stop( self->worker );
+
     /* Open passive endpoint bound to our worker */
     ret = ofi_passive_endpoint_open( self->fabric, self->worker, 
         NN_BOFI_SRC_ENDPOINT, NULL, &self->pep );
@@ -165,6 +168,9 @@ static int nn_bofi_start_accepting ( struct nn_bofi* self )
         FT_PRINTERR("ofi_cm_listen", ret);        
         return ret;
     }
+
+    /* Enable worker */
+    nn_ofiw_start( self->worker );
 
     /* We are listening */
     self->state = NN_BOFI_STATE_ACTIVE;

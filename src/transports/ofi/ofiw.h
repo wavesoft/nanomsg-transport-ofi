@@ -99,6 +99,9 @@ struct nn_ofiw_pool {
     /* Lock state flag */
     uint8_t                 lock_state;
 
+    /* Sate state flag */
+    uint8_t                 lock_safe;
+
     /* Lock mutex */
     struct nn_mutex         lock_mutex;
 
@@ -165,6 +168,9 @@ struct nn_ofiw {
     /* The parent pool */
     struct nn_ofiw_pool     *parent;
 
+    /* Status flag */
+    uint8_t                 active;
+
 };
 
 /* ####################################### */
@@ -209,8 +215,8 @@ int nn_ofiw_open_cq( struct nn_ofiw * self, int src, struct fid_domain *domain,
 /* Remove a particular file descriptor from the monitor */
 int nn_ofiw_remove( struct nn_ofiw * worker, void * fd );
 
-/* Block/Unblock OFIW for thread-safe operations */
-int nn_ofiw_block( struct nn_ofiw * worker );
-int nn_ofiw_unblock( struct nn_ofiw * worker );
+/* Enable/Disable this worker */
+void nn_ofiw_start( struct nn_ofiw * worker );
+void nn_ofiw_stop( struct nn_ofiw * worker );
 
 #endif

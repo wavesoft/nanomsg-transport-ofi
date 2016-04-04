@@ -43,6 +43,10 @@
  */
 static void nn_ofiw_lock_thread( struct nn_ofiw_pool* self )
 {
+    /* Skip locking when safe */
+    if (nn_fast( self->lock_safe ))
+        return;
+
     /* Place lock request */
     nn_mutex_lock( &self->lock_mutex );
     self->lock_state = 1;
@@ -57,24 +61,16 @@ static void nn_ofiw_lock_thread( struct nn_ofiw_pool* self )
  */
 static void nn_ofiw_unlock_thread( struct nn_ofiw_pool* self )
 {
+    /* Skip unlocking when safe */
+    if (nn_fast( self->lock_safe ))
+        return;
+
     /* Unlock thread */
     nn_efd_signal( &self->efd_lock_req );
 
     /* Release lock request */
     self->lock_state = 0;
     nn_mutex_unlock( &self->lock_mutex );
-}
-
-int nn_ofiw_block( struct nn_ofiw * worker )
-{
-    nn_ofiw_lock_thread( worker->parent );
-    return 0;
-}
-
-int nn_ofiw_unblock( struct nn_ofiw * worker )
-{
-    nn_ofiw_unlock_thread( worker->parent );
-    return 0;
 }
 
 /* OFI worker poller thread */
@@ -123,6 +119,12 @@ static void nn_ofiw_poller_thread( void *arg )
               it = nn_list_next (&self->workers, it)) {
             worker = nn_cont (it, struct nn_ofiw, item);
 
+            /* Skip inactive workers */
+            if (nn_slow( worker->active == 0 )) {
+                _ofi_debug("OFI[w]: Skipping worker %p\n", worker);
+                continue;
+            }
+
             /* Iterate over poll items */
             for (jt = nn_list_begin (&worker->items);
                   jt != nn_list_end (&worker->items);
@@ -143,6 +145,7 @@ static void nn_ofiw_poller_thread( void *arg )
                                 item->src, worker, item);
 
                             /* Feed event to the FSM */
+                            self->lock_safe = 1;
                             nn_ctx_enter (worker->owner->ctx);
                             nn_fsm_feed (worker->owner, 
                                 item->src,
@@ -150,6 +153,7 @@ static void nn_ofiw_poller_thread( void *arg )
                                 &item->data.cq_entry
                             );
                             nn_ctx_leave (worker->owner->ctx);
+                            self->lock_safe = 0;
 
                             /* Exit both loops, since workers list
                                might have been altered from the FSM handler! */
@@ -165,6 +169,7 @@ static void nn_ofiw_poller_thread( void *arg )
                                 item->src, worker, item);
 
                             /* Feed event to the FSM */
+                            self->lock_safe = 1;
                             nn_ctx_enter (worker->owner->ctx);
                             nn_fsm_feed (worker->owner, 
                                 item->src,
@@ -172,6 +177,7 @@ static void nn_ofiw_poller_thread( void *arg )
                                 &item->data.cq_err_entry
                             );
                             nn_ctx_leave (worker->owner->ctx);
+                            self->lock_safe = 0;
 
                             /* Exit both loops, since workers list
                                might have been altered from the FSM handler! */
@@ -204,6 +210,7 @@ static void nn_ofiw_poller_thread( void *arg )
                                     item->data.eq_err_entry.err);
 
                                 /* Feed event to the FSM */
+                                self->lock_safe = 1;
                                 nn_ctx_enter (worker->owner->ctx);
                                 nn_fsm_feed (worker->owner, 
                                     item->src,
@@ -211,6 +218,7 @@ static void nn_ofiw_poller_thread( void *arg )
                                     &item->data.eq_err_entry
                                 );
                                 nn_ctx_leave (worker->owner->ctx);
+                                self->lock_safe = 0;
 
                             } else {
 
@@ -219,6 +227,7 @@ static void nn_ofiw_poller_thread( void *arg )
                                     item->src, worker, item, event);
 
                                 /* Feed event to the FSM */
+                                self->lock_safe = 1;
                                 nn_ctx_enter (worker->owner->ctx);
                                 nn_fsm_feed (worker->owner, 
                                     item->src,
@@ -226,7 +235,7 @@ static void nn_ofiw_poller_thread( void *arg )
                                     &item->data.eq_entry
                                 );
                                 nn_ctx_leave (worker->owner->ctx);
-
+                                self->lock_safe = 0;
 
                             }
 
@@ -290,6 +299,7 @@ int nn_ofiw_pool_init( struct nn_ofiw_pool * self, struct fid_fabric *fabric )
     /* Initialize properties */
     self->fabric = fabric;
     self->lock_state = 0;
+    self->lock_safe = 0;
 
     /* Initialize structures */
     nn_list_init( &self->workers );
@@ -375,6 +385,7 @@ struct nn_ofiw * nn_ofiw_pool_getworker( struct nn_ofiw_pool * self,
     nn_assert( worker );
 
     /* Initialize */
+    worker->active = 0;
     worker->owner = owner;
     worker->parent = self;
     nn_list_init( &worker->items );
@@ -421,6 +432,24 @@ void nn_ofiw_term( struct nn_ofiw * self )
     /* Free worker */
     nn_free( self );
     nn_ofiw_unlock_thread( pool );
+}
+
+/**
+ * Enable worker
+ */
+void nn_ofiw_start( struct nn_ofiw * worker )
+{
+    _ofi_debug("OFI[w]: Starting worker %p\n", worker);
+    worker->active = 1;
+}
+
+/**
+ * Disable worker
+ */
+void nn_ofiw_stop( struct nn_ofiw * worker )
+{
+    _ofi_debug("OFI[w]: Stopping worker\n");
+    worker->active = 0;
 }
 
 /* Monitor the specified OFI Completion Queue, and trigger the specified type

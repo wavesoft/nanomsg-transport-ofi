@@ -167,7 +167,7 @@ int nn_cofi_create (void *hint, struct nn_epbase **epbase,
     }
 
     /* Create an ofi worker for this fabric */
-    self->worker = ofi_fabric_getworker( self->fabric, &self->fsm );
+    // self->worker = ofi_fabric_getworker( self->fabric, &self->fsm );
 
     /*  Initialise the root FSM. */
     nn_fsm_init_root(&self->fsm, 
@@ -228,7 +228,7 @@ static void nn_cofi_destroy (struct nn_epbase *self)
     nn_backoff_term (&cofi->retry);
 
     /* Clean-up OFI resources */
-    nn_ofiw_term( cofi->worker );
+    // nn_ofiw_term( cofi->worker );
     ofi_domain_close( cofi->domain );
 
     /* Cleanup other resources */

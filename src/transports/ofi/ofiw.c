@@ -64,6 +64,18 @@ static void nn_ofiw_unlock_thread( struct nn_ofiw_pool* self )
     nn_mutex_unlock( &self->lock_mutex );
 }
 
+int nn_ofiw_block( struct nn_ofiw * worker )
+{
+    nn_ofiw_lock_thread( worker->parent );
+    return 0;
+}
+
+int nn_ofiw_unblock( struct nn_ofiw * worker )
+{
+    nn_ofiw_unlock_thread( worker->parent );
+    return 0;
+}
+
 /* OFI worker poller thread */
 static void nn_ofiw_poller_thread( void *arg )
 {
@@ -85,8 +97,8 @@ static void nn_ofiw_poller_thread( void *arg )
     _ofi_debug("OFI[w]: Starting OFIW pool thread\n");
     while (self->active) {
 
-        /* If we have a block request, block and signal */
-        if (self->lock_state) {
+        /* Handle block request before we start iterating */
+        if (nn_slow( self->lock_state )) {
             nn_efd_signal( &self->efd_lock_ack );
             nn_efd_wait( &self->efd_lock_req, -1 );
         }

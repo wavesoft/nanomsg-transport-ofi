@@ -485,11 +485,14 @@ int ofi_passive_endpoint_open( struct ofi_fabric * fabric, struct nn_ofiw * wrk,
     }
 
     /* Bind the EQ to the endpoint */
+    nn_ofiw_block( wrk );
     ret = fi_pep_bind(pep->ep, &pep->eq->fid, 0);
     if (ret) {
+        nn_ofiw_unblock( wrk );
         FT_PRINTERR("fi_pep_bind", ret);
         return ret;
     }
+    nn_ofiw_unblock( wrk );
 
     /* Success */
     *_pep = pep;
@@ -606,11 +609,14 @@ int ofi_active_endpoint_open( struct ofi_domain* domain, struct nn_ofiw* wrk,
     }
 
     /* Bind the EQ to the endpoint */
+    nn_ofiw_block( wrk );
     ret = fi_ep_bind(aep->ep, &aep->eq->fid, 0);
     if (ret) {
+        nn_ofiw_unblock( wrk );
         FT_PRINTERR("fi_ep_bind[eq]", ret);
         return ret;
     }
+    nn_ofiw_unblock( wrk );
 
     /* ###[ TX COMPLETION QUEUE ]############################################ */
 
@@ -635,11 +641,14 @@ int ofi_active_endpoint_open( struct ofi_domain* domain, struct nn_ofiw* wrk,
     }
 
     /* Bind the CQ to the endpoint */
+    nn_ofiw_block( wrk );
     ret = fi_ep_bind(aep->ep, &aep->cq_tx->fid, FI_TRANSMIT | FI_SELECTIVE_COMPLETION);
     if (ret) {
+        nn_ofiw_unblock( wrk );
         FT_PRINTERR("fi_ep_bind[cq_tx]", ret);
         return ret;
     }
+    nn_ofiw_unblock( wrk );
 
     /* ###[ RX COMPLETION QUEUE ]############################################ */
 
@@ -657,20 +666,26 @@ int ofi_active_endpoint_open( struct ofi_domain* domain, struct nn_ofiw* wrk,
     }
 
     /* Bind the CQ to the endpoint */
+    nn_ofiw_block( wrk );
     ret = fi_ep_bind(aep->ep, &aep->cq_rx->fid, FI_RECV);
     if (ret) {
+        nn_ofiw_unblock( wrk );
         FT_PRINTERR("fi_ep_bind[cq_rx]", ret);
         return ret;
     }
+    nn_ofiw_unblock( wrk );
 
     /* ###[ FINALIZATION ]################################################### */
 
     /* Enable endpoint */
+    nn_ofiw_block( wrk );
     ret = fi_enable(aep->ep);
     if (ret) {
+        nn_ofiw_unblock( wrk );
         FT_PRINTERR("fi_enable", ret);
         return ret;
     }
+    nn_ofiw_unblock( wrk );
 
     /* Success */
     *a = aep;

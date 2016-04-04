@@ -209,4 +209,8 @@ int nn_ofiw_open_cq( struct nn_ofiw * self, int src, struct fid_domain *domain,
 /* Remove a particular file descriptor from the monitor */
 int nn_ofiw_remove( struct nn_ofiw * worker, void * fd );
 
+/* Block/Unblock OFIW for thread-safe operations */
+int nn_ofiw_block( struct nn_ofiw * worker );
+int nn_ofiw_unblock( struct nn_ofiw * worker );
+
 #endif

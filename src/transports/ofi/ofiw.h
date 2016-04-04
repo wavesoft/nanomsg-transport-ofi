@@ -29,6 +29,7 @@
 #include "../../utils/list.h"
 #include "../../utils/thread.h"
 #include "../../utils/mutex.h"
+#include "../../utils/efd.h"
 
 /**
  * This file exposes the OFI Worker Class, which is simmilar to NanoMsg's native
@@ -72,9 +73,6 @@ struct nn_ofiw_pool {
     /* List of workers */
     struct nn_list          workers;
 
-    /* Operation mutex */
-    struct nn_mutex         mutex;
-
     /* === libfabric Specific === */
 
     /* Pollset for waiting for events across various CQ/EQ */
@@ -95,6 +93,20 @@ struct nn_ofiw_pool {
     struct fid_wait         *waitset;
 
 #endif
+
+    /* === Thread lock helpers === */
+
+    /* Lock state flag */
+    uint8_t                 lock_state;
+
+    /* Lock mutex */
+    struct nn_mutex         lock_mutex;
+
+    /* Efd to place lock request */
+    struct nn_efd           efd_lock_req;
+
+    /* Efd to place wait lock termination */
+    struct nn_efd           efd_lock_ack;
 
     /* === Local variables === */
 

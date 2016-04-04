@@ -38,6 +38,32 @@
 /*       HELPER FUNCTIONS         */
 /* ============================== */
 
+/**
+ * Wait until mutex thread is idle and place a block request
+ */
+static void nn_ofiw_lock_thread( struct nn_ofiw_pool* self )
+{
+    /* Place lock request */
+    nn_mutex_lock( &self->lock_mutex );
+    self->lock_state = 1;
+
+    /* Wait for thread to lock */
+    nn_efd_wait( &self->efd_lock_ack, -1 );
+}
+
+/**
+ * Unblock a previous block request
+ */
+static void nn_ofiw_unlock_thread( struct nn_ofiw_pool* self )
+{
+    /* Unlock thread */
+    nn_efd_signal( &self->efd_lock_req );
+
+    /* Release lock request */
+    self->lock_state = 0;
+    nn_mutex_unlock( &self->lock_mutex );
+}
+
 /* OFI worker poller thread */
 static void nn_ofiw_poller_thread( void *arg )
 {
@@ -59,6 +85,12 @@ static void nn_ofiw_poller_thread( void *arg )
     _ofi_debug("OFI[w]: Starting OFIW pool thread\n");
     while (self->active) {
 
+        /* If we have a block request, block and signal */
+        if (self->lock_state) {
+            nn_efd_signal( &self->efd_lock_ack );
+            nn_efd_wait( &self->efd_lock_req, -1 );
+        }
+
 #ifdef OFI_USE_WAITSET
 
         /* If waitsets are available, we have an optimized way for
@@ -70,9 +102,6 @@ static void nn_ofiw_poller_thread( void *arg )
         }
 
 #endif
-
-        /* Enter critical region */
-        nn_mutex_lock( &self->mutex );
 
         /* Iterate over workers */
         for (it = nn_list_begin (&self->workers);
@@ -100,7 +129,6 @@ static void nn_ofiw_poller_thread( void *arg )
                                 item->src, worker, item);
 
                             /* Feed event to the FSM */
-                            nn_mutex_unlock( &self->mutex );
                             nn_ctx_enter (worker->owner->ctx);
                             nn_fsm_feed (worker->owner, 
                                 item->src,
@@ -123,7 +151,6 @@ static void nn_ofiw_poller_thread( void *arg )
                                 item->src, worker, item);
 
                             /* Feed event to the FSM */
-                            nn_mutex_unlock( &self->mutex );
                             nn_ctx_enter (worker->owner->ctx);
                             nn_fsm_feed (worker->owner, 
                                 item->src,
@@ -163,7 +190,6 @@ static void nn_ofiw_poller_thread( void *arg )
                                     item->data.eq_err_entry.err);
 
                                 /* Feed event to the FSM */
-                                nn_mutex_unlock( &self->mutex );
                                 nn_ctx_enter (worker->owner->ctx);
                                 nn_fsm_feed (worker->owner, 
                                     item->src,
@@ -179,7 +205,6 @@ static void nn_ofiw_poller_thread( void *arg )
                                     item->src, worker, item, event);
 
                                 /* Feed event to the FSM */
-                                nn_mutex_unlock( &self->mutex );
                                 nn_ctx_enter (worker->owner->ctx);
                                 nn_fsm_feed (worker->owner, 
                                     item->src,
@@ -217,9 +242,6 @@ static void nn_ofiw_poller_thread( void *arg )
             }
         }
 
-        /* Unlock mutex */
-        nn_mutex_unlock( &self->mutex );
-
 continue_outer:
 
 #ifndef OFI_USE_WAITSET
@@ -253,10 +275,14 @@ int nn_ofiw_pool_init( struct nn_ofiw_pool * self, struct fid_fabric *fabric )
 
     /* Initialize properties */
     self->fabric = fabric;
+    self->lock_state = 0;
 
     /* Initialize structures */
     nn_list_init( &self->workers );
-    nn_mutex_init( &self->mutex );
+    nn_mutex_init( &self->lock_mutex );
+    nn_efd_init( &self->efd_lock_req );
+    nn_efd_init( &self->efd_lock_ack );
+
 
 #ifdef OFI_USE_WAITSET
 
@@ -314,6 +340,11 @@ int nn_ofiw_pool_term( struct nn_ofiw_pool * self )
     self->active = 0;
     nn_thread_term( &self->thread );
 
+    /* Clean-up lock resources */
+    nn_mutex_term( &self->lock_mutex );
+    nn_efd_term( &self->efd_lock_req );
+    nn_efd_term( &self->efd_lock_ack );
+
     /* Success */
     return 0;
 }
@@ -323,7 +354,7 @@ struct nn_ofiw * nn_ofiw_pool_getworker( struct nn_ofiw_pool * self,
     struct nn_fsm * owner )
 {
     struct nn_ofiw * worker;
-    nn_mutex_lock( &self->mutex );
+    nn_ofiw_lock_thread( self );
 
     /* Allocate a new worker */
     worker = nn_alloc( sizeof(struct nn_ofiw), "OFI worker" );
@@ -340,7 +371,7 @@ struct nn_ofiw * nn_ofiw_pool_getworker( struct nn_ofiw_pool * self,
         nn_list_end (&self->workers));
 
     /* Return worker */
-    nn_mutex_unlock( &self->mutex );
+    nn_ofiw_unlock_thread( self );
     _ofi_debug("OFI[w]: Allocated new worker %p\n", worker);
     return worker;
 }
@@ -353,7 +384,7 @@ void nn_ofiw_term( struct nn_ofiw * self )
     struct nn_list_item *it;
 
     pool = self->parent;
-    nn_mutex_lock( &pool->mutex );
+    nn_ofiw_lock_thread( pool );
 
     /* Remove from worker list */
     nn_list_erase( &pool->workers, &self->item );
@@ -375,8 +406,7 @@ void nn_ofiw_term( struct nn_ofiw * self )
 
     /* Free worker */
     nn_free( self );
-
-    nn_mutex_unlock( &pool->mutex );
+    nn_ofiw_unlock_thread( pool );
 }
 
 /* Monitor the specified OFI Completion Queue, and trigger the specified type
@@ -395,10 +425,10 @@ int nn_ofiw_add_cq( struct nn_ofiw * self, struct fid_cq * cq, int src )
 
     /* Put item on list queue */
     nn_list_item_init( &item->item );
-    nn_mutex_lock( &self->parent->mutex );
+    nn_ofiw_lock_thread( self->parent );
     nn_list_insert (&self->items, &item->item,
         nn_list_end (&self->items));
-    nn_mutex_unlock( &self->parent->mutex );
+    nn_ofiw_unlock_thread( self->parent );
 
     _ofi_debug("OFI[w]: Added CQ fd=%p on worker=%p\n", item, self);
 
@@ -422,10 +452,10 @@ int nn_ofiw_add_eq( struct nn_ofiw * self, struct fid_eq * eq, int src )
 
     /* Put item on list queue */
     nn_list_item_init( &item->item );
-    nn_mutex_lock( &self->parent->mutex );
+    nn_ofiw_lock_thread( self->parent );
     nn_list_insert (&self->items, &item->item,
         nn_list_end (&self->items));
-    nn_mutex_unlock( &self->parent->mutex );
+    nn_ofiw_unlock_thread( self->parent );
 
     _ofi_debug("OFI[w]: Added EQ fd=%p on worker=%p\n", item, self);
 
@@ -506,7 +536,7 @@ int nn_ofiw_remove( struct nn_ofiw * self, void * fd )
 {
     struct nn_ofiw_item *item;
     struct nn_list_item *it;
-    nn_mutex_lock( &self->parent->mutex );
+    nn_ofiw_lock_thread( self->parent );
 
     /* Lookup specified item */
     for (it = nn_list_begin (&self->items);
@@ -531,6 +561,6 @@ int nn_ofiw_remove( struct nn_ofiw * self, void * fd )
     }
 
     /* Success */
-    nn_mutex_unlock( &self->parent->mutex );
+    nn_ofiw_unlock_thread( self->parent );
     return 0;
 }

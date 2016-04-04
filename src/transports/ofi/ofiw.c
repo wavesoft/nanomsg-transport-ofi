@@ -49,6 +49,7 @@ static void nn_ofiw_lock_thread( struct nn_ofiw_pool* self )
 
     /* Wait for thread to lock */
     nn_efd_wait( &self->efd_lock_ack, -1 );
+    nn_efd_unsignal( &self->efd_lock_ack );
 }
 
 /**
@@ -101,6 +102,7 @@ static void nn_ofiw_poller_thread( void *arg )
         if (nn_slow( self->lock_state )) {
             nn_efd_signal( &self->efd_lock_ack );
             nn_efd_wait( &self->efd_lock_req, -1 );
+            nn_efd_unsignal( &self->efd_lock_req );
         }
 
 #ifdef OFI_USE_WAITSET

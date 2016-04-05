@@ -337,6 +337,8 @@ static int nn_sofi_egress_post_buffers( struct nn_sofi * self,
 
         }
 
+        _ofi_debug("OFI[S]: Sending BODY[%zu]\n", iov[0].iov_len);
+
     } else {
 
         /* Prepare IOVs */
@@ -390,6 +392,9 @@ static int nn_sofi_egress_post_buffers( struct nn_sofi * self,
             if (ret == 0) nn_atomic_inc(&ctx->ref, 1);
 
         }
+
+        _ofi_debug("OFI[S]: Sending SPHDR[%zu], BODY[%zu]\n", 
+            iov[0].iov_len, iov[1].iov_len);
 
     }
 
@@ -861,12 +866,18 @@ void nn_sofi_init ( struct nn_sofi *self, struct ofi_domain *domain, int offset,
     /* ----------------------------------- */
 
     /* Get options */
-    int rx_queue, tx_queue, rx_msg_size, mem_align;
+    int rx_queue, tx_queue, rx_msg_size, slab_size, mem_align;
     size_t opt_sz = sizeof(int);
     nn_epbase_getopt (epbase, NN_OFI, NN_OFI_TX_QUEUE_SIZE, &tx_queue, &opt_sz);
     nn_epbase_getopt (epbase, NN_OFI, NN_OFI_RX_QUEUE_SIZE, &rx_queue, &opt_sz);
     nn_epbase_getopt (epbase, NN_OFI, NN_OFI_MEM_ALIGN, &mem_align, &opt_sz);
+    nn_epbase_getopt (epbase, NN_OFI, NN_OFI_SLAB_SIZE, &slab_size, &opt_sz);
     nn_epbase_getopt (epbase, NN_SOL_SOCKET, NN_RCVBUF, &rx_msg_size, &opt_sz);
+    _ofi_debug("OFI[S]: Options: NN_OFI_TX_QUEUE_SIZE=%i"
+                    ", NN_OFI_RX_QUEUE_SIZE=%i,\n", rx_queue, tx_queue);
+    _ofi_debug("OFI[S]:          NN_OFI_MEM_ALIGN=%i, NN_RCVBUF=%i,\n",
+                    mem_align, rx_msg_size);
+    _ofi_debug("OFI[S]:          NN_OFI_SLAB_SIZE=%i\n", slab_size);
 
     /* Put default values if set to AUTO */
     if (tx_queue == 0) tx_queue = domain->fi->tx_attr->size;
@@ -898,7 +909,7 @@ void nn_sofi_init ( struct nn_sofi *self, struct ofi_domain *domain, int offset,
         .domain = self->domain,
         .direction = OFI_MR_DIR_SEND,
         .slab_count = tx_queue,
-        .slab_size = 256,
+        .slab_size = slab_size,
         .base_key = mr_page_offset+NN_SOFI_MRM_SEND_KEY,
     };
     ofi_mr_init( &self->mrm_egress, &mrattr_tx );

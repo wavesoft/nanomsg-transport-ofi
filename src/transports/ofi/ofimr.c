@@ -71,8 +71,10 @@ static int ofi_mr_tryslab( struct ofi_mr_manager * self, void * ptr, size_t len,
 	struct ofi_mr_slab * slab;
 
 	/* Test size */
-	if (len > self->attr.slab_size)
+	if (len > self->attr.slab_size) {
+		_ofi_debug("OFI[M]: Payload too big for a slab\n");
 		return -EFBIG;
+	}
 
 	/* Find a free MR */
 	nn_mutex_lock(&self->slab_mutex);
@@ -99,6 +101,7 @@ static int ofi_mr_tryslab( struct ofi_mr_manager * self, void * ptr, size_t len,
 
 	/* All slabs are busy */
 	nn_mutex_unlock(&self->slab_mutex);
+	_ofi_debug("OFI[M]: No free slabs\n");
 	return -ENOMEM;
 
 }

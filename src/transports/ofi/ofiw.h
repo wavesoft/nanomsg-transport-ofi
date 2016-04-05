@@ -171,6 +171,9 @@ struct nn_ofiw {
     /* Status flag */
     uint8_t                 active;
 
+    /* Sync flag */
+    struct nn_efd           efd_sync;
+
 };
 
 /* ####################################### */

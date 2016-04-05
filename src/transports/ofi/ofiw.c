@@ -120,7 +120,11 @@ static void nn_ofiw_poller_thread( void *arg )
             worker = nn_cont (it, struct nn_ofiw, item);
 
             /* Skip inactive workers */
-            if (nn_slow( worker->active == 0 )) {
+            if (nn_slow( worker->active < 2 )) {
+                if (nn_slow( worker->active == 1)) {
+                    _ofi_debug("OFI[w]: Signalling ACK\n");
+                    nn_efd_signal(&worker->efd_sync);
+                }
                 continue;
             }
 
@@ -388,6 +392,7 @@ struct nn_ofiw * nn_ofiw_pool_getworker( struct nn_ofiw_pool * self,
     worker->owner = owner;
     worker->parent = self;
     nn_list_init( &worker->items );
+    nn_efd_init( &worker->efd_sync );
 
     /* Add to list */
     nn_list_item_init( &worker->item );
@@ -427,6 +432,7 @@ void nn_ofiw_term( struct nn_ofiw * self )
 
     /* Terminate structures */
     nn_list_term( &self->items );
+    nn_efd_term( &self->efd_sync );
 
     /* Free worker */
     nn_free( self );
@@ -438,8 +444,9 @@ void nn_ofiw_term( struct nn_ofiw * self )
  */
 void nn_ofiw_start( struct nn_ofiw * worker )
 {
+    /* Start worker */
     _ofi_debug("OFI[w]: Starting worker %p\n", worker);
-    worker->active = 1;
+    worker->active = 2;
 }
 
 /**
@@ -447,8 +454,29 @@ void nn_ofiw_start( struct nn_ofiw * worker )
  */
 void nn_ofiw_stop( struct nn_ofiw * worker )
 {
-    _ofi_debug("OFI[w]: Stopping worker\n");
-    worker->active = 0;
+    /* Skip if already inactive */
+    if (nn_fast( worker->active != 2))
+        return;
+
+    /* Stop worker */
+    _ofi_debug("OFI[w]: Stopping worker %p\n", worker);
+    if (nn_fast( worker->parent->lock_safe )) {
+
+        /* Stop without sync */
+        worker->active = 0;
+
+    } else {
+
+        /* Wait sync */
+        worker->active = 1;
+        nn_efd_wait( &worker->efd_sync, -1 );
+
+        /* Synchronized */
+        worker->active = 0;
+        nn_efd_unsignal( &worker->efd_sync );
+
+    }
+
 }
 
 /* Monitor the specified OFI Completion Queue, and trigger the specified type

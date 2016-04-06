@@ -166,8 +166,10 @@ function check_numa_domain {
     for C in $IRQ_CORES; do
         FOUND=0
         for N in $NUMA_CORES; do
-            FOUND=1
-            break
+            if [ $C -eq $N ]; then
+                FOUND=1
+                break
+            fi
         done
         if [ $FOUND -eq 0 ]; then
             echo "ERROR: IRQ core $C not in NUMA node $IFACE_NODE" 1>&2

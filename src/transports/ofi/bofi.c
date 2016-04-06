@@ -21,35 +21,30 @@
 */
 
 #include "ofi.h"
+#include "ofiw.h"
+#include "ofiapi.h"
 #include "bofi.h"
 #include "sofi.h"
-#include "hlapi.h"
 
 #include "../../utils/err.h"
 #include "../../utils/cont.h"
 #include "../../utils/alloc.h"
 #include "../../utils/efd.h"
 #include "../../aio/ctx.h"
-
-/* Helper macro to enable or disable verbose logs on console */
-#ifdef OFI_DEBUG_LOG
-    /* Enable debug */
-    #define _ofi_debug(...)   printf(__VA_ARGS__)
-#else
-    /* Disable debug */
-    #define _ofi_debug(...)
-#endif
+#include "../../aio/worker.h"
 
 /* BOFI States */
 #define NN_BOFI_STATE_IDLE              1
-#define NN_BOFI_STATE_ACCEPTING         2
+#define NN_BOFI_STATE_ACTIVE            2
 #define NN_BOFI_STATE_STOPPING          3
+#define NN_BOFI_STATE_ACCEPTING         4
 
 /* BOFI Actions */
 #define NN_BOFI_CONNECTION_ACCEPTED     1
 
 /* BOFI Child FSM Sources */
-#define NN_BOFI_SRC_SOFI                1
+#define NN_BOFI_SRC_SOFI                NN_OFI_SRC_SOFI
+#define NN_BOFI_SRC_ENDPOINT            4100
 
 struct nn_bofi {
 
@@ -57,17 +52,20 @@ struct nn_bofi {
     struct nn_fsm fsm;
     int state;
 
-    /* The high-level api structures */
-    struct ofi_resources        ofi;
-    struct ofi_passive_endpoint pep;
+    /* The high-level OFI API structures */
+    struct ofi_fabric *fabric;
+    struct ofi_domain *domain;
+    struct ofi_passive_endpoint *pep;
+
+    /* Helper to find offsets */
+    uint8_t *sofi_offsets;
+    int sofi_offsets_size;
 
     /* The Connected OFIs */
-    struct nn_sofi *            sofi;
-    struct nn_list              sofis;
+    struct nn_list sofis;
 
-    /* The accepting thread and sync mutex */
-    struct nn_thread            thread;
-    struct nn_efd               sync;
+    /* The worker that receives EQ events */
+    struct nn_ofiw *worker;
 
     /*  This object is a specific type of endpoint.
         Thus it is derived from epbase. */
@@ -89,18 +87,131 @@ static void nn_bofi_handler (struct nn_fsm *self, int src, int type,
 static void nn_bofi_shutdown (struct nn_fsm *self, int src, int type, 
     void *srcptr);
 
-/* Thread functions */
-static void nn_bofi_accept_thread (void *arg);
+/* ########################################################################## */
+/*  Utility Functions                                                         */
+/* ########################################################################## */
+
+/**
+ * An unrecoverable error has occured
+ */
+static void nn_bofi_critical_error( struct nn_bofi * self, int error )
+{
+    _ofi_debug("OFI[B]: Unrecoverable error #%i: %s\n", error,
+        fi_strerror((int) -error));
+
+    nn_epbase_set_error( &self->epbase, error );
+    nn_fsm_stop( &self->fsm );
+}
+
+/**
+ * Find and return a free SOFI offset
+ */
+static int nn_bofi_new_sofi_offset( struct nn_bofi * self )
+{
+    int i;
+    int base;
+
+    /* Find a free sot */
+    for (i=0; i<self->sofi_offsets_size; ++i) {
+
+        /* If found a free, mark and return */
+        if (self->sofi_offsets[i] == 0) {
+            self->sofi_offsets[i] = 1;
+            return i;
+        }
+
+    }
+
+    /* Not found in the range, so allocate a few more */
+    base = self->sofi_offsets_size;
+    self->sofi_offsets_size += 64;
+    self->sofi_offsets = nn_realloc( self->sofi_offsets, 
+        sizeof(uint8_t) * self->sofi_offsets_size );
+    memset( &self->sofi_offsets[base], 0, sizeof(uint8_t)*64 );
+
+    /* Return new ID */
+    return base;
+}
+
+static void nn_bofi_free_sofi_offset( struct nn_bofi * self, int offset )
+{
+    int i;
+
+    /* Free slot */
+    nn_assert( offset < self->sofi_offsets_size );
+    self->sofi_offsets[offset] = 0;
+
+}
+
+/**
+ * Create a new passive endpoint and start listening for incoming connections
+ * on the active fabric.
+ */
+static int nn_bofi_start_accepting ( struct nn_bofi* self )
+{
+    int ret;
+
+    /* Disable worker */
+    nn_ofiw_stop( self->worker );
+
+    /* Open passive endpoint bound to our worker */
+    ret = ofi_passive_endpoint_open( self->fabric, self->worker, 
+        NN_BOFI_SRC_ENDPOINT, NULL, &self->pep );
+    if (ret) {
+        FT_PRINTERR("ofi_passive_endpoint_open", ret);        
+        return ret;
+    }
+
+    /* Listen for incoming PEP EQ event */
+    ret = ofi_cm_listen( self->pep );
+    if (ret) {
+        FT_PRINTERR("ofi_cm_listen", ret);        
+        return ret;
+    }
+
+    /* Enable worker */
+    nn_ofiw_start( self->worker );
+
+    /* We are listening */
+    self->state = NN_BOFI_STATE_ACTIVE;
+    _ofi_debug("OFI[B]: We are listening for connections\n");
+
+    /* Success */
+    return 0;
+
+}
+
+/**
+ * Release the resources associated with the specified SOFI
+ */
+static void nn_bofi_reap_sofi(struct nn_bofi *self, struct nn_sofi *sofi)
+{
+    /* The SOFI fsm was stopped */
+    _ofi_debug("OFI[B]: Reaping stopped SOFI\n");
+
+    /* Release the offset */
+    nn_bofi_free_sofi_offset( self, sofi->offset );
+
+    /* Remove item from list */
+    nn_list_erase (&self->sofis, &sofi->item);
+
+    /* Cleanup */
+    nn_sofi_term(sofi);
+    nn_free(sofi);
+}
+
+/* ########################################################################## */
+/*  Implementation  Functions                                                 */
+/* ########################################################################## */
 
 /**
  * Create a bound (server) OFI Socket
  */
-int nn_bofi_create (void *hint, struct nn_epbase **epbase)
+int nn_bofi_create (void *hint, struct nn_epbase **epbase, 
+    struct ofi_fabric * fabric)
 {
     int ret;
     struct nn_bofi *self;
-    const char * domain;
-    const char * service;
 
     /*  Allocate the new endpoint object. */
     self = nn_alloc (sizeof (struct nn_bofi), "bofi");
@@ -108,37 +219,27 @@ int nn_bofi_create (void *hint, struct nn_epbase **epbase)
 
     /*  Initalise the endpoint. */
     nn_epbase_init (&self->epbase, &nn_bofi_epbase_vfptr, hint);
-    domain = nn_epbase_getaddr (&self->epbase);
 
-    /* Get local service */
-    service = strrchr (domain, ':');
-    if (service == NULL) {
-        nn_epbase_term (&self->epbase);
-        return -EINVAL;
-    }
-    *(char*)(service) = '\0'; /* << TODO: That's a HACK! */
-    service++;
-
-    /* Debug */
-    _ofi_debug("OFI: Creating bound OFI socket (domain=%s, service=%s)\n", domain, 
-        service );
-
-    /* Initialize ofi */
-    ret = ofi_alloc( &self->ofi, FI_EP_MSG );
+    /* Open a domain on this address */
+    self->fabric = fabric;
+    ret = ofi_domain_open( fabric, NULL, &self->domain );
     if (ret) {
         nn_epbase_term (&self->epbase);
         nn_free(self);
         return ret;
     }
 
-    /* Start server */
-    ret = ofi_init_server( &self->ofi, &self->pep, FI_SOCKADDR, domain, 
-        service );
-    if (ret) {
-        nn_epbase_term (&self->epbase);
-        nn_free(self);
-        return ret;
-    }
+    /* Create an ofi worker for this fabric */
+    self->worker = ofi_fabric_getworker( self->fabric, &self->fsm );
+
+    /* Initialize properties */
+    self->pep = NULL;
+    nn_list_init (&self->sofis);
+
+    /* Allocate a couple of offset slots */
+    self->sofi_offsets = nn_alloc( sizeof(uint8_t) * 64, "offsets" );
+    self->sofi_offsets_size = 64;
+    memset( self->sofi_offsets, 0, sizeof(uint8_t)*64 );
 
     /*  Initialise the root FSM. */
     nn_fsm_init_root(&self->fsm, 
@@ -147,19 +248,11 @@ int nn_bofi_create (void *hint, struct nn_epbase **epbase)
         nn_epbase_getctx( &self->epbase ));
     self->state = NN_BOFI_STATE_IDLE;
 
-    /* Initialize the list of Connected OFI Connections */
-    self->sofi = NULL;
-    nn_list_init (&self->sofis);
-
-    /* Prepare thread resources */
-    nn_efd_init( &self->sync );
-
     /* Start FSM. */
     nn_fsm_start( &self->fsm );
 
     /*  Return the base class as an out parameter. */
     *epbase = &self->epbase;
-
     return 0;
 }
 
@@ -168,7 +261,7 @@ int nn_bofi_create (void *hint, struct nn_epbase **epbase)
  */
 static void nn_bofi_stop (struct nn_epbase *self)
 {
-    _ofi_debug("OFI: Stopping OFI\n");
+    _ofi_debug("OFI[B]: Stopping BOFI\n");
 
     /* Get reference to the bofi structure */
     struct nn_bofi *bofi;
@@ -183,31 +276,15 @@ static void nn_bofi_stop (struct nn_epbase *self)
  */
 static void nn_bofi_destroy (struct nn_epbase *self)
 {
-    _ofi_debug("OFI: Destroying OFI\n");
+    _ofi_debug("OFI[B]: Destroying OFI\n");
 
     /* Get reference to the bofi structure */
     struct nn_bofi *bofi;
     bofi = nn_cont(self, struct nn_bofi, epbase);
 
-    /* Free open connection handlers */
-    struct nn_list_item *it;
-    struct nn_sofi *sofi;
-    for (it = nn_list_begin (&bofi->sofis);
-          it != nn_list_end (&bofi->sofis);
-          it = nn_list_next (&bofi->sofis, it)) {
-        sofi = nn_cont (it, struct nn_sofi, item);
-
-        /* Stop SOFI */
-        nn_sofi_stop(sofi);
-
-        /* Cleanup */
-        nn_sofi_term(sofi);
-        nn_free(sofi);
-    }
-
     /* Free structures */
-    ofi_free( &bofi->ofi );
-    nn_efd_term( &bofi->sync );
+    ofi_domain_close( bofi->domain );
+    nn_ofiw_term( bofi->worker );
     nn_list_term ( &bofi->sofis );
     nn_free( bofi );
 }
@@ -221,10 +298,13 @@ static void nn_bofi_destroy (struct nn_epbase *self)
 static void nn_bofi_shutdown (struct nn_fsm *self, int src, int type,
     void *srcptr)
 {
-    _ofi_debug("OFI: BOFI: Shutdown\n");
+    struct nn_list_item *it;
+    struct nn_sofi *sofi;
+    struct nn_bofi *bofi;
+
+    _ofi_debug("OFI[B]: Shutdown\n");
 
     /* Get pointer to bofi structure */
-    struct nn_bofi *bofi;
     bofi = nn_cont (self, struct nn_bofi, fsm);
 
     /* Switch to shutdown if this was an fsm action */
@@ -233,107 +313,55 @@ static void nn_bofi_shutdown (struct nn_fsm *self, int src, int type,
         /* Switch to shutting down state */
         bofi->state = NN_BOFI_STATE_STOPPING;
 
-        /* Stop OFI operations */
-        _ofi_debug("OFI: Freeing passive endpoint resources\n");
-        ofi_shutdown_pep( &bofi->pep );
-        ofi_free_pep( &bofi->pep );
+        /* Close the passive endpoint. */
+        _ofi_debug("OFI[B]: Stopping passive endpoint\n");
+        ofi_passive_endpoint_close( bofi->pep );
 
-        /*  Wait till worker thread terminates. */
-        nn_thread_term (&bofi->thread);
+        /* Send the stop event to all SOFIs */
+        for (it = nn_list_begin (&bofi->sofis);
+              it != nn_list_end (&bofi->sofis);
+              it = nn_list_next (&bofi->sofis, it)) {
 
-        /* We are stopped */
+            /* Stop the specified sofi */
+            sofi = nn_cont (it, struct nn_sofi, item);
+            nn_sofi_stop( sofi );
+
+        }
+    } 
+    else if (nn_slow(src == NN_BOFI_SRC_SOFI && type == NN_SOFI_STOPPED))
+    {
+        /* Reap SOFIs as they close */
+        sofi = (struct nn_sofi *) srcptr;
+        nn_bofi_reap_sofi( bofi, sofi );
+
+    } else {
+        /* Invalid fsm state */
+        nn_fsm_bad_state (bofi->state, src, type);
+    }
+
+    /* Wait until all SOFIs are closed */
+    if (nn_list_empty(&bofi->sofis)) {
         nn_fsm_stopped_noevent(&bofi->fsm);
-        return;
-
-    }
-
-    /* Invalid fsm action */
-    nn_fsm_bad_state (bofi->state, src, type);
-
-}
-
-/**
- * The internal thread that takes care of the blocking accept() operations
- */
-static void nn_bofi_accept_thread (void *arg)
-{
-    ssize_t ret;
-    struct ofi_active_endpoint * ep;
-    struct nn_bofi * self = (struct nn_bofi *) arg;
-
-    /* Infinite loop */
-    while (1) {
-
-        /* Allocate new endpoint */
-        ep = nn_alloc( sizeof (struct ofi_active_endpoint), 
-            "ofi-active-endpoint" );
-        alloc_assert (ep);
-
-        /* Listen for incoming connections */
-        _ofi_debug("OFI: bofi_accept_thread: Waiting for incoming connections\n");
-        ret = ofi_server_accept( &self->ofi, &self->pep, ep );
-        if (ret == FI_SHUTDOWN) {
-            _ofi_debug("OFI: bofi_accept_thread: Stopping because of FI_SHUTDOWN\n");
-
-            /* Free resources */
-            ofi_free_ep(ep);
-            nn_free(ep);
-            break;
-
-        } else if (ret < 0) {
-            printf("OFI: ERROR: Cannot accept incoming connection!\n");
-
-            /* Free resources */
-            nn_free(ep);
-
-            /* TODO: Forward event? */
-
-            break;
-        }
-
-        /* Check if we are being stopped */
-        if (self->state != NN_BOFI_STATE_ACCEPTING) {
-            _ofi_debug("OFI: bofi_accept_thread: Stopping because switched to state %i\n", self->state);
-
-            /* Free resources */
-            ofi_free_ep(ep);
-            nn_free(ep);
-            break;
-        }
-
-        /* Create new connected OFI */
-        _ofi_debug("OFI: bofi_accept_thread: Allocating new SOFI\n");
-        self->sofi = nn_alloc (sizeof (struct nn_sofi), "sofi");
-        alloc_assert (self->sofi);
-        nn_sofi_init (self->sofi, &self->ofi, ep, &self->epbase, 
-            NN_BOFI_SRC_SOFI, &self->fsm);
-
-        /* Notify FSM that a connection was accepted */
-        _ofi_debug("OFI: bofi_accept_thread: Notifying FSM for the result\n");
-        nn_ctx_enter( self->fsm.ctx );
-        nn_fsm_action( &self->fsm, NN_BOFI_CONNECTION_ACCEPTED );
-        nn_ctx_leave( self->fsm.ctx );
-
-        /* Wait for event to be handled */
-        _ofi_debug("OFI: bofi_accept_thread: Waiting for ack from FSM\n");
-        nn_efd_wait( &self->sync, -1 );
-        nn_efd_unsignal( &self->sync );
-
+        nn_epbase_stopped (&bofi->epbase);
     }
 
 }
+
 /**
  * Bound OFI FSM Handler
  */
 static void nn_bofi_handler (struct nn_fsm *self, int src, int type,
     void *srcptr)
 {
+    struct fi_eq_cm_entry * eq_cm;
+    struct ofi_active_endpoint * ep;
     struct nn_bofi *bofi;
     struct nn_sofi *sofi;
+    int ret;
 
     /* Continue with the next OFI Event */
     bofi = nn_cont (self, struct nn_bofi, fsm);
-    _ofi_debug("OFI: nn_bofi_handler state=%i, src=%i, type=%i\n", 
+    _ofi_debug("OFI[B]: nn_bofi_handler state=%i, src=%i, type=%i\n", 
         bofi->state, src, type);
 
     /* Handle new state */
@@ -349,11 +377,14 @@ static void nn_bofi_handler (struct nn_fsm *self, int src, int type,
             switch (type) {
             case NN_FSM_START:
 
-                /* Start accept thread */
-                nn_thread_init (&bofi->thread, nn_bofi_accept_thread, bofi);
-                bofi->state = NN_BOFI_STATE_ACCEPTING;
-
+                /* Start accepting incoming connections */
+                ret = nn_bofi_start_accepting( bofi );
+                if (ret) {
+                    FT_PRINTERR("nn_bofi_start_accepting", ret);
+                    nn_bofi_critical_error( bofi, ret );
+                }
                 return;
+
             default:
                 nn_fsm_bad_action (bofi->state, src, type);
             }
@@ -363,127 +394,91 @@ static void nn_bofi_handler (struct nn_fsm *self, int src, int type,
         }
 
 /******************************************************************************/
-/*  NN_BOFI_STATE_ACCEPTING state.                                            */
-/*  the accepting thread is listening for incoming connections                */
+/*  NN_BOFI_STATE_ACTIVE state.                                            */
+/*  the socket is listening for incoming connections                          */
 /******************************************************************************/
-    case NN_BOFI_STATE_ACCEPTING:
+    case NN_BOFI_STATE_ACTIVE:
         switch (src) {
 
-        /* Local thread actions */
-        case NN_FSM_ACTION:
+        /* Reap dead SOFIs */
+        case NN_BOFI_SRC_SOFI:
             switch (type) {
-            case NN_BOFI_CONNECTION_ACCEPTED:
 
-                /*  Move the newly created connection to the list of existing
-                    connections. */
-                nn_list_insert (&bofi->sofis, &bofi->sofi->item,
-                    nn_list_end (&bofi->sofis));
-                bofi->sofi = NULL;
+            /* A SOFI has stopped */
+            case NN_SOFI_STOPPED:
 
-                /* Acknowledge event and resume operation */
-                nn_efd_signal( &bofi->sync );
-                self->state = NN_BOFI_STATE_ACCEPTING;
-
+                /* Reap the dead SOFI */                
+                sofi = (struct nn_sofi *) srcptr;
+                nn_bofi_reap_sofi( bofi, sofi );
                 return;
+
             default:
                 nn_fsm_bad_action (bofi->state, src, type);
+
             }
 
-        /* SOFI FSM actions */
-        case NN_BOFI_SRC_SOFI:
-
-            /* Get reference to sofi */
-            sofi = (struct nn_sofi *) srcptr;
-
+        /* Wait for socket EQ Event */
+        case NN_BOFI_SRC_ENDPOINT | OFI_SRC_EQ:
             switch (type) {
-            case NN_SOFI_STOPPED:
-                /* The SOFI fsm was stopped */
-                _ofi_debug("OFI: Cleaning-up SOFI\n");
 
-                /* Remove item from list */
-                nn_list_erase (&bofi->sofis, &sofi->item);
+            /* Incoming connection request */
+            case FI_CONNREQ:
+                _ofi_debug("OFI[B]: Got connection request\n");
+    
+                /* Get incoming EQ request */                
+                eq_cm = (struct fi_eq_cm_entry *) srcptr;
 
-                /* Cleanup */
-                nn_sofi_term(sofi);
-                nn_free(sofi);
+                /* Create a new SOFI to handle the incoming stream */
+                _ofi_debug("OFI[B]: Allocating new SOFI\n");
+                sofi = nn_alloc (sizeof (struct nn_sofi), "sofi");
+                alloc_assert (sofi);
 
-                return;
+                /* Initialize SOFI */
+                _ofi_debug("OFI[B]: Initializing SOFI\n");
+                nn_sofi_init (sofi, bofi->domain, 
+                    nn_bofi_new_sofi_offset(bofi), &bofi->epbase, 
+                    NN_BOFI_SRC_SOFI, &bofi->fsm);
 
-            case NN_SOFI_DISCONNECTED:
-                /* A remote enpodint was disconnected */
-                _ofi_debug("OFI: Connection closed, stopping SOFI\n");
+                /* Tell SOFI to accept the endpoint connection */
+                _ofi_debug("OFI[B]: Starting SOFI in accept state\n");
+                ret = nn_sofi_start_accept( sofi, eq_cm );
+                if (ret) {
+                    FT_PRINTERR("nn_sofi_start_accept", ret);
 
-                /* Stop sofi */
-                if (!nn_sofi_isidle (sofi)) {
-                    nn_sofi_stop (sofi);
+                    /* Reject the connection */
+                    ofi_cm_reject( bofi->pep, eq_cm->info );
+                    ofi_passive_endpoint_close( bofi->pep );
+
+                    /* Release SOFI resources */
+                    nn_sofi_term( sofi );
+                    nn_free( sofi );
+
+                    /* Start waiting for a new incoming connection. */
+                    ret = nn_bofi_start_accepting( bofi );
+                    if (ret) {
+                        FT_PRINTERR("nn_bofi_start_accepting", ret);
+                        nn_bofi_critical_error( bofi, ret );
+                    }
+                    return;
+
                 }
 
-                return;
-            default:
-                nn_fsm_bad_action (bofi->state, src, type);
-            }
+                /* Stop passive endpoint */
+                ofi_passive_endpoint_close( bofi->pep );
 
-        default:
-            nn_fsm_bad_source (bofi->state, src, type);
-        }
-
-/******************************************************************************/
-/*  NN_BOFI_STATE_STOPPING state.                                             */
-/*  the fsm is being stopped, ignore new events and prepare for cleanup       */
-/******************************************************************************/
-    case NN_BOFI_STATE_STOPPING:
-        switch (src) {
-
-        /* Local thread actions */
-        case NN_FSM_ACTION:
-            switch (type) {
-            case NN_BOFI_CONNECTION_ACCEPTED:
-
-                /*  Move the newly created connection to the list of existing
+                /* Move the newly created connection to the list of existing
                     connections. */
-                nn_list_insert (&bofi->sofis, &bofi->sofi->item,
+                nn_list_insert (&bofi->sofis, &sofi->item,
                     nn_list_end (&bofi->sofis));
-                bofi->sofi = NULL;
 
-                /* Acknowledge event and resume operation */
-                nn_efd_signal( &bofi->sync );
-                self->state = NN_BOFI_STATE_ACCEPTING;
-
-                return;
-            default:
-                nn_fsm_bad_action (bofi->state, src, type);
-            }
-
-        /* SOFI FSM actions */
-        case NN_BOFI_SRC_SOFI:
-
-            /* Get reference to sofi */
-            sofi = (struct nn_sofi *) srcptr;
-
-            switch (type) {
-            case NN_SOFI_STOPPED:
-                /* The SOFI fsm was stopped */
-                _ofi_debug("OFI: Cleaning-up SOFI\n");
-
-                /* Remove item from list */
-                nn_list_erase (&bofi->sofis, &sofi->item);
-
-                /* Cleanup */
-                nn_sofi_term(sofi);
-                nn_free(sofi);
-
-                return;
-
-            case NN_SOFI_DISCONNECTED:
-                /* A remote enpodint was disconnected */
-                _ofi_debug("OFI: Connection closed, stopping SOFI\n");
-
-                /* Stop sofi */
-                if (!nn_sofi_isidle (sofi)) {
-                    nn_sofi_stop (sofi);
+                /* Start waiting for a new incoming connection. */
+                ret = nn_bofi_start_accepting( bofi );
+                if (ret) {
+                    FT_PRINTERR("nn_bofi_start_accepting", ret);
+                    nn_bofi_critical_error( bofi, ret );
                 }
-
                 return;
+
             default:
                 nn_fsm_bad_action (bofi->state, src, type);
             }

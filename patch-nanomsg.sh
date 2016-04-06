@@ -27,7 +27,7 @@ if [ -f "${NANOMSG_DIR}/.nanomsg-ofi-patch.version" ]; then
 
 	# Just update sources
 	echo "Updating..."
-	cp -v -R ${CURR_PATH}/src/transports/ofi/ ${NANOMSG_TRANSPORTS_OFI_DIR}
+	cp -v -R ${CURR_PATH}/src/transports/ofi/* ${NANOMSG_TRANSPORTS_OFI_DIR}
 	[ $? -ne 0 ] && echo -e "** FAILED **\nUnable to copy sources!" && exit 1
 	cp -v -R ${CURR_PATH}/src/ofi.h ${NANOMSG_SRC_DIR}/ofi.h
 	[ $? -ne 0 ] && echo -e "** FAILED **\nUnable to copy sources!" && exit 1

@@ -28,13 +28,51 @@
 #include "../../transport.h"
 #endif
 
+/* The following flags enable various source paths.
+   You can specify them as compiler definitions */
+
+/* Enable debug logs */
+#define OFI_DEBUG_LOG
+
+/* Open one domain per endpoint */
+// #define OFI_DOMAIN_PER_EP
+
+/* Enable waitsets (on providers that supports it) for 
+   a more optimized worker polling */
+// #define OFI_USE_WAITSET
+
+/* Disable handshake negotiation (usnic fix) */
+#define OFI_DISABLE_HANDSHAKE
+
+/* Helper macro to enable or disable verbose logs on console */
+#ifdef OFI_DEBUG_LOG
+    #include <stdio.h>
+    #include <pthread.h>
+    /* Enable debug */
+    #define _ofi_debug(...)   { \
+        struct timespec ts; \
+        clock_gettime(CLOCK_MONOTONIC, &ts); \
+        char __msg[1024]; \
+        sprintf(__msg, __VA_ARGS__); \
+        printf("[%010li.%06li] %s", ts.tv_sec, ts.tv_nsec, __msg); \
+        fflush(stdout); \
+    };
+    // #define _ofi_debug(...)     printf(__VA_ARGS__)
+#else
+    /* Disable debug */
+    #define _ofi_debug(...)
+#endif
+
 /* Default slab memory size (I/O operations with this size
  * or less will be memcpy'ied to the share memory slab). Above this,
  * they will be tagged as shared and sent as-is. */
-#define NN_OFI_DEFAULT_SLABMR_SIZE 65536
+#define NN_OFI_DEFAULT_SLABMR_SIZE  65536
 
-/* Uncomment the following to enable verose messages for debugging */
-#define OFI_DEBUG_LOG
+/* Message size for blocking small I/O */
+#define NN_OFI_SMALLMR_SIZE         1024
+
+/* SOFI Source */
+#define NN_OFI_SRC_SOFI             4000
 
 extern struct nn_transport *nn_ofi;
 

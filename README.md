@@ -1,15 +1,11 @@
-# nanomsg-transport-ofi (0.1.2a)
+# nanomsg-transport-ofi (1.0.0b)
 
 Nanomsg transport for interfacing with the OpenFabrics Interfaces (OFI) Library (libfabric).
-
-__WARNING: This is an early alpha release! This project is currently unoptimised and should not be used in production!__
 
 ## Known Problems
 
  1. The current version handles only IPV4 address families.
- 2. ~~`usnic` provider does not seem to support the `FI_SHUTDOWN` event and therefore a `bound` socket will run out of file descriptors if many connections are attempted to be established.~~ **Fixed using software keepalive implementation.**
- 3. ~~The current implementation breaks the zero-copy principle [here](src/transports/ofi/sofi.c#L245) and [here](src/transports/ofi/sofi.c#L342), and therefore has some performance penalties.~~ **Fixed on the 0.1.2a version**
- 4. ~~Currently, it seems that with `usnic` you can only have up to 16 concurrent connections.~~ **This is configurable through the usnic BIOS.**
+ 2. The keepalive mechanism is not yet implemented in the current state of the devel branch
 
 ## How to use
 

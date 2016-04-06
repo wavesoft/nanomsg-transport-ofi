@@ -1,60 +1,112 @@
 
+
+# Change this to point to the appropriate locations in your set-up
+#
+# ex: make NANOMSG_DIR=/usr
+# 
+
+# Nanomsg base directory
+NANOMSG_DIR=/usr/local
+NANOMSG_LIB_DIR=$(NANOMSG_DIR)/lib
+NANOMSG_INCLUDE_DIR=$(NANOMSG_DIR)/include
+
+# Libfabric base directory
+LIBFABRIC_DIR=/usr/local
+LIBFABRIC_LIB_DIR=$(LIBFABRIC_DIR)/lib
+LIBFABRIC_INCLUDE_DIR=$(LIBFABRIC_DIR)/include
+
+# Base dir to the nanomsg-transport-ofi directory
 OFI_DIR=../src/transports/ofi
 
-# Change this to point to your nanomsg sources if you prefer
-NANOMSG_LIB_DIR=/usr/local/lib
+# Flags for nanomsg tests
+CCFLAGS_NN=-I$(NANOMSG_INCLUDE_DIR) -I$(LIBFABRIC_INCLUDE_DIR)
+LDFLAGS_NN=-L$(NANOMSG_LIB_DIR) -L$(LIBFABRIC_LIB_DIR)
 
-.PHONY: all
+# Flags for ofi tests
+CCFLAGS_OFI=-D__STANDALONE_TESTS -I$(LIBFABRIC_INCLUDE_DIR) -I$(OFI_DIR)
+LDFLAGS_OFI=-L$(LIBFABRIC_LIB_DIR)
 
-all: test_nanmsg_timing test_msg test_msg_timed test_dgram
+# Common flags
+CCFLAGS=-O0 -g
+LDFLAGS=-lfabric
 
-# We only need the high-level API from the ofi transport
-hlapi.o: $(OFI_DIR)/hlapi.c
-	gcc -D__STANDALONE_TESTS -c -I$(OFI_DIR) -I$(PWD) $(OFI_DIR)/hlapi.c -g -o hlapi.o
+# Patches for linux
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Linux)
+    CCFLAGS += -lpthread -lanl
+endif
 
-# Core Tests
-test_dgram: hlapi.o fabric_dgram.c
-	gcc -D__STANDALONE_TESTS -I$(OFI_DIR) hlapi.o fabric_dgram.c -lfabric -g -o test_dgram
+.PHONY: all clean test fabric nanomsg
 
-test_msg: hlapi.o fabric_msg.c
-	gcc -D__STANDALONE_TESTS -I$(OFI_DIR) hlapi.o fabric_msg.c -lfabric -g -o test_msg
+# ================================================
+#  Target groups
+# ================================================
 
-test_msg_timed: hlapi.o fabric_msg.c
-	gcc -D__STANDALONE_TESTS -I$(OFI_DIR) hlapi.o fabric_msg_timed.c -lfabric -g -o test_msg_timed
+all: fabric nanomsg
+
+fabric: test_fabric_dgram test_fabric_msg test_fabric_msg_timed
+
+nanomsg: test_nanomsg_timing
+
+# ================================================
+#  Object files
+# ================================================
+
+ofiapi.o: $(OFI_DIR)/ofiapi.c
+	gcc $(CCFLAGS_OFI) $(CCFLAGS) $(CCFLAGS_NN) -I$(OFI_DIR) $^ -c -o $@
+
+ofiw.o: $(OFI_DIR)/ofiw.c
+	gcc $(CCFLAGS_OFI) $(CCFLAGS) $(CCFLAGS_NN) -I$(OFI_DIR) $^ -c -o $@
+
+common.o: common.c
+	gcc $(CCFLAGS_OFI) $(CCFLAGS) common.c -c -o $@
+
+# ================================================
+#  Target binaries
+# ================================================
 
 # Nanomsg tests
-test_nanmsg_timing: nanomsg_timing.c $(NANOMSG_LIB_DIR)/libnanomsg.a
-	gcc nanomsg_timing.c $(NANOMSG_LIB_DIR)/libnanomsg.a -lfabric -o test_nanmsg_timing
+test_nanomsg_timing: nanomsg_timing.c common.o $(NANOMSG_LIB_DIR)/libnanomsg.a
+	gcc $(CCFLAGS_NN) $(CCFLAGS) $^ $(LDFLAGS_NN) $(LDFLAGS) -o $@
+
+# OFIAPI Tests
+test_ofiapi_basic: ofiapi_basic.c ofiw.o ofiapi.o $(NANOMSG_LIB_DIR)/libnanomsg.a
+	gcc $(CCFLAGS_NN) $(CCFLAGS) $(CCFLAGS_OFI) $(CCFLAGS_NN) $^ \
+		$(LDFLAGS_OFI) $(LDFLAGS_NN) $(LDFLAGS_NN) $(LDFLAGS) -o $@
+
+# ================================================
+#  Phony targets
+# ================================================
 
 # Cleanup files
 clean:
 	rm -rf \
 		hlapi.o \
-		test_dgram \
-		test_dgram.dSYM \
-		test_msg \
-		test_msg.dSYM \
-		test_msg_timed \
-		test_msg_timed.dSYM \
-		test_nanmsg_timing \
-		test_nanmsg_timing.dSYM
+		test_fabric_dgram \
+		test_fabric_dgram.dSYM \
+		test_fabric_msg \
+		test_fabric_msg.dSYM \
+		test_fabric_msg_timed \
+		test_fabric_msg_timed.dSYM \
+		test_nanomsg_timing \
+		test_nanomsg_timing.dSYM
 
-# Tests
-test: test_msg_timed test_nanmsg_timing
-	@echo "--------------------------------------------------"
-	@echo "Core timing tests:"
-	@echo "--------------------------------------------------"
-	./test_msg_timed server 127.0.0.1&
-	./test_msg_timed client 127.0.0.1
+# # Tests
+# test: test_msg_timed test_nanomsg_timing
+# 	@echo "--------------------------------------------------"
+# 	@echo "Core timing tests:"
+# 	@echo "--------------------------------------------------"
+# 	./test_msg_timed server 127.0.0.1&
+# 	./test_msg_timed client 127.0.0.1
 
-	@echo "--------------------------------------------------"
-	@echo "Nanomsg ofi:// timing tests:"
-	@echo "--------------------------------------------------"
-	./test_nanmsg_timing node0 ofi://127.0.0.1:5050&
-	./test_nanmsg_timing node1 ofi://127.0.0.1:5050
+# 	@echo "--------------------------------------------------"
+# 	@echo "Nanomsg ofi:// timing tests:"
+# 	@echo "--------------------------------------------------"
+# 	./test_nanomsg_timing node0 ofi://127.0.0.1:5050&
+# 	./test_nanomsg_timing node1 ofi://127.0.0.1:5050
 
-	@echo "--------------------------------------------------"
-	@echo "Nanomsg tcp:// timing tests (for reference):"
-	@echo "--------------------------------------------------"
-	./test_nanmsg_timing node0 tcp://127.0.0.1:5050&
-	./test_nanmsg_timing node1 tcp://127.0.0.1:5050
+# 	@echo "--------------------------------------------------"
+# 	@echo "Nanomsg tcp:// timing tests (for reference):"
+# 	@echo "--------------------------------------------------"
+# 	./test_nanomsg_timing node0 tcp://127.0.0.1:5050&
+# 	./test_nanomsg_timing node1 tcp://127.0.0.1:5050

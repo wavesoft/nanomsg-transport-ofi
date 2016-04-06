@@ -21,22 +21,15 @@
  * SOFTWARE.
  */
 
+#include <stdlib.h>
 #include <unistd.h>
 #include <assert.h>
-#include <libc.h>
 #include <stdio.h>
-
-#include <time.h>
-#include <sys/time.h>
 
 #include <nanomsg/nn.h>
 #include <nanomsg/pair.h>
 
-/* Platform-specific customisations */
-#ifdef __APPLE__
-#include "../src/transports/ofi/platf/osx.h"
-/* (Implementation in libfabric) */
-#endif
+#include "common.h"
 
 #define MSG_LEN 	10240
 #define ITERATIONS 	10000
@@ -47,33 +40,33 @@
 #define NODE0 "node0"
 #define NODE1 "node1"
 
-const char msg_buffer[MSG_LEN];
-
-/**
- * shamelessly stolen from fabtests shared.c
- * precision fixed to us
- */
-int64_t get_elapsed(const struct timespec *b, const struct timespec *a)
+/* Custom free function */
+static void freefn (void *p, void *user)
 {
-	int64_t elapsed;
-
-	elapsed = (a->tv_sec - b->tv_sec) * 1000 * 1000 * 1000;
-	elapsed += a->tv_nsec - b->tv_nsec;
-	return elapsed / 1000;  // microseconds
+	free(p);
 }
 
 /**
  */
-int run_tests( int sock, int direction )
+int run_tests( int sock, int direction, size_t msg_len )
 {
-	char *buf = NULL;
-	struct timespec t0, t1;
+	struct u_bw_timing bw;
+	void * msg = NULL, *ptr;
 	int iterations = ITERATIONS;
 	int sz_n, i;
 
 	// When sending, start counting before transmittion
-	if (direction == DIRECTION_OUT)
-		clock_gettime(CLOCK_MONOTONIC, &t0);
+	if (direction == DIRECTION_OUT) {
+		u_bw_init( &bw, "OUT: ");
+#if _POSIX_C_SOURCE >= 200112L
+	assert( posix_memalign(&ptr, sysconf(_SC_PAGESIZE), msg_len) == 0);
+#else
+	ptr = malloc( msg_len );
+	assert( ptr );
+#endif
+		msg = nn_allocmsg_ptr( ptr, msg_len, freefn, NULL );
+	}
+
 
 	// Exchange messages
 	for (i=0; i<iterations; i++) {
@@ -81,57 +74,92 @@ int run_tests( int sock, int direction )
 		// Send or receive
 		if (direction == DIRECTION_OUT) {
 
+			// Re-use single message pointer
+			nn_chunk_addref( msg, 1 );
+
 			// Send message
-			sz_n = nn_send (sock, msg_buffer, MSG_LEN, 0);
-			assert( sz_n == MSG_LEN );
+			printf("-- Sending %i\n", i);
+			sz_n = nn_send (sock, &msg, NN_MSG, 0);
+			assert( sz_n == msg_len );
+            if (sz_n != msg_len) {
+	            printf("!! Sent %d instead of %zu\n", sz_n, msg_len);
+	        }
+			printf("-- Sent %i\n", i);
+			u_bw_count( &bw, sz_n );
 
 		} else {
 
 			// Receive message
-			sz_n = nn_recv (sock, &buf, NN_MSG, 0);
-			assert( sz_n == MSG_LEN );
-			nn_freemsg (buf);
+			printf("-- Receiving %i\n", i);
+			sz_n = nn_recv (sock, &msg, NN_MSG, 0);
+            if (sz_n != msg_len) {
+	            printf("!! Received %d instead of %zu\n", sz_n, msg_len);
+	        }
+			nn_freemsg (msg);
+			printf("-- Received %i\n", i);
 
 			// When receiving, start counting after first receive
-			if (i == 0)
-				clock_gettime(CLOCK_MONOTONIC, &t0);
+			if (i == 0) {
+				u_bw_init( &bw, "IN: ");
+			} else {
+				u_bw_count( &bw, sz_n );
+			}
 
 		}
 
 	}
 
 	// Calculate overall lattency
-	clock_gettime(CLOCK_MONOTONIC, &t1);
-    printf("TIM: Time per message: %8.2f us\n", get_elapsed(&t0, &t1)/i/2.0);
+	u_bw_finalize( &bw );
+
+	// Display bandwidth/lattency results
+	u_bw_display( &bw );
+
     return 0;
 }
 
 /**
  * Firtst node
  */
-int node0 (const char *url)
+int node0 ( const char *url, size_t msg_len )
 {
 	int sock = nn_socket (AF_SP, NN_PAIR);
+    int len = msg_len;
 	assert (sock >= 0);
-	assert (nn_bind (sock, url) >= 0);
+    assert (!nn_setsockopt(sock, NN_SOL_SOCKET, NN_RCVBUF, &len, sizeof(len)) );
+	assert (nn_bind(sock, url) >= 0);
 	printf("TIM: I will be receiving\n");
-	run_tests(sock, DIRECTION_IN);
-	nn_shutdown (sock, 0);
+	run_tests(sock, DIRECTION_IN, msg_len);
+	printf(">>> SHUTDOWN\n");
+	nn_close (sock);
+	printf(">>> END\n");
 	return 0;
 }
 
 /**
  * Second node
  */
-int node1 (const char *url)
+int node1 ( const char *url, size_t msg_len )
 {
 	int sock = nn_socket (AF_SP, NN_PAIR);
+    int len = msg_len;
 	assert (sock >= 0);
-	assert (nn_connect (sock, url) >= 0);
+    assert (!nn_setsockopt(sock, NN_SOL_SOCKET, NN_SNDBUF, &len, sizeof(len)) );
+	assert (nn_connect(sock, url) >= 0);
 	printf("TIM: I will be sending\n");
-	run_tests(sock, DIRECTION_OUT);
-	nn_shutdown (sock, 0);
+	run_tests(sock, DIRECTION_OUT, msg_len);
+	printf(">>> SHUTDOWN\n");
+	nn_close (sock);
+	printf(">>> END\n");
 	return 0;
+}
+
+/**
+ * Help
+ */
+void help() {
+	fprintf (stderr, "Usage: pair %s|%s <URL> <ARG> ...\n",
+	       NODE0, NODE1);
 }
 
 /**
@@ -139,15 +167,24 @@ int node1 (const char *url)
  */
 int main (const int argc, const char **argv)
 {
-	if (strncmp (NODE0, argv[1], strlen (NODE0)) == 0 && argc > 1)
-		return node0 (argv[2]);
-	else if (strncmp (NODE1, argv[1], strlen (NODE1)) == 0 && argc > 1)
-		return node1 (argv[2]);
-	else
-	{
-		fprintf (stderr, "Usage: pair %s|%s <URL> <ARG> ...\n",
-		       NODE0, NODE1);
+	int msg_size = MSG_LEN;
+	if (argc < 3) {
+		help();
 		return 1;
 	}
+	if (argc > 3) {
+		msg_size = atoi(argv[3]);
+	}
+
+	if (strncmp (NODE0, argv[1], strlen (NODE0)) == 0 && argc > 1)
+		return node0 (argv[2], msg_size);
+	else if (strncmp (NODE1, argv[1], strlen (NODE1)) == 0 && argc > 1)
+		return node1 (argv[2], msg_size);
+	else
+	{
+		help();
+		return 1;
+	}
+
 	return 0;
 }

@@ -20,22 +20,30 @@
     IN THE SOFTWARE.
 */
 
+#include <stdlib.h>
+#include <unistd.h>
+#include <string.h>
+
 #include "ofi.h"
 #include "bofi.h"
 #include "cofi.h"
+#include "ofiapi.h"
 
 #include "../../ofi.h"
+#include "../../core/ep.h"
 #include "../../utils/err.h"
 #include "../../utils/alloc.h"
 #include "../../utils/fast.h"
 #include "../../utils/cont.h"
-
-#include <string.h>
+#include "../../utils/list.h"
 
 /* OFI-Specific socket options */
 struct nn_ofi_optset {
     struct nn_optset base;
-    int slab_mr_size;
+    int rx_queue_size;
+    int tx_queue_size;
+    int slab_size;
+    size_t mem_align;
 };
 
 /* Optset interface */
@@ -52,8 +60,13 @@ static const struct nn_optset_vfptr nn_ofi_optset_vfptr = {
 };
 
 /*  nn_transport interface. */
+static void nn_ofi_init ();
+static void nn_ofi_term ();
 static int  nn_ofi_bind (void *hint, struct nn_epbase **epbase);
 static int  nn_ofi_connect (void *hint, struct nn_epbase **epbase);
+
+/* Transport-wide static configuration */
+static struct ofi_resources nn_ofi_resources;
 
 /**
  * Expose the OFI transport pointer table
@@ -61,8 +74,8 @@ static int  nn_ofi_connect (void *hint, struct nn_epbase **epbase);
 static struct nn_transport nn_ofi_vfptr = {
     "ofi",
     NN_OFI,
-    NULL,
-    NULL,
+    nn_ofi_init,
+    nn_ofi_term,
     nn_ofi_bind,
     nn_ofi_connect,
     nn_ofi_optset,
@@ -72,11 +85,40 @@ static struct nn_transport nn_ofi_vfptr = {
 struct nn_transport *nn_ofi = &nn_ofi_vfptr;
 
 /**
+ * Initialize OFI
+ */
+static void nn_ofi_init ()
+{
+    /* Initiailize OFI Resources */
+    ofi_init( &nn_ofi_resources, FI_EP_MSG );
+}
+
+/**
+ * Terminate OFI
+ */
+static void nn_ofi_term ()
+{
+    /* Terminate OFI resources */
+    ofi_term( &nn_ofi_resources );
+}
+
+/**
  * Create a new bind socket
  */
 static int nn_ofi_bind (void *hint, struct nn_epbase **epbase)
 {
-    return nn_bofi_create(hint, epbase);
+    int ret;
+    struct ofi_fabric * fabric;
+
+    /* Open a fabric for the specified address */
+    ret = ofi_fabric_open(&nn_ofi_resources,nn_ep_getaddr((struct nn_ep*) hint),
+        OFI_ADDR_LOCAL, &fabric );
+    if (ret) {
+        return ret;
+    }
+
+    /* Open a BOFI */
+    return nn_bofi_create(hint, epbase, fabric);
 }
 
 /**
@@ -84,7 +126,18 @@ static int nn_ofi_bind (void *hint, struct nn_epbase **epbase)
  */
 static int nn_ofi_connect (void *hint, struct nn_epbase **epbase)
 {
-    return nn_cofi_create(hint, epbase);
+    int ret;
+    struct ofi_fabric * fabric;
+
+    /* Open a fabric for the specified address */
+    ret = ofi_fabric_open(&nn_ofi_resources,nn_ep_getaddr((struct nn_ep*) hint),
+        OFI_ADDR_REMOTE, &fabric );
+    if (ret) {
+        return ret;
+    }
+
+    /* Open a COFI */
+    return nn_cofi_create(hint, epbase, fabric);
 }
 
 /**
@@ -98,8 +151,15 @@ static struct nn_optset *nn_ofi_optset (void)
     alloc_assert (optset);
     optset->base.vfptr = &nn_ofi_optset_vfptr;
 
-    /*  Default values for OFI socket options. */
-    optset->slab_mr_size = NN_OFI_DEFAULT_SLABMR_SIZE;
+    /*  Default values for OFI socket options (0=max). */
+    optset->rx_queue_size = 2;
+    optset->tx_queue_size = 0;
+    optset->slab_size = 4096;
+#if _POSIX_C_SOURCE >= 200112L
+    optset->mem_align = sysconf(_SC_PAGESIZE);
+#else
+    optset->mem_align = sizeof(void*);
+#endif
 
     return &optset->base;
 }
@@ -126,10 +186,25 @@ static int nn_ofi_optset_setopt (struct nn_optset *self, int option,
     val = *(int*) optval;
 
     switch (option) {
-    case NN_OFI_SLABMR_SIZE:
-        if (nn_slow (val != 0 && val != 1))
+    case NN_OFI_RX_QUEUE_SIZE:
+        if (nn_slow (val < 2))
             return -EINVAL;
-        optset->slab_mr_size = val;
+        optset->rx_queue_size = val;
+        return 0;
+    case NN_OFI_TX_QUEUE_SIZE:
+        if (nn_slow (val < 0))
+            return -EINVAL;
+        optset->tx_queue_size = val;
+        return 0;
+    case NN_OFI_MEM_ALIGN:
+        if (nn_slow (val < 1))
+            return -EINVAL;
+        optset->mem_align = val * sizeof(void*);
+        return 0;
+    case NN_OFI_SLAB_SIZE:
+        if (nn_slow (val < 0))
+            return -EINVAL;
+        optset->slab_size = val;
         return 0;
     default:
         return -ENOPROTOOPT;
@@ -145,8 +220,17 @@ static int nn_ofi_optset_getopt (struct nn_optset *self, int option,
     optset = nn_cont (self, struct nn_ofi_optset, base);
 
     switch (option) {
-    case NN_OFI_SLABMR_SIZE:
-        intval = optset->slab_mr_size;
+    case NN_OFI_RX_QUEUE_SIZE:
+        intval = optset->rx_queue_size;
+        break;
+    case NN_OFI_TX_QUEUE_SIZE:
+        intval = optset->tx_queue_size;
+        break;
+    case NN_OFI_MEM_ALIGN:
+        intval = optset->mem_align / sizeof(void*);
+        break;
+    case NN_OFI_SLAB_SIZE:
+        intval = optset->slab_size;
         break;
     default:
         return -ENOPROTOOPT;

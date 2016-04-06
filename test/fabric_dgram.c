@@ -21,8 +21,10 @@
  * SOFTWARE.
  */
 
+#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <pthread.h>
 
 #include <hlapi.h>
 
@@ -60,7 +62,13 @@ int main(int argc, char ** argv)
 	const char * service = "5125";
 	if (argc >= 4) service = argv[3];
 
-	// ofi.hints->fabric_attr->name = "usnic_0";
+	/* Allocate a data pointer */
+	size_t msg_len;
+	char * data = malloc( MAX_MSG_SIZE );
+	if (data == NULL) {
+		printf("ERROR: Unable to allocate memory!\n");
+		return 255;
+	}
 
 	/* Setup OFI resources */
 	if (!strcmp(argv[1], "server")) {
@@ -72,14 +80,19 @@ int main(int argc, char ** argv)
 		if (ret)
 			return ret;
 
+		/* Manage this memory region */
+		struct ofi_mr *mr;
+		ofi_mr_alloc( &ep, &mr ); 
+		ofi_mr_manage( &ep, mr, data, MAX_MSG_SIZE, 1, MR_SEND | MR_RECV );
+
 		/* Receive data */
 		printf("Receiving data...");
-		ret = ofi_rx( &ep, MAX_MSG_SIZE, -1 );
+		ret = ofi_rx_data( &ep, data, MAX_MSG_SIZE, fi_mr_desc( mr->mr ), &msg_len, -1 );
 		if (ret) {
 			printf("Error sending message!\n");
 			return 1;
 		}
-		printf("'%s'\n", ep.rx_buf );
+		printf("'%s'\n", data );
 
 
 	} else if (!strcmp(argv[1], "client")) {
@@ -96,10 +109,15 @@ int main(int argc, char ** argv)
 		if (ret)
 			return ret;
 
+		/* Manage this memory region */
+		struct ofi_mr *mr;
+		ofi_mr_alloc( &ep, &mr ); 
+		ofi_mr_manage( &ep, mr, data, MAX_MSG_SIZE, 1, MR_SEND | MR_RECV );
+
 		/* Send data */
 		printf("Sending data...");
-		sprintf( ep.tx_buf, "Hello World" );
-		ret = ofi_tx( &ep, 12, 1 );
+		sprintf( data, "Hello World" );
+		ret = ofi_tx_data( &ep, data, 12, fi_mr_desc( mr->mr ), 1 );
 		if (ret) {
 			printf("Error sending message!\n");
 			return 1;

@@ -129,6 +129,7 @@ static void nn_sofi_critical_error( struct nn_sofi * self, int error )
  */
 static void nn_sofi_freefn( void * ptr, void * user )
 {
+    struct nn_sofi_buffer * buf = user;
     nn_free(ptr);
 }
 
@@ -954,16 +955,22 @@ void nn_sofi_init ( struct nn_sofi *self, struct ofi_domain *domain, int offset,
 #if _POSIX_C_SOURCE >= 200112L
         ret = posix_memalign( &chunkdata, mem_align, rx_msg_size );
         nn_assert( ret == 0 );
-        nn_chunk_alloc_ptr( chunkdata, rx_msg_size, &nn_sofi_freefn, NULL,
-            &self->ingress_buffers[i].chunk );
+        nn_chunk_alloc_ptr( chunkdata, rx_msg_size, &nn_sofi_freefn, 
+            &self->ingress_buffers[i], &self->ingress_buffers[i].chunk );
 #else
         nn_chunk_alloc( rx_msg_size, 0, &self->ingress_buffers[i].chunk );
 #endif
 
         /* Register memory */
+#if _POSIX_C_SOURCE >= 200112L
+        ret = fi_mr_reg(self->domain->domain, chunkdata, 
+            rx_msg_size, mr_flags, 0, mr_page_offset+NN_SOFI_MRM_RECV_KEY+i, 0, 
+            &self->ingress_buffers[i].mr, NULL);
+#else
         ret = fi_mr_reg(self->domain->domain, self->ingress_buffers[i].chunk, 
             rx_msg_size, mr_flags, 0, mr_page_offset+NN_SOFI_MRM_RECV_KEY+i, 0, 
             &self->ingress_buffers[i].mr, NULL);
+#endif
         if (ret) {
             FT_PRINTERR("fi_mr_reg", ret);
         }

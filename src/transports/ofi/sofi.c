@@ -87,10 +87,10 @@
 #define NN_SOFI_KEEPALIVE_IN_TICKS       4
 
 /* Memory registration keys */
-#define NN_SOFI_MRM_LOCAL_KEY           0x0000
+#define NN_SOFI_MRM_AUX_KEY             0x0000
 #define NN_SOFI_MRM_SEND_KEY            0x0001
-#define NN_SOFI_MRM_RECV_KEY            0x0FFD
-#define NN_SOFI_MRM_KEY_PAGE            0x1000
+#define NN_SOFI_MRM_RECV_KEY            0x0800
+#define NN_SOFI_MRM_KEY_PAGE_SIZE       0x1000
 
 /* Forward Declarations */
 static void nn_sofi_handler (struct nn_fsm *self, int src, int type, 
@@ -122,6 +122,14 @@ static void nn_sofi_critical_error( struct nn_sofi * self, int error )
     /* Set error & stop the FSM */
     self->error = error;
     nn_fsm_stop( &self->fsm );
+}
+
+/**
+ * Chunk free function
+ */
+static void nn_sofi_freefn( void * ptr, void * user )
+{
+    nn_free(ptr);
 }
 
 /* ########################################################################## */
@@ -393,7 +401,7 @@ static int nn_sofi_egress_post_buffers( struct nn_sofi * self,
 
         }
 
-        _ofi_debug("OFI[S]: Sending SPHDR[%zu], BODY[%zu]\n", 
+        _ofi_debug("OFI[S]: Sending SPHDR[%zu]+BODY[%zu]\n", 
             iov[0].iov_len, iov[1].iov_len);
 
     }
@@ -807,8 +815,12 @@ void nn_sofi_init ( struct nn_sofi *self, struct ofi_domain *domain, int offset,
     struct nn_epbase *epbase, int src, struct nn_fsm *owner )
 {
     const uint64_t mr_flags = FI_RECV | FI_READ | FI_REMOTE_WRITE;
-    uint64_t mr_page_offset = NN_SOFI_MRM_KEY_PAGE * offset;
+    uint64_t mr_page_offset = NN_SOFI_MRM_KEY_PAGE_SIZE * offset;
     int ret, i;
+
+#if _POSIX_C_SOURCE >= 200112L
+    void * chunkdata;
+#endif
 
     /* Initialize properties */
     self->domain = domain;
@@ -873,22 +885,28 @@ void nn_sofi_init ( struct nn_sofi *self, struct ofi_domain *domain, int offset,
     nn_epbase_getopt (epbase, NN_OFI, NN_OFI_MEM_ALIGN, &mem_align, &opt_sz);
     nn_epbase_getopt (epbase, NN_OFI, NN_OFI_SLAB_SIZE, &slab_size, &opt_sz);
     nn_epbase_getopt (epbase, NN_SOL_SOCKET, NN_RCVBUF, &rx_msg_size, &opt_sz);
-    _ofi_debug("OFI[S]: Options: NN_OFI_TX_QUEUE_SIZE=%i"
-                    ", NN_OFI_RX_QUEUE_SIZE=%i,\n", rx_queue, tx_queue);
-    _ofi_debug("OFI[S]:          NN_OFI_MEM_ALIGN=%i, NN_RCVBUF=%i,\n",
-                    mem_align, rx_msg_size);
-    _ofi_debug("OFI[S]:          NN_OFI_SLAB_SIZE=%i\n", slab_size);
 
     /* Put default values if set to AUTO */
     if (tx_queue == 0) tx_queue = domain->fi->tx_attr->size;
     if (rx_queue == 0) rx_queue = domain->fi->rx_attr->size;
+
+    /* Wrap overflown values */ 
+    if (tx_queue > domain->fi->tx_attr->size) tx_queue = domain->fi->tx_attr->size;
+    if (rx_queue > domain->fi->rx_attr->size) rx_queue = domain->fi->rx_attr->size;
+
+    /* Debug print current values */
+    _ofi_debug("OFI[S]: Options: Tx-Queue-Size: %i"
+                    ", Rx-Queue-Size: %i,\n", rx_queue, tx_queue);
+    _ofi_debug("OFI[S]:          Mem-Align: %i b, Max-Recv-Size: %i b,\n",
+                    mem_align, rx_msg_size);
+    _ofi_debug("OFI[S]:          Slab-Size: %i b\n", slab_size);
 
     /* ####[ ANCILLARY ]#### */
 
     /* Register ancillary data */
     ret = fi_mr_reg(self->domain->domain, self->aux_buf, NN_SOFI_ANCILLARY_SIZE, 
         FI_RECV| FI_READ| FI_REMOTE_WRITE| FI_SEND| FI_WRITE| FI_REMOTE_READ, 
-        0, mr_page_offset+NN_SOFI_MRM_LOCAL_KEY, 0, &self->aux_mr, NULL);
+        0, mr_page_offset+NN_SOFI_MRM_AUX_KEY, 0, &self->aux_mr, NULL);
     if (ret) {
         FT_PRINTERR("fi_mr_reg", ret);
     }
@@ -905,6 +923,7 @@ void nn_sofi_init ( struct nn_sofi *self, struct ofi_domain *domain, int offset,
 
     /* Initialize egress MR Manager with 32 banks */
     struct ofi_mr_bank_attr mrattr_tx = {
+         /* Worst case Tx scenario : Body bank + SP Header bank */
         .bank_count = tx_queue * 2,
         .domain = self->domain,
         .direction = OFI_MR_DIR_SEND,
@@ -924,21 +943,22 @@ void nn_sofi_init ( struct nn_sofi *self, struct ofi_domain *domain, int offset,
     /* ####[ INGRESS ]#### */
 
     /* Allocate ingress buffers */
-#if _POSIX_C_SOURCE >= 200112L
-    ret = posix_memalign( (void**)&self->ingress_buffers, mem_align, 
-        sizeof(struct nn_sofi_buffer) * rx_queue );
-    nn_assert( ret == 0 );
-#else
     self->ingress_buffers = nn_alloc( sizeof(struct nn_sofi_buffer) * rx_queue, 
         "ingress sofi buffer" );
     nn_assert( self->ingress_buffers );
-#endif
 
     /* Allocate chunks */
     for (i=0; i<rx_queue; ++i) {
 
         /* Allocate chunk */
+#if _POSIX_C_SOURCE >= 200112L
+        ret = posix_memalign( &chunkdata, mem_align, rx_msg_size );
+        nn_assert( ret == 0 );
+        nn_chunk_alloc_ptr( chunkdata, rx_msg_size, &nn_sofi_freefn, NULL,
+            &self->ingress_buffers[i].chunk );
+#else
         nn_chunk_alloc( rx_msg_size, 0, &self->ingress_buffers[i].chunk );
+#endif
 
         /* Register memory */
         ret = fi_mr_reg(self->domain->domain, self->ingress_buffers[i].chunk, 

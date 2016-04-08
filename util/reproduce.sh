@@ -1,6 +1,10 @@
 #!/bin/bash
-#####################################
-#####################################
+################################################################
+#
+#    Utility Script to help through the build sequence of
+#    nanomsg and the OFI transport for debugging purposes.
+#
+################################################################
 
 WORK_DIR=$(pwd)/nanomsg-reproduce
 LOCAL_DIR=$WORK_DIR/local
@@ -25,10 +29,10 @@ function num_cpus {
 
 # Help screen
 function help {
-	echo "Use: $0 build [patch hash] [nanomsg hash] [--logs]"
-	echo "     $0 clean"
-	echo "     $0 server ofi://[ip]:[port] [packet size]"
-	echo "     $0 client ofi://[ip]:[port] [packet size]"
+	echo "Use: reproduce.sh build [patch hash] [nanomsg hash] [--logs]"
+	echo "     reproduce.sh clean"
+	echo "     reproduce.sh server ofi://[ip]:[port] [packet size]"
+	echo "     reproduce.sh client ofi://[ip]:[port] [packet size]"
 	echo ""
 	echo " build  : Build nanomsg including the OFI transport"
 	echo "          The --logs flag will enable verbose logging"
@@ -115,11 +119,11 @@ function deploy_ofi_patch {
 
 # Configure for rebuild
 function build_nanomsg {
-	local FLAGS="$1"
+	local LOGS_ENABLED="$1"
 
 	cd $BUILD_DIR
 	log "Configuring nanomsg"
-	$NANOMSG_DIR/configure --prefix=$LOCAL_DIR || return 1
+	$NANOMSG_DIR/configure --enable-ofi --$LOGS_ENABLED-ofi-logs --prefix=$LOCAL_DIR || return 1
 	log "Building nanomsg"
 	CFLAGS=$FLAGS make -j$(num_cpus) || return 1
 	log "Installing nanomsg"
@@ -148,7 +152,7 @@ case $CMD in
 	build)
 		
 		# Default values
-		FLAGS=""
+		LOGS="disable"
 		BRANCH_NN="pull-nn_allocmsg_ptr"
 		BRANCH_PATCH="devel-ofiw"
 		IDX=0
@@ -157,7 +161,9 @@ case $CMD in
 		shift
 		while [ ! -z "$1" ]; do
 			case $1 in
-				--log) FLAGS="$FLAGS -DOFI_DEBUG_LOG" ;;
+				--logs)
+					log "Enabling verbose logging in OFI" 
+					LOGS="enable" ;;
 				--*) die "Unknown flag '$1'" ;;
 				*) if [ $IDX -eq 0 ]; then
 				   		BRANCH_PATCH="$1"
@@ -176,7 +182,7 @@ case $CMD in
 		prepare_workdir || die "Cannot prepare working directory"
 		deploy_nanomsg $BRANCH_NN || die "Cannot deploy nanomsg"
 		deploy_ofi_patch $BRANCH_PATCH || die "Cannot deploy OFI patch"
-		build_nanomsg "$FLAGS" || die "Cannot build nanomsg"
+		build_nanomsg $LOGS || die "Cannot build nanomsg"
 		build_tests || die "Cannot build tests"
 		log "Ready! You can now use 'server' and 'client' commands"
 		echo "*** SUCCESS ***" 1>&2

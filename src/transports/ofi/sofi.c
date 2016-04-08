@@ -657,7 +657,7 @@ static int nn_sofi_ingress_post( struct nn_sofi * self )
 
     /* Prepare message from active ingress buffer */
     memset( &msg, 0, sizeof(msg) );
-    iov[0].iov_base = buf->chunk;
+    iov[0].iov_base = nn_chunk_deref( buf->chunk );
     iov[0].iov_len = self->ingress_buf_size;
     msg.desc = &buf->mr_desc[0];
     msg.msg_iov = &iov[0];
@@ -706,7 +706,7 @@ static void nn_sofi_ingress_handle( struct nn_sofi * self,
     if (cq_entry->len == NN_SOFI_KEEPALIVE_PACKET_LEN) {
 
         /* Test payload contents */
-        if (memcmp( buf->chunk, NN_SOFI_KEEPALIVE_PACKET, 
+        if (memcmp( nn_chunk_deref(buf->chunk), NN_SOFI_KEEPALIVE_PACKET, 
             NN_SOFI_KEEPALIVE_PACKET_LEN ) == 0)
         {
 
@@ -954,6 +954,7 @@ void nn_sofi_init ( struct nn_sofi *self, struct ofi_domain *domain, int offset,
         /* Allocate chunk */
 #if _POSIX_C_SOURCE >= 200112L
         ret = posix_memalign( &chunkdata, mem_align, rx_msg_size );
+        _ofi_debug("OFI[S]: Allocating %i-aligned chunk=%p\n", mem_align, chunkdata);
         nn_assert( ret == 0 );
         nn_chunk_alloc_ptr( chunkdata, rx_msg_size, &nn_sofi_freefn, 
             &self->ingress_buffers[i], &self->ingress_buffers[i].chunk );

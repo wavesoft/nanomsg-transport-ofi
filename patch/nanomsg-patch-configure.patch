@@ -1,0 +1,64 @@
+--- configure.ac	2016-04-08 13:48:25.000000000 +0200
++++ configure.ac	2016-04-08 14:26:11.000000000 +0200
+@@ -165,6 +165,43 @@
+ fi
+ 
+ ################################################################################
++#  If --enable-ofi is specified set appropriate compiler options.              #
++################################################################################
++
++AC_ARG_ENABLE([ofi], [AS_HELP_STRING([--enable-ofi],
++    [Enable OpenFabrics Interfaces (ofi) Transport [default=no]])])
++
++AC_ARG_ENABLE([ofi_logs], [AS_HELP_STRING([--enable-ofi-logs],
++    [Enable verbose logging on the OFI transport [default=no]])])
++
++AC_ARG_ENABLE([ofi_waitsets], [AS_HELP_STRING([--enable-ofi-waitsets],
++    [Enable use of waitsets on ofi transport [default=no]])])
++
++## Enable ofi sources
++
++AM_CONDITIONAL([OFI], [test "x$enable_ofi" = "xyes" ])
++
++## Enable verbose logging using --enable-ofi-logs
++
++if test "x$enable_ofi_logs" = "xyes"; then
++    AC_DEFINE([OFI_DEBUG_LOG])
++fi
++
++## Enable waitsets using --enable-ofi-waitsets 
++
++if test "x$enable_ofi_waitsets" = "xyes"; then
++    AC_DEFINE([OFI_USE_WAITSET])
++fi
++
++## Specify custom libfabric path using --with-fabric=
++
++AC_ARG_WITH([fabric],
++    [ AS_HELP_STRING([--with-fabric], [installation of libfabric]) ],
++    [ LDFLAGS="${LDFLAGS} -L${withval}/lib"
++      CFLAGS="${CFLAGS} -I${withval}/include" ]
++)
++
++################################################################################
+ #  Build the documentation.                                                    #
+ ################################################################################
+ 
+@@ -366,6 +403,17 @@
+     ])
+ ])
+ 
++AS_IF([test x"$enable_ofi" == "xyes"], [
++    AC_SEARCH_LIBS([fi_getinfo], [fabric],
++      [],
++      [AC_MSG_FAILURE([cannot find libfabric library])]
++    )
++    AC_CHECK_HEADERS([rdma/fabric.h],
++      [],
++      [AC_MSG_FAILURE([cannot find libfabric header])]
++    )
++])
++
+ LT_INIT
+ 
+ DOLT

@@ -54,6 +54,8 @@ patch -p0 -d ${NANOMSG_DIR} < ${CURR_PATH}/patch/nanomsg-patch-maxtransport.patc
 [ $? -ne 0 ] && echo -e "** FAILED **\nUnable to apply patch to src/core/sock.h!" && exit 1
 patch -d ${NANOMSG_DIR} < ${CURR_PATH}/patch/nanomsg-patch-makefile.patch
 [ $? -ne 0 ] && echo -e "** FAILED **\nUnable to apply patch to Makefile.am!" && exit 1
+patch -d ${NANOMSG_DIR} < ${CURR_PATH}/patch/nanomsg-patch-configure.patch
+[ $? -ne 0 ] && echo -e "** FAILED **\nUnable to apply patch to configure.am!" && exit 1
 
 # Link sources directory
 echo "Copying..."

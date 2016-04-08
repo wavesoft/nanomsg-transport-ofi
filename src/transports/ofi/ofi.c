@@ -199,7 +199,7 @@ static int nn_ofi_optset_setopt (struct nn_optset *self, int option,
     case NN_OFI_MEM_ALIGN:
         if (nn_slow (val < 1))
             return -EINVAL;
-        optset->mem_align = val * sizeof(void*);
+        optset->mem_align = val;
         return 0;
     case NN_OFI_SLAB_SIZE:
         if (nn_slow (val < 0))
@@ -227,7 +227,7 @@ static int nn_ofi_optset_getopt (struct nn_optset *self, int option,
         intval = optset->tx_queue_size;
         break;
     case NN_OFI_MEM_ALIGN:
-        intval = optset->mem_align / sizeof(void*);
+        intval = optset->mem_align;
         break;
     case NN_OFI_SLAB_SIZE:
         intval = optset->slab_size;

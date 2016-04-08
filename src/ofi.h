@@ -36,7 +36,7 @@ extern "C" {
 
 /* Debug functions */
 unsigned long get_page_frame_number_of_address(void *addr);
-uint64_t get_physical_address(void *buffer);
+unsigned long long get_physical_address(void *buffer);
 
 #ifdef __cplusplus
 }

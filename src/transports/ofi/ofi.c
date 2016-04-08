@@ -267,7 +267,7 @@ unsigned long get_page_frame_number_of_address(void *addr) {
    return page_frame_number;
 }
 
-uint64_t get_physical_address(void *buffer) {
+unsigned long long get_physical_address(void *buffer) {
 
     // Find the difference from the buffer to the page boundary
     unsigned long page_frame_number = get_page_frame_number_of_address(buffer);

@@ -730,6 +730,7 @@ static void nn_sofi_ingress_handle( struct nn_sofi * self,
     }
 
     /* Prepare message from the active staged buffer */
+    _ofi_debug("OFI[S]: Received BODY[%i]\n", cq_entry->len);
     nn_chunk_reset( buf->chunk, cq_entry->len );
     nn_msg_init_chunk( &buf->msg, buf->chunk );
     nn_chunk_addref( buf->chunk, 1 );

@@ -53,6 +53,7 @@
 #define NN_SOFI_IN_FLAG_POSTLATER        0x01
 #define NN_SOFI_IN_FLAG_NNBUSY           0x02
 #define NN_SOFI_IN_FLAG_NNLATER          0x04
+#define NN_SOFI_IN_FLAG_FLUSH            0x08
 
 /* FSM Handshake State */
 #define NN_SOFI_HS_STATE_LOCAL           0
@@ -309,15 +310,15 @@ static int nn_sofi_egress_post_buffers( struct nn_sofi * self,
     nn_msg_mv(&ctx->msg, outmsg);
 
     /* Prepare SP Header */
-    iov [0].iov_base = nn_chunkref_data (&outmsg->sphdr);
-    iov [0].iov_len = nn_chunkref_size (&outmsg->sphdr);
+    iov [0].iov_base = nn_chunkref_data (&ctx->msg.sphdr);
+    iov [0].iov_len = nn_chunkref_size (&ctx->msg.sphdr);
 
     /* If SP Header is empty, use only 1 iov */
     if (nn_fast( iov[0].iov_len == 0 )) {
 
         /* Prepare IOVs */
-        iov [0].iov_base = nn_chunkref_data (&outmsg->body);
-        iov [0].iov_len = nn_chunkref_size (&outmsg->body);
+        iov [0].iov_base = nn_chunkref_data (&ctx->msg.body);
+        iov [0].iov_len = nn_chunkref_size (&ctx->msg.body);
 
         /* Prepare message */
         msg.msg_iov = iov;
@@ -334,7 +335,7 @@ static int nn_sofi_egress_post_buffers( struct nn_sofi * self,
 
             /* Replace free function */
             ret = nn_chunk_replace_free_fn(
-                    nn_chunkref_getchunk(&outmsg->body),
+                    nn_chunkref_getchunk(&ctx->msg.body),
                     &nn_sofi_mr_free,
                     &ctx->freeptr[0],
                     &ctx->freeptr[0].free_fn,
@@ -351,8 +352,8 @@ static int nn_sofi_egress_post_buffers( struct nn_sofi * self,
     } else {
 
         /* Prepare IOVs */
-        iov [1].iov_base = nn_chunkref_data (&outmsg->body);
-        iov [1].iov_len = nn_chunkref_size (&outmsg->body);
+        iov [1].iov_base = nn_chunkref_data (&ctx->msg.body);
+        iov [1].iov_len = nn_chunkref_size (&ctx->msg.body);
 
         /* Prepare message */
         msg.msg_iov = iov;
@@ -369,7 +370,7 @@ static int nn_sofi_egress_post_buffers( struct nn_sofi * self,
 
             /* Replace free function */
             ret = nn_chunk_replace_free_fn(
-                    nn_chunkref_getchunk(&outmsg->body),
+                    nn_chunkref_getchunk(&ctx->msg.body),
                     &nn_sofi_mr_free,
                     &ctx->freeptr[0],
                     &ctx->freeptr[0].free_fn,
@@ -390,7 +391,7 @@ static int nn_sofi_egress_post_buffers( struct nn_sofi * self,
 
             /* Replace free function */
             ret = nn_chunk_replace_free_fn(
-                    nn_chunkref_getchunk(&outmsg->body),
+                    nn_chunkref_getchunk(&ctx->msg.body),
                     &nn_sofi_mr_free,
                     &ctx->freeptr[1],
                     &ctx->freeptr[1].free_fn,
@@ -580,9 +581,23 @@ static int nn_sofi_ingress_empty( struct nn_sofi * self )
  */
 static void nn_sofi_ingress_flush( struct nn_sofi * self )
 {
+
+    /* If there is a pending nanomsg operation, don't flush now */
+    if (self->ingress_flags & NN_SOFI_IN_FLAG_NNBUSY) {
+
+        /* Mark ingress queue for delayed flushing */
+        self->ingress_flags |= NN_SOFI_IN_FLAG_FLUSH;
+        _ofi_debug("OFI[S]: Nanomsg is busy, delaying ingress flush\n");
+        return;
+
+    }
+
     /* Discard all items on ingress buffer */
     self->ingress_len = 0;
+    self->ingress_flags &= ~NN_SOFI_IN_FLAG_POSTLATER;
+    self->ingress_flags &= ~NN_SOFI_IN_FLAG_NNLATER;
     self->ingress_head = self->ingress_tail;
+
 }
 
 /**
@@ -654,6 +669,7 @@ static int nn_sofi_ingress_post( struct nn_sofi * self )
     buf = &self->ingress_buffers[ret];
     self->ingress_active = ret;
     _ofi_debug("OFI[S]: Posting ingress=%i\n", self->ingress_active);
+    _ofi_debug("OFI[S]: Ingress buffer=%p\n", nn_chunk_deref( buf->chunk ));
 
     /* Prepare message from active ingress buffer */
     memset( &msg, 0, sizeof(msg) );
@@ -662,11 +678,12 @@ static int nn_sofi_ingress_post( struct nn_sofi * self )
     msg.desc = &buf->mr_desc[0];
     msg.msg_iov = &iov[0];
     msg.iov_count = 1;
+    msg.context = &buf->context;
 
     /* Post receive buffers */
     ret = ofi_recvmsg( self->ep, &msg, 0 );
     if (ret) {
-        FT_PRINTERR("fi_mr_reg", ret);
+        FT_PRINTERR("ofi_recvmsg", ret);
         nn_sofi_critical_error( self, ret );
     }
 
@@ -697,10 +714,11 @@ static void nn_sofi_ingress_handle( struct nn_sofi * self,
 
     /* Reset keepalive timer */
     self->ticks_in = 0;
- 
+
     /* Get the posted ingress buffer */
-    _ofi_debug("OFI[S]: Handling ingress=%i\n", self->ingress_active);
-    buf = &self->ingress_buffers[self->ingress_active];
+    buf = nn_cont( cq_entry->op_context, struct nn_sofi_buffer, context );
+    _ofi_debug("OFI[S]: Handling ingress=%i (active=%i)\n", 
+        (int)(buf - self->ingress_buffers), self->ingress_active);
 
     /* Check if this is a keepalive message */
     if (cq_entry->len == NN_SOFI_KEEPALIVE_PACKET_LEN) {
@@ -801,6 +819,12 @@ static int nn_sofi_ingress_fetch( struct nn_sofi * self,
         /* We have data */
         nn_pipebase_received( &self->pipebase );
 
+    }
+
+    /* If we must be flushed, retry now */
+    if (self->ingress_flags & NN_SOFI_IN_FLAG_FLUSH) {
+        _ofi_debug("OFI[S]: Executing delayed ingress queue flush\n");
+        nn_sofi_ingress_flush( self );
     }
 
     /* Return success */
@@ -955,31 +979,32 @@ void nn_sofi_init ( struct nn_sofi *self, struct ofi_domain *domain, int offset,
         /* Allocate chunk */
 #if _POSIX_C_SOURCE >= 200112L
         ret = posix_memalign( &chunkdata, mem_align, rx_msg_size );
-        _ofi_debug("OFI[S]: Allocating %i-aligned ingress chunk=%p\n", mem_align, chunkdata);
         nn_assert( ret == 0 );
         nn_chunk_alloc_ptr( chunkdata, rx_msg_size, &nn_sofi_freefn, 
             &self->ingress_buffers[i], &self->ingress_buffers[i].chunk );
+        _ofi_debug("OFI[S]: Allocated %i-aligned ingress chunk=%p (== %p)\n", 
+            mem_align,nn_chunk_deref(self->ingress_buffers[i].chunk),chunkdata);
 #else
         nn_chunk_alloc( rx_msg_size, 0, &self->ingress_buffers[i].chunk );
+        _ofi_debug("OFI[S]: Allocated %i-aligned ingress chunk=%p\n", mem_align, 
+            self->ingress_buffers[i].chunk);
 #endif
 
         /* Register memory */
 #if _POSIX_C_SOURCE >= 200112L
         ret = fi_mr_reg(self->domain->domain, chunkdata, 
-            rx_msg_size, mr_flags, 0, mr_page_offset+NN_SOFI_MRM_RECV_KEY+i, 0, 
-            &self->ingress_buffers[i].mr, NULL);
 #else
         ret = fi_mr_reg(self->domain->domain, self->ingress_buffers[i].chunk, 
+#endif
             rx_msg_size, mr_flags, 0, mr_page_offset+NN_SOFI_MRM_RECV_KEY+i, 0, 
             &self->ingress_buffers[i].mr, NULL);
-#endif
         if (ret) {
             FT_PRINTERR("fi_mr_reg", ret);
         }
 
         /* Get desc */
         self->ingress_buffers[i].mr_desc[0] = 
-            fi_mr_desc(self->ingress_buffers[i].mr );
+            fi_mr_desc( self->ingress_buffers[i].mr );
 
         /* Reset flags */
         self->ingress_buffers[i].flags = 0;
@@ -1215,9 +1240,9 @@ static int nn_sofi_recv (struct nn_pipebase *pb, struct nn_msg *msg)
     int ret;
     struct nn_sofi *self;
     self = nn_cont (pb, struct nn_sofi, pipebase);
-    _ofi_debug("OFI[S]: NanoMsg RECV event\n");
 
     /* Fetch a message from the ingress queue */
+    _ofi_debug("OFI[S]: NanoMsg RECV event\n");
     return nn_sofi_ingress_fetch( self, msg );
 }
 
@@ -1238,22 +1263,22 @@ static void nn_sofi_shutdown (struct nn_fsm *fsm, int src, int type,
     if (nn_slow (src == NN_FSM_ACTION && type == NN_FSM_STOP)) {
         _ofi_debug("OFI[S]: We are now closing\n");
 
+        /* Enter closing state */
+        self->state = NN_SOFI_STATE_CLOSING;
+
         /* Stop keepalive timer */
         nn_timer_stop( &self->timer_keepalive );
 
         /* Flush ingress queue */
-        _ofi_debug("OFI[S]: Discarding panding ingress buffers\n");
+        _ofi_debug("OFI[S]: Discarding pending ingress buffers\n");
         nn_sofi_ingress_flush( self );
 
         /* If we are not connected, or if we are closing due to an 
            error, discard all staged egress messages */
         if ((self->state == NN_SOFI_STATE_CONNECTING) || (self->error != 0)) {
-            _ofi_debug("OFI[S]: Discarding panding egress buffers\n");
+            _ofi_debug("OFI[S]: Discarding pending egress buffers\n");
             nn_sofi_egress_flush( self );
         }
-
-        /* Shutdown the endpoint */
-        self->state = NN_SOFI_STATE_CLOSING;
 
     } else if (nn_slow(src == (NN_SOFI_SRC_ENDPOINT | OFI_SRC_CQ_TX) )) {
 
@@ -1621,7 +1646,8 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
 
                 /* Check if connection timed out */
                 if (++self->ticks_in > NN_SOFI_KEEPALIVE_IN_TICKS) {
-                    _ofi_debug("OFI[S]: Keepalive expired, dropping connection\n");
+                    _ofi_debug("OFI[S]: Keepalive expired, dropping"
+                        " connection\n");
                     
                     /* Reset and stop timer */
                     self->ticks_in = 0;

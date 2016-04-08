@@ -43,6 +43,9 @@
 /* Custom free function */
 static void freefn (void *p, void *user)
 {
+	printf("*************************\n");
+	printf("* !! FREEING POINTER !! *\n");
+	printf("*************************\n");
 	free(p);
 }
 
@@ -65,7 +68,7 @@ int run_tests( int sock, int direction, size_t msg_len )
 
 	// Populate message contents
 	for (i=0; i<msg_len; i++)
-		*((uint8_t*)&ptr[i]) = i % 0xFF;
+		((uint8_t*)ptr)[i] = i % 0xFF;
 
 	// When sending, start counting before transmittion
 	if (direction == DIRECTION_OUT) {
@@ -102,7 +105,7 @@ int run_tests( int sock, int direction, size_t msg_len )
 	            printf("!! Received %d instead of %zu\n", sz_n, msg_len);
 	        }
 	        if (memcmp(msg, ptr, msg_len) != 0) {
-	        	printf("!! Invalid message (comparing %i bytes)!\n", msg_len);
+	        	printf("!! Invalid message (comparing %zu bytes)!\n", msg_len);
 	        }
 			nn_freemsg (msg);
 			printf("-- Received %i\n", i);

@@ -82,6 +82,9 @@ struct nn_sofi_buffer {
     /* MR Descriptor */
     void * mr_desc[1];
 
+    /* Chunk context */
+    struct fi_context context;
+
     /* Buffer flags */
     uint8_t flags;
 
@@ -124,7 +127,6 @@ struct nn_sofi {
 
     /* Egress properties */
     struct nn_msg               outmsg;
-    struct nn_mutex             stageout_mutex;
     struct nn_atomic            stageout_counter;
     uint8_t                     stageout_state;
     uint8_t                     out_state;

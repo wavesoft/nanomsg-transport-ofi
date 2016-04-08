@@ -29,16 +29,23 @@ function num_cpus {
 
 # Help screen
 function help {
-	echo "Use: reproduce.sh build [patch hash] [nanomsg hash] [--logs]"
+	echo "Use: reproduce.sh build [patch hash] [nanomsg hash]"
+	echo "                  [--enable-ofi-logs] [--enable-ofi-waitset]"
+	echo "                  [--with-fabric=/usr/local]"
 	echo "     reproduce.sh clean"
 	echo "     reproduce.sh server ofi://[ip]:[port] [packet size]"
 	echo "     reproduce.sh client ofi://[ip]:[port] [packet size]"
 	echo ""
-	echo " build  : Build nanomsg including the OFI transport"
-	echo "          The --logs flag will enable verbose logging"
-	echo " clean  : Remove all files related to the test"
-	echo " server : Start a listening node on the specified IP"
-	echo " client : Start a connecting node on the specified IP"
+	echo "Commands:"
+	echo "  build   Build nanomsg including the OFI transport"
+	echo "  clean   Remove all files related to the test"
+	echo "  server  Start a listening node on the specified IP"
+	echo "  client  Start a connecting node on the specified IP"
+	echo ""
+	echo "Build flags:"
+	echo " --enable-ofi-logs    Enables verbose debug logging"
+	echo " --enable-ofi-waitset Enable waitsets (only on providers that support it)"
+	echo " --with-fabric=       Specify the path to libfabric installation "
 	echo ""
 	exit 1
 }
@@ -119,11 +126,9 @@ function deploy_ofi_patch {
 
 # Configure for rebuild
 function build_nanomsg {
-	local LOGS_ENABLED="$1"
-
 	cd $BUILD_DIR
 	log "Configuring nanomsg"
-	$NANOMSG_DIR/configure --enable-ofi --$LOGS_ENABLED-ofi-logs --prefix=$LOCAL_DIR || return 1
+	$NANOMSG_DIR/configure --enable-ofi --prefix=$LOCAL_DIR $* || return 1
 	log "Building nanomsg"
 	CFLAGS=$FLAGS make -j$(num_cpus) || return 1
 	log "Installing nanomsg"
@@ -133,9 +138,10 @@ function build_nanomsg {
 
 # Build nanomsg test files
 function build_tests {
+	local LIBFABRIC_DIR=$1
 	cd $NANOMSG_TRANSPORT_DIR/test
 	log "Building nanomsg-transport-ofi tests"
-	make nanomsg NANOMSG_DIR=$LOCAL_DIR || return 1
+	make nanomsg NANOMSG_DIR=$LOCAL_DIR LIBFABRIC_DIR=$LIBFABRIC_DIR || return 1
 	return 0
 }
 
@@ -152,28 +158,34 @@ case $CMD in
 	build)
 		
 		# Default values
-		LOGS="disable"
 		BRANCH_NN="pull-nn_allocmsg_ptr"
 		BRANCH_PATCH="devel-ofiw"
+		LIBFABRIC_DIR="/usr/local"
+		ARGS=""
 		IDX=0
 
 		# Process arguments
 		shift
 		while [ ! -z "$1" ]; do
 			case $1 in
-				--logs)
-					log "Enabling verbose logging in OFI" 
-					LOGS="enable" ;;
-				--*) die "Unknown flag '$1'" ;;
-				*) if [ $IDX -eq 0 ]; then
+				--with-fabric=*)
+					ARGS="$ARGS $1"
+					LIBFABRIC_DIR=$(echo $1 | awk -F'=' '{print $2}')
+					;;
+				--*)
+					# All flags are is passed to configure
+					ARGS="$ARGS $1"
+					;;
+				*) 
+					if [ $IDX -eq 0 ]; then
 				   		BRANCH_PATCH="$1"
-				   elif [ $IDX -eq 1 ]; then
+				   	elif [ $IDX -eq 1 ]; then
 				   		BRANCH_NN="$1"
-				   else
+				   	else
 					   	die "Unexpected argument '$1' ($IDX)"
-				   fi
-				   let IDX++
-				   ;;
+				   	fi
+				   	let IDX++
+				   	;;
 			esac
 			shift
 		done
@@ -182,8 +194,8 @@ case $CMD in
 		prepare_workdir || die "Cannot prepare working directory"
 		deploy_nanomsg $BRANCH_NN || die "Cannot deploy nanomsg"
 		deploy_ofi_patch $BRANCH_PATCH || die "Cannot deploy OFI patch"
-		build_nanomsg $LOGS || die "Cannot build nanomsg"
-		build_tests || die "Cannot build tests"
+		build_nanomsg $ARGS || die "Cannot build nanomsg"
+		build_tests $LIBFABRIC_DIR || die "Cannot build tests"
 		log "Ready! You can now use 'server' and 'client' commands"
 		echo "*** SUCCESS ***" 1>&2
 		;;

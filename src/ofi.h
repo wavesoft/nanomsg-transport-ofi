@@ -34,6 +34,10 @@ extern "C" {
 #define NN_OFI_MEM_ALIGN 3
 #define NN_OFI_SLAB_SIZE 4
 
+/* Debug functions */
+unsigned long get_page_frame_number_of_address(void *addr);
+uint64_t get_physical_address(void *buffer);
+
 #ifdef __cplusplus
 }
 #endif

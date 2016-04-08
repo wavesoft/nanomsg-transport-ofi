@@ -982,8 +982,11 @@ void nn_sofi_init ( struct nn_sofi *self, struct ofi_domain *domain, int offset,
         nn_assert( ret == 0 );
         nn_chunk_alloc_ptr( chunkdata, rx_msg_size, &nn_sofi_freefn, 
             &self->ingress_buffers[i], &self->ingress_buffers[i].chunk );
-        _ofi_debug("OFI[S]: Allocated %i-aligned ingress chunk=%p (== %p)\n", 
-            mem_align,nn_chunk_deref(self->ingress_buffers[i].chunk),chunkdata);
+        _ofi_debug("OFI[S]: Allocated %i-aligned ingress chunk=%p "
+                "(physical=%llu, page=%lu)\n", 
+            mem_align,nn_chunk_deref(self->ingress_buffers[i].chunk),
+            get_physical_address(chunkdata),
+            get_page_frame_number_of_address(chunkdata));
 #else
         nn_chunk_alloc( rx_msg_size, 0, &self->ingress_buffers[i].chunk );
         _ofi_debug("OFI[S]: Allocated %i-aligned ingress chunk=%p\n", mem_align, 

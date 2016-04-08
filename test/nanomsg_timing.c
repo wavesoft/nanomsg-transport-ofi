@@ -70,6 +70,10 @@ int run_tests( int sock, int direction, size_t msg_len )
 	for (i=0; i<msg_len; i++)
 		((uint8_t*)ptr)[i] = i % 0xFF;
 
+	printf("-- Allocating user ptr=%p, physical=%llu, page=%lli",
+		ptr,get_physical_address(ptr),
+            get_page_frame_number_of_address(ptr));
+
 	// When sending, start counting before transmittion
 	if (direction == DIRECTION_OUT) {
 		u_bw_init( &bw, "OUT: ");

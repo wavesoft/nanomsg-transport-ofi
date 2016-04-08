@@ -30,8 +30,8 @@ function num_cpus {
 # Help screen
 function help {
 	echo "Use: reproduce.sh build [patch hash] [nanomsg hash]"
-	echo "                  [--enable-ofi-logs] [--enable-ofi-waitset]"
-	echo "                  [--with-fabric=/usr/local]"
+	echo "                        [--enable-ofi-logs] [--enable-ofi-waitset]"
+	echo "                        [--with-fabric=/usr/local]"
 	echo "     reproduce.sh clean"
 	echo "     reproduce.sh [d]server ofi://[ip]:[port] [packet size]"
 	echo "     reproduce.sh [d]client ofi://[ip]:[port] [packet size]"

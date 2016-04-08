@@ -55,15 +55,21 @@ int run_tests( int sock, int direction, size_t msg_len )
 	int iterations = ITERATIONS;
 	int sz_n, i;
 
-	// When sending, start counting before transmittion
-	if (direction == DIRECTION_OUT) {
-		u_bw_init( &bw, "OUT: ");
+	// Allocate a test data chunk
 #if _POSIX_C_SOURCE >= 200112L
 	assert( posix_memalign(&ptr, sysconf(_SC_PAGESIZE), msg_len) == 0);
 #else
 	ptr = malloc( msg_len );
 	assert( ptr );
 #endif
+
+	// Populate message contents
+	for (i=0; i<msg_len; i++)
+		*((uint8_t*)&ptr[i]) = i % 0xFF;
+
+	// When sending, start counting before transmittion
+	if (direction == DIRECTION_OUT) {
+		u_bw_init( &bw, "OUT: ");
 		msg = nn_allocmsg_ptr( ptr, msg_len, freefn, NULL );
 	}
 
@@ -94,6 +100,9 @@ int run_tests( int sock, int direction, size_t msg_len )
 			sz_n = nn_recv (sock, &msg, NN_MSG, 0);
             if (sz_n != msg_len) {
 	            printf("!! Received %d instead of %zu\n", sz_n, msg_len);
+	        }
+	        if (memcmp(msg, ptr, msg_len) != 0) {
+	        	printf("!! Invalid message (comparing %i bytes)!\n", msg_len);
 	        }
 			nn_freemsg (msg);
 			printf("-- Received %i\n", i);

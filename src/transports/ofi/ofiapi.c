@@ -191,7 +191,7 @@ int ofi_init( struct ofi_resources * R, enum fi_ep_type ep_type )
 
     /* Fabric */
     R->hints->caps          = FI_MSG;
-    R->hints->mode          = FI_CONTEXT | FI_LOCAL_MR;
+    R->hints->mode          = FI_CONTEXT | FI_LOCAL_MR | FI_ASYNC_IOV;
 
     /* Specify the address format we are using */
     R->hints->addr_format   = FI_SOCKADDR;

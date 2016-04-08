@@ -955,7 +955,7 @@ void nn_sofi_init ( struct nn_sofi *self, struct ofi_domain *domain, int offset,
         /* Allocate chunk */
 #if _POSIX_C_SOURCE >= 200112L
         ret = posix_memalign( &chunkdata, mem_align, rx_msg_size );
-        _ofi_debug("OFI[S]: Allocating %i-aligned chunk=%p\n", mem_align, chunkdata);
+        _ofi_debug("OFI[S]: Allocating %i-aligned ingress chunk=%p\n", mem_align, chunkdata);
         nn_assert( ret == 0 );
         nn_chunk_alloc_ptr( chunkdata, rx_msg_size, &nn_sofi_freefn, 
             &self->ingress_buffers[i], &self->ingress_buffers[i].chunk );

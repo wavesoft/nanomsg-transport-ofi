@@ -33,14 +33,16 @@ function help {
 	echo "                  [--enable-ofi-logs] [--enable-ofi-waitset]"
 	echo "                  [--with-fabric=/usr/local]"
 	echo "     reproduce.sh clean"
-	echo "     reproduce.sh server ofi://[ip]:[port] [packet size]"
-	echo "     reproduce.sh client ofi://[ip]:[port] [packet size]"
+	echo "     reproduce.sh [d]server ofi://[ip]:[port] [packet size]"
+	echo "     reproduce.sh [d]client ofi://[ip]:[port] [packet size]"
 	echo ""
 	echo "Commands:"
-	echo "  build   Build nanomsg including the OFI transport"
-	echo "  clean   Remove all files related to the test"
-	echo "  server  Start a listening node on the specified IP"
-	echo "  client  Start a connecting node on the specified IP"
+	echo "  build    Build nanomsg including the OFI transport"
+	echo "  clean    Remove all files related to the test"
+	echo "  server   Start a listening node on the specified IP"
+	echo "  client   Start a connecting node on the specified IP"
+	echo "  dserver  Same as 'server', but start in debugger"
+	echo "  dclient  Same as 'client', but start in debugger"
 	echo ""
 	echo "Build flags:"
 	echo " --enable-ofi-logs    Enables verbose debug logging"
@@ -220,6 +222,38 @@ case $CMD in
 		export LD_LIBRARY_PATH=$LOCAL_DIR/lib:$LD_LIBRARY_PATH
 		export DYLD_LIBRARY_PATH=$LOCAL_DIR/lib:$LD_LIBRARY_PATH
 		$TEST_BIN node1 $*
+		;;
+
+	dserver)
+		[ ! -f $TEST_BIN ] && die "Cannot find $TEST_BIN, make sure you ran 'build' first!"
+		shift
+		export LD_LIBRARY_PATH=$LOCAL_DIR/lib:$LD_LIBRARY_PATH
+		export DYLD_LIBRARY_PATH=$LOCAL_DIR/lib:$LD_LIBRARY_PATH
+		if [ ! -z "$(which lldb)" ]; then
+			lldb -- $TEST_BIN node0 $*
+		elif [ ! -z "$(which gdb)" ]; then
+			gdb -args $TEST_BIN node0 $*
+		else
+			log "Cannot find a debugger, enable core dumping for later investigation"
+			ulimit -c unlimited
+			$TEST_BIN node0 $*
+		fi
+		;;
+
+	dclient)
+		[ ! -f $TEST_BIN ] && die "Cannot find $TEST_BIN, make sure you ran 'build' first!"
+		shift
+		export LD_LIBRARY_PATH=$LOCAL_DIR/lib:$LD_LIBRARY_PATH
+		export DYLD_LIBRARY_PATH=$LOCAL_DIR/lib:$LD_LIBRARY_PATH
+		if [ ! -z "$(which lldb)" ]; then
+			lldb -- $TEST_BIN node1 $*
+		elif [ ! -z "$(which gdb)" ]; then
+			gdb -args $TEST_BIN node1 $*
+		else
+			log "Cannot find a debugger, enable core dumping for later investigation"
+			ulimit -c unlimited
+			$TEST_BIN node1 $*
+		fi
 		;;
 
 	*)	echo "ERROR: Unknown command $CMD!" 1>&2

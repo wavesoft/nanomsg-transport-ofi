@@ -32,7 +32,7 @@
    You can specify them as compiler definitions */
 
 /* Enable debug logs */
-#define OFI_DEBUG_LOG
+// #define OFI_DEBUG_LOG
 
 /* Open one domain per endpoint */
 // #define OFI_DOMAIN_PER_EP

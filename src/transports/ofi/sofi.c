@@ -646,7 +646,7 @@ static int nn_sofi_ingress_post( struct nn_sofi * self )
     /* Get the input buffer to post */
     ret = nn_sofi_ingress_buf_head( self );
     if (ret < 0) {
-        _ofi_debug("OFI[S]: Ingress buffer is full\n");
+        _ofi_debug("OFI[S]: No free ingress buffers found\n");
         return -EAGAIN;
     }
 
@@ -730,7 +730,7 @@ static void nn_sofi_ingress_handle( struct nn_sofi * self,
     }
 
     /* Prepare message from the active staged buffer */
-    _ofi_debug("OFI[S]: Received BODY[%i]\n", cq_entry->len);
+    _ofi_debug("OFI[S]: Received BODY[%zu]\n", cq_entry->len);
     nn_chunk_reset( buf->chunk, cq_entry->len );
     nn_msg_init_chunk( &buf->msg, buf->chunk );
     nn_chunk_addref( buf->chunk, 1 );
@@ -774,14 +774,14 @@ static int nn_sofi_ingress_fetch( struct nn_sofi * self,
     }
 
     /* Move message to output */
-    _ofi_debug("OFI[S]: Sending to nanomsg ingress=%i\n", ret);
+    _ofi_debug("OFI[S]: Passing to nanomsg ingress buffer=%i\n", ret);
     nn_msg_mv( msg, &buf->msg );
 
     /* If we have a POSTLATER flag, post now */
     if (self->ingress_flags & NN_SOFI_IN_FLAG_POSTLATER) {
 
         /* Post another ingress buffer */
-        _ofi_debug("OFI[S]: Posting late input buffers\n");
+        _ofi_debug("OFI[S]: Posting late ingress buffers\n");
         self->ingress_flags &= ~NN_SOFI_IN_FLAG_POSTLATER;
         nn_sofi_ingress_post( self );
 

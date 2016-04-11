@@ -228,38 +228,38 @@ static int nn_ofi_optset_getopt (struct nn_optset *self, int option,
     return 0;
 }
 
-#define PAGE_SHIFT 12
-#define PAGEMAP_LENGTH 8
+// #define PAGE_SHIFT 12
+// #define PAGEMAP_LENGTH 8
 
-unsigned long get_page_frame_number_of_address(void *addr) {
-   // Open the pagemap file for the current process
-   FILE *pagemap = fopen("/proc/self/pagemap", "rb");
+// unsigned long get_page_frame_number_of_address(void *addr) {
+//    // Open the pagemap file for the current process
+//    FILE *pagemap = fopen("/proc/self/pagemap", "rb");
 
-   // Seek to the page that the buffer is on
-   unsigned long offset = (unsigned long)addr / getpagesize() * PAGEMAP_LENGTH;
-   if(fseek(pagemap, (unsigned long)offset, SEEK_SET) != 0) {
-      fprintf(stderr, "Failed to seek pagemap to proper location\n");
-      exit(1);
-   }
+//    // Seek to the page that the buffer is on
+//    unsigned long offset = (unsigned long)addr / getpagesize() * PAGEMAP_LENGTH;
+//    if(fseek(pagemap, (unsigned long)offset, SEEK_SET) != 0) {
+//       fprintf(stderr, "Failed to seek pagemap to proper location\n");
+//       exit(1);
+//    }
 
-   // The page frame number is in bits 0-54 so read the first 7 bytes and clear the 55th bit
-   unsigned long page_frame_number = 0;
-   fread(&page_frame_number, 1, PAGEMAP_LENGTH-1, pagemap);
+//    // The page frame number is in bits 0-54 so read the first 7 bytes and clear the 55th bit
+//    unsigned long page_frame_number = 0;
+//    fread(&page_frame_number, 1, PAGEMAP_LENGTH-1, pagemap);
 
-   page_frame_number &= 0x7FFFFFFFFFFFFF;
+//    page_frame_number &= 0x7FFFFFFFFFFFFF;
 
-   fclose(pagemap);
+//    fclose(pagemap);
 
-   return page_frame_number;
-}
+//    return page_frame_number;
+// }
 
-unsigned long long get_physical_address(void *buffer) {
+// unsigned long long get_physical_address(void *buffer) {
 
-    // Find the difference from the buffer to the page boundary
-    unsigned long page_frame_number = get_page_frame_number_of_address(buffer);
-    unsigned long distance_from_page_boundary = (unsigned long)buffer % getpagesize();
+//     // Find the difference from the buffer to the page boundary
+//     unsigned long page_frame_number = get_page_frame_number_of_address(buffer);
+//     unsigned long distance_from_page_boundary = (unsigned long)buffer % getpagesize();
 
-    // Return physical page address
-    return (page_frame_number << PAGE_SHIFT) + distance_from_page_boundary;
+//     // Return physical page address
+//     return (page_frame_number << PAGE_SHIFT) + distance_from_page_boundary;
 
-}
+// }

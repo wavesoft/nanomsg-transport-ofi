@@ -900,11 +900,10 @@ int nn_sofi_init ( struct nn_sofi *self, struct ofi_domain *domain, int offset,
     /* ----------------------------------- */
 
     /* Get options */
-    int rx_queue, tx_queue, rx_msg_size, slab_size, mem_align;
+    int rx_queue, tx_queue, rx_msg_size, slab_size;
     size_t opt_sz = sizeof(int);
     nn_epbase_getopt (epbase, NN_OFI, NN_OFI_TX_QUEUE_SIZE, &tx_queue, &opt_sz);
     nn_epbase_getopt (epbase, NN_OFI, NN_OFI_RX_QUEUE_SIZE, &rx_queue, &opt_sz);
-    nn_epbase_getopt (epbase, NN_OFI, NN_OFI_MEM_ALIGN, &mem_align, &opt_sz);
     nn_epbase_getopt (epbase, NN_OFI, NN_OFI_SLAB_SIZE, &slab_size, &opt_sz);
     nn_epbase_getopt (epbase, NN_SOL_SOCKET, NN_RCVBUF, &rx_msg_size, &opt_sz);
 
@@ -919,9 +918,8 @@ int nn_sofi_init ( struct nn_sofi *self, struct ofi_domain *domain, int offset,
     /* Debug print current values */
     _ofi_debug("OFI[S]: Options: Tx-Queue-Size: %i"
                     ", Rx-Queue-Size: %i,\n", rx_queue, tx_queue);
-    _ofi_debug("OFI[S]:          Mem-Align: %i b, Max-Recv-Size: %i b,\n",
-                    mem_align, rx_msg_size);
-    _ofi_debug("OFI[S]:          Slab-Size: %i b\n", slab_size);
+    _ofi_debug("OFI[S]:          Max-Recv-Size: %i b, Slab-Size: %i b\n",
+                    rx_msg_size, slab_size);
 
     /* ####[ ANCILLARY ]#### */
 
@@ -977,16 +975,18 @@ int nn_sofi_init ( struct nn_sofi *self, struct ofi_domain *domain, int offset,
             &self->ingress_buffers[i].chunk );
         if (ret == -ENOSYS) {
             /* Page-aligned allocator failed, use default */
-            _ofi_debug("OFI[S]: Aligned alloc not supported by your system\n");
             ret = nn_chunk_alloc( rx_msg_size, 0, 
                 &self->ingress_buffers[i].chunk );
+            _ofi_debug("OFI[S]: Allocated non-aligned ingress chunk=%p\n",
+                self->ingress_buffers[i].chunk);
+        } else {
+            _ofi_debug("OFI[S]: Allocated aligned ingress chunk=%p\n",
+                self->ingress_buffers[i].chunk);
         }
         if (ret) {
             FT_PRINTERR("nn_chunk_alloc", ret);
             return ret;
         }
-        _ofi_debug("OFI[S]: Allocated %i-aligned ingress chunk=%p\n", mem_align, 
-            self->ingress_buffers[i].chunk);
 
         /* Register memory */
         ret = fi_mr_reg(self->domain->domain, self->ingress_buffers[i].chunk, 

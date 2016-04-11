@@ -439,7 +439,7 @@ static void nn_bofi_handler (struct nn_fsm *self, int src, int type,
                     nn_bofi_new_sofi_offset(bofi), &bofi->epbase, 
                     NN_BOFI_SRC_SOFI, &bofi->fsm);
                 if (ret) {
-                    nn_bofi_reap_sofi( sofi );
+                    nn_bofi_reap_sofi( bofi, sofi );
                     if (ret) {
                         FT_PRINTERR("nn_sofi_init", ret);
                         nn_bofi_critical_error( bofi, ret );

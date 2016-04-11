@@ -33,9 +33,9 @@ extern "C" {
 #define NN_OFI_TX_QUEUE_SIZE 2
 #define NN_OFI_SLAB_SIZE 3
 
-/* Debug functions */
-unsigned long get_page_frame_number_of_address(void *addr);
-unsigned long long get_physical_address(void *buffer);
+// /* Debug functions */
+// unsigned long get_page_frame_number_of_address(void *addr);
+// unsigned long long get_physical_address(void *buffer);
 
 #ifdef __cplusplus
 }

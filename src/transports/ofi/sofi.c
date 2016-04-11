@@ -917,7 +917,8 @@ int nn_sofi_init ( struct nn_sofi *self, struct ofi_domain *domain, int offset,
 
     /* Debug print current values */
     _ofi_debug("OFI[S]: Options: Tx-Queue-Size: %i"
-                    ", Rx-Queue-Size: %i,\n", rx_queue, tx_queue);
+                    ", Rx-Queue-Size: %i, Offset: %i\n", 
+                    rx_queue, tx_queue, offset);
     _ofi_debug("OFI[S]:          Max-Recv-Size: %i b, Slab-Size: %i b\n",
                     rx_msg_size, slab_size);
 
@@ -1399,6 +1400,9 @@ static void nn_sofi_shutdown (struct nn_fsm *fsm, int src, int type,
         nn_fsm_bad_source (self->state, src, type);
 
     }
+
+    /* Disable worker */
+    nn_ofiw_stop( self->worker );
 
     /* Close endpoint */
     _ofi_debug("OFI[S]: Closing endpoint\n");

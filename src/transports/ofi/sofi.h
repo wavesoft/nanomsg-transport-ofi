@@ -153,7 +153,7 @@ struct nn_sofi {
 };
 
 /*  Initialize the state machine */
-void nn_sofi_init (struct nn_sofi *self, struct ofi_domain *domain, int offset,
+int nn_sofi_init (struct nn_sofi *self, struct ofi_domain *domain, int offset,
     struct nn_epbase *epbase, int src, struct nn_fsm *owner);
 
 /* Start the state machine either in receiving or sending side */

@@ -837,16 +837,12 @@ static int nn_sofi_ingress_fetch( struct nn_sofi * self,
 /* ########################################################################## */
 
 /*  Initialize the state machine */
-void nn_sofi_init ( struct nn_sofi *self, struct ofi_domain *domain, int offset,
+int nn_sofi_init ( struct nn_sofi *self, struct ofi_domain *domain, int offset,
     struct nn_epbase *epbase, int src, struct nn_fsm *owner )
 {
     const uint64_t mr_flags = FI_RECV | FI_READ | FI_REMOTE_WRITE;
     uint64_t mr_page_offset = NN_SOFI_MRM_KEY_PAGE_SIZE * offset;
     int ret, i;
-
-#if _POSIX_C_SOURCE >= 200112L
-    void * chunkdata;
-#endif
 
     /* Initialize properties */
     self->domain = domain;
@@ -977,29 +973,23 @@ void nn_sofi_init ( struct nn_sofi *self, struct ofi_domain *domain, int offset,
     for (i=0; i<rx_queue; ++i) {
 
         /* Allocate chunk */
-#if _POSIX_C_SOURCE >= 200112L
-        ret = posix_memalign( &chunkdata, mem_align, rx_msg_size );
-        nn_assert( ret == 0 );
-        nn_chunk_alloc_ptr( chunkdata, rx_msg_size, &nn_sofi_freefn, 
-            &self->ingress_buffers[i], &self->ingress_buffers[i].chunk );
-        memset( chunkdata, 0, rx_msg_size );
-        _ofi_debug("OFI[S]: Allocated %i-aligned ingress chunk=%p "
-                "(physical=%llu, page=%lu)\n", 
-            mem_align,nn_chunk_deref(self->ingress_buffers[i].chunk),
-            get_physical_address(chunkdata),
-            get_page_frame_number_of_address(chunkdata));
-#else
-        nn_chunk_alloc( rx_msg_size, 0, &self->ingress_buffers[i].chunk );
+        ret = nn_chunk_alloc( rx_msg_size, NN_ALLOC_PAGEALIGN, 
+            &self->ingress_buffers[i].chunk );
+        if (ret == -ENOSYS) {
+            /* Page-aligned allocator failed, use default */
+            _ofi_debug("OFI[S]: Aligned alloc not supported by your system\n");
+            ret = nn_chunk_alloc( rx_msg_size, 0, 
+                &self->ingress_buffers[i].chunk );
+        }
+        if (ret) {
+            FT_PRINTERR("nn_chunk_alloc", ret);
+            return ret;
+        }
         _ofi_debug("OFI[S]: Allocated %i-aligned ingress chunk=%p\n", mem_align, 
             self->ingress_buffers[i].chunk);
-#endif
 
         /* Register memory */
-#if _POSIX_C_SOURCE >= 200112L
-        ret = fi_mr_reg(self->domain->domain, chunkdata, 
-#else
         ret = fi_mr_reg(self->domain->domain, self->ingress_buffers[i].chunk, 
-#endif
             rx_msg_size, mr_flags, 0, mr_page_offset+NN_SOFI_MRM_RECV_KEY+i, 0, 
             &self->ingress_buffers[i].mr, NULL);
         if (ret) {
@@ -1022,6 +1012,9 @@ void nn_sofi_init ( struct nn_sofi *self, struct ofi_domain *domain, int offset,
     self->ingress_buf_size = rx_msg_size;
     self->ingress_max = rx_queue;
     self->ingress_flags = 0;
+
+    /* Success */
+    return 0;
 
 }
 

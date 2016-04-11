@@ -44,7 +44,6 @@ struct nn_ofi_optset {
     int rx_queue_size;
     int tx_queue_size;
     int slab_size;
-    size_t mem_align;
 };
 
 /* Optset interface */
@@ -156,11 +155,6 @@ static struct nn_optset *nn_ofi_optset (void)
     optset->rx_queue_size = 2;
     optset->tx_queue_size = 2;
     optset->slab_size = 4096;
-#if _POSIX_C_SOURCE >= 200112L
-    optset->mem_align = sysconf(_SC_PAGESIZE);
-#else
-    optset->mem_align = sizeof(void*);
-#endif
 
     return &optset->base;
 }
@@ -197,11 +191,6 @@ static int nn_ofi_optset_setopt (struct nn_optset *self, int option,
             return -EINVAL;
         optset->tx_queue_size = val;
         return 0;
-    case NN_OFI_MEM_ALIGN:
-        if (nn_slow (val < 1))
-            return -EINVAL;
-        optset->mem_align = val;
-        return 0;
     case NN_OFI_SLAB_SIZE:
         if (nn_slow (val < 0))
             return -EINVAL;
@@ -226,9 +215,6 @@ static int nn_ofi_optset_getopt (struct nn_optset *self, int option,
         break;
     case NN_OFI_TX_QUEUE_SIZE:
         intval = optset->tx_queue_size;
-        break;
-    case NN_OFI_MEM_ALIGN:
-        intval = optset->mem_align;
         break;
     case NN_OFI_SLAB_SIZE:
         intval = optset->slab_size;

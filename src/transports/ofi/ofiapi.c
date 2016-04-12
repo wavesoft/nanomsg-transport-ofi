@@ -209,9 +209,9 @@ int ofi_term( struct ofi_resources * R )
     }
 
     /* Free structures */
-    if (R->fabric_attr) {
-        nn_free(R->fabric_attr);
-        R->fabric_attr = NULL;
+    if (R->hints->fabric_attr) {
+        nn_free(R->hints->fabric_attr);
+        R->hints->fabric_attr = NULL;
     }
     fi_freeinfo( R->hints );
     nn_list_term( &R->fabrics );

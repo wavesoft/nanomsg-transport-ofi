@@ -203,11 +203,6 @@ int ofi_domain_open( struct ofi_fabric * F, struct fi_info *fi,
  */
 int ofi_domain_close( struct ofi_domain * domain );
 
-/**
- * Get message prefix size on this domain
- */
-size_t ofi_domain_prefix_size( struct ofi_domain * domain );
-
 /* ########################################################################## */
 /*  Passive Endpoint Functions                                                */
 /* ########################################################################## */

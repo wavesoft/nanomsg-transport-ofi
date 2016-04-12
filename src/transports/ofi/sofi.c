@@ -859,7 +859,6 @@ int nn_sofi_init ( struct nn_sofi *self, struct ofi_domain *domain, int offset,
     self->epbase = epbase;
     self->stageout_state = NN_SOFI_STAGEOUT_STATE_IDLE;
     self->out_state = NN_SOFI_OUT_STATE_IDLE;
-    self->msg_prefix = ofi_domain_prefix_size( domain );
 
     /* Initialize local handshake */
     self->hs_local.version = 1;
@@ -930,18 +929,11 @@ int nn_sofi_init ( struct nn_sofi *self, struct ofi_domain *domain, int offset,
                     rx_queue, tx_queue, offset);
     _ofi_debug("OFI[S]:          Max-Recv-Size: %i b, Slab-Size: %i b\n",
                     rx_msg_size, slab_size);
-    _ofi_debug("OFI[S]:          Prefix size: %zu b\n",
-                    self->msg_prefix);
 
     /* ####[ ANCILLARY ]#### */
 
-    /* Allcoate ancillary buffer */
-    self->aux_buf = nn_alloc( NN_SOFI_ANCILLARY_SIZE + self->msg_prefix, "aux");
-    nn_assert( self->aux_buf );
-
     /* Register ancillary data */
-    ret = fi_mr_reg(self->domain->domain, self->aux_buf, 
-        NN_SOFI_ANCILLARY_SIZE + self->msg_prefix,
+    ret = fi_mr_reg(self->domain->domain, self->aux_buf, NN_SOFI_ANCILLARY_SIZE, 
         FI_RECV| FI_READ| FI_REMOTE_WRITE| FI_SEND| FI_WRITE| FI_REMOTE_READ, 
         0, mr_page_offset+NN_SOFI_MRM_AUX_KEY, 0, &self->aux_mr, NULL);
     if (ret) {
@@ -988,7 +980,7 @@ int nn_sofi_init ( struct nn_sofi *self, struct ofi_domain *domain, int offset,
     for (i=0; i<rx_queue; ++i) {
 
         /* Allocate chunk */
-        ret = nn_chunk_alloc( rx_msg_size + ofi_domain_prefix_size(domain), NN_ALLOC_PAGEALIGN, 
+        ret = nn_chunk_alloc( rx_msg_size, NN_ALLOC_PAGEALIGN, 
             &self->ingress_buffers[i].chunk );
         if (ret == -ENOSYS) {
             /* Page-aligned allocator failed, use default */
@@ -1167,9 +1159,6 @@ void nn_sofi_term (struct nn_sofi *self)
     if (ret) {
         FT_PRINTERR("fi_mr_reg", ret);
     }
-
-    /* Free ancillary buffer */
-    nn_free(self->aux_buf);
 
     /* ----------------------------------- */
     /*  NanoMsg Component Termination      */

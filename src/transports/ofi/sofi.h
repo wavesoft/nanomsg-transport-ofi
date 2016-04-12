@@ -121,11 +121,8 @@ struct nn_sofi {
     uint8_t                     ticks_in;
     uint8_t                     ticks_out;
 
-    /* Message prefix */
-    size_t                      msg_prefix;
-
     /* Ancillary buffer */
-    uint8_t                     *aux_buf;
+    uint8_t                     aux_buf[NN_SOFI_ANCILLARY_SIZE];
     struct fi_context           aux_context;
     struct fid_mr               *aux_mr;
 

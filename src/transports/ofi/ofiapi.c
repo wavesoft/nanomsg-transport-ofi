@@ -132,7 +132,7 @@ static int ofi_match_fabric( const char * addr, enum ofi_fabric_addr_flags addf,
     /* Try to find a matching fabric according to specs & hints */
     ret = fi_getinfo(FT_FIVERSION, node, service, flags, hints, ans);
     if (ret) {
-        if (ret != -ENODATA) {
+        if (ret != -FI_ENODATA) {
             FT_PRINTERR("fi_getinfo", ret);
         }
         nn_free(node);
@@ -144,7 +144,7 @@ static int ofi_match_fabric( const char * addr, enum ofi_fabric_addr_flags addf,
 
     /* Return error if nothing found */
     if (*ans == NULL) {
-        return -ENODATA;
+        return -FI_ENODATA;
     }
 
     /* Return found fabric */
@@ -209,6 +209,10 @@ int ofi_term( struct ofi_resources * R )
     }
 
     /* Free structures */
+    if (R->fabric_attr) {
+        nn_free(R->fabric_attr);
+        R->fabric_attr = NULL;
+    }
     fi_freeinfo( R->hints );
     nn_list_term( &R->fabrics );
 
@@ -239,7 +243,7 @@ int ofi_fabric_open( struct ofi_resources * R, const char * address,
     /* Find the fabric that most accurately describes the address */
     ret = ofi_match_fabric( address, flags, R->hints, &item->fi );
     if (ret) {
-        if (ret != -ENODATA) {
+        if (ret != -FI_ENODATA) {
             FT_PRINTERR("ofi_match_fabric", ret);
         } else {
             fprintf(stderr,"OFI: No fabric matches the specifications given\n");

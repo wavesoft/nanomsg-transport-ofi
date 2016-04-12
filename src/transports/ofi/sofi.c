@@ -235,17 +235,23 @@ static void nn_sofi_mr_free( void *p, void *user )
 static int nn_sofi_egress_post_aux( struct nn_sofi * self, size_t len )
 {
     int ret;
+    void * desc[0];
     struct iovec iov [1];
     struct fi_msg msg;
+
+    /* Set desc */
+    desc[0] = fi_mr_desc( self->aux_mr );
 
     /* Prepare msg IOVs */
     iov[0].iov_base = self->aux_buf;
     iov[0].iov_len = len;
+    msg.desc = &desc[0];
     msg.msg_iov = iov;
     msg.iov_count = 1;
     msg.context = NULL;
 
     /* Send data, without generating a CQ */
+    _ofi_debug("OFI[S]: Sending AUX egress (len=%i)\n", len);
     ret = ofi_sendmsg( self->ep, &msg, 0 );
     if (ret) {
         FT_PRINTERR("ofi_sendmsg", ret);
@@ -1533,8 +1539,8 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
 
                 /* Start keepalive timer */
                 _ofi_debug("OFI[S]: Starting keepalive timer\n");
-                // nn_timer_start( &self->timer_keepalive, 
-                //     NN_SOFI_TIMEOUT_KEEPALIVE_TICK );
+                nn_timer_start( &self->timer_keepalive, 
+                    NN_SOFI_TIMEOUT_KEEPALIVE_TICK );
 
                 /* Post input buffers */
                 nn_sofi_ingress_post( self );

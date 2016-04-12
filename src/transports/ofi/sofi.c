@@ -1342,7 +1342,7 @@ static void nn_sofi_shutdown (struct nn_fsm *fsm, int src, int type,
 
         /* Wait for timer to stop */
         if (nn_fast( type == NN_TIMER_TIMEOUT )) {
-            if (self->socket_state == NN_SOFI_STATE_CLOSING) {
+            if (self->socket_state == NN_SOFI_SOCKET_STATE_CLOSING) {
                 /* Stop timer (handled at stop event) */
                 nn_timer_stop( &self->timer_shutdown );
 #if OFI_DRAIN_TIMEOUT > 0

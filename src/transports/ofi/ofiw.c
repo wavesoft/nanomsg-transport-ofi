@@ -83,6 +83,9 @@ static void nn_ofiw_poller_thread( void *arg )
     ssize_t sret;
     int ret;
 
+    uint8_t i;
+    struct fi_cq_data_entry cq_entries[16];
+
     struct fi_eq_cm_entry   eq_entry;
     uint32_t                event;
 
@@ -142,19 +145,21 @@ static void nn_ofiw_poller_thread( void *arg )
 
                         /* Read completion queue */
                         ret = fi_cq_read( (struct fid_cq *)item->fd,
-                            &item->data.cq_entry, 1);
+                            &cq_entries, 16);
                         if (nn_slow(ret > 0)) {
-                            _ofi_debug("OFI[w]: Got CQ Event from src=%i, worker=%p, fd=%p\n",
-                                item->src, worker, item);
+                            _ofi_debug("OFI[w]: Got %i CQ Event(s) from src=%i,"
+                               " worker=%p, fd=%p\n",ret,item->src,worker,item);
 
                             /* Feed event to the FSM */
                             self->lock_safe = 1;
                             nn_ctx_enter (worker->owner->ctx);
-                            nn_fsm_feed (worker->owner, 
-                                item->src,
-                                NN_OFIW_COMPLETED,
-                                &item->data.cq_entry
-                            );
+                            for (i=0; i<ret; i++) {
+                                nn_fsm_feed (worker->owner, 
+                                    item->src,
+                                    NN_OFIW_COMPLETED,
+                                    &cq_entries[i]
+                                );
+                            }
                             nn_ctx_leave (worker->owner->ctx);
                             self->lock_safe = 0;
 

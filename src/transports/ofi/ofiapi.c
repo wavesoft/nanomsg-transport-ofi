@@ -70,7 +70,7 @@ static int ofi_match_fabric( const char * addr, enum ofi_fabric_addr_flags addf,
     size_t len = strlen(addr);
     char * node = nn_alloc( len+1, "address" );
     char *service, *fabric, *provider;
-    struct fi_info *fabrics, *f, *f_pick;
+    struct fi_info *f, *f_pick;
 
     /* Copy const addr to local buffer */
     memcpy( node, addr, len+1 );
@@ -109,58 +109,45 @@ static int ofi_match_fabric( const char * addr, enum ofi_fabric_addr_flags addf,
     if (addf == OFI_ADDR_LOCAL)
         flags = FI_SOURCE;
 
-    _ofi_debug("OFI[A]: Looking fabric for node=%s, service=%s, fabric=%s, provider=%s\n",
-        node, service, fabric, provider);
+    /* Populate additional hints fields according to specs */
+    if (fabric || provider) {
+        
+        /* Make sure we have fabric attributes */
+        if (!hints->fabric_attr) {
+            hints->fabric_attr = nn_alloc( sizeof *(hints->fabric_attr),
+                "fabric attr" );
+            nn_assert( hints->fabric_attr );
+        }
+
+        /* Set provider and/or fabric name */
+        memset( hints->fabric_attr, 0, sizeof *(hints->fabric_attr) );
+        if (fabric) hints->fabric_attr->name = fabric;
+        if (provider) hints->fabric_attr->prov_name = provider;
+
+    }
+
+    _ofi_debug("OFI[A]: Looking fabric for node=%s, service=%s, fabric=%s, "
+        "provider=%s\n", node, service, fabric, provider);
 
     /* Try to find a matching fabric according to specs & hints */
-    ret = fi_getinfo(FT_FIVERSION, node, service, flags, hints, &fabrics);
+    ret = fi_getinfo(FT_FIVERSION, node, service, flags, hints, ans);
     if (ret) {
-        FT_PRINTERR("fi_getinfo", ret);
+        if (ret != -ENODATA) {
+            FT_PRINTERR("fi_getinfo", ret);
+        }
         nn_free(node);
         return ret;
     }
 
-    /* Iterate over fabrics and test fabric & provider arags */
-    f_pick = NULL; f = fabrics;
-    while (f != NULL) {
-        _ofi_debug("OFI[A]: Found compatible fabric=%s, provider=%s\n",
-            f->fabric_attr->name, f->fabric_attr->prov_name);
+    /* Free local string components */
+    nn_free( node );
 
-        /* Assume that's our candidate */
-        f_pick = f;
-
-        /* Test if fabric or provider does not match */
-        if (fabric != NULL) {
-            if (strcicmp(fabric, f->fabric_attr->name) != 0) {
-                _ofi_debug("OFI[A]: Mismatched fabric name\n");
-                f_pick = NULL;
-            }
-        }
-        if (provider != NULL) {
-            if (strcicmp(provider, f->fabric_attr->prov_name) != 0) {
-                _ofi_debug("OFI[A]: Mismatch provider\n");
-                f_pick = NULL;
-            }
-        }
-
-        /* Found a choice? Pick */
-        if (f_pick)
-            break;
-
-        /* Try next */
-        f = f->next;
-    };
-
-    /* Check if nothing found */
-    if (f_pick == NULL) {
-        fi_freeinfo( fabrics );
-        nn_free( node );
-        return -ESOCKTNOSUPPORT;
+    /* Return error if nothing found */
+    if (*ans == NULL) {
+        return -ENODATA;
     }
 
-    /* Duplicate picked FI structure, free resources and return */
-    *ans = fi_dupinfo( f_pick );
-    fi_freeinfo( fabrics );
+    /* Return found fabric */
     return 0;
 }
 
@@ -252,7 +239,11 @@ int ofi_fabric_open( struct ofi_resources * R, const char * address,
     /* Find the fabric that most accurately describes the address */
     ret = ofi_match_fabric( address, flags, R->hints, &item->fi );
     if (ret) {
-        FT_PRINTERR("fi_getinfo", ret);
+        if (ret != -ENODATA) {
+            FT_PRINTERR("ofi_match_fabric", ret);
+        } else {
+            fprintf(stderr,"OFI: No fabric matches the specifications given\n");
+        }
         nn_free(item);
         *F = NULL;
         return ret;

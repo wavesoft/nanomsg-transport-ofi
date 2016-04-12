@@ -152,8 +152,8 @@ static struct nn_optset *nn_ofi_optset (void)
     optset->base.vfptr = &nn_ofi_optset_vfptr;
 
     /*  Default values for OFI socket options (0=max). */
-    optset->rx_queue_size = 2;
-    optset->tx_queue_size = 2;
+    optset->rx_queue_size = 16;
+    optset->tx_queue_size = 16;
     optset->slab_size = 4096;
 
     return &optset->base;

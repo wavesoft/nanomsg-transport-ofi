@@ -64,7 +64,8 @@
 #define NN_SOFI_SOCKET_STATE_CONNECTING  1
 #define NN_SOFI_SOCKET_STATE_CONNECTED   2
 #define NN_SOFI_SOCKET_STATE_CLOSING     3
-#define NN_SOFI_SOCKET_STATE_CLOSED      4
+#define NN_SOFI_SOCKET_STATE_DRAINING    4
+#define NN_SOFI_SOCKET_STATE_CLOSED      5
 
 /* FSM Sources */
 #define NN_SOFI_SRC_ENDPOINT             1101
@@ -74,6 +75,7 @@
 /* Timeout values */
 #define NN_SOFI_TIMEOUT_HANDSHAKE        1000
 #define NN_SOFI_TIMEOUT_KEEPALIVE_TICK   500
+#define NN_SOFI_TIMEOUT_DRAIN            OFI_DRAIN_TIMEOUT
 #define NN_SOFI_TIMEOUT_SHUTDOWN         500
 
 /* Ingress Buffer Flags */
@@ -1340,12 +1342,45 @@ static void nn_sofi_shutdown (struct nn_fsm *fsm, int src, int type,
 
         /* Wait for timer to stop */
         if (nn_fast( type == NN_TIMER_TIMEOUT )) {
-            _ofi_debug("OFI[S]: Timed out waiting for shutdown EQ event\n");
-            self->socket_state = NN_SOFI_SOCKET_STATE_CLOSED;
-            nn_timer_stop( &self->timer_shutdown );
+            if (self->socket_state == NN_SOFI_STATE_CLOSING) {
+                /* Stop timer (handled at stop event) */
+                nn_timer_stop( &self->timer_shutdown );
+#if OFI_DRAIN_TIMEOUT > 0
+
+            } else if (self->socket_state == NN_SOFI_SOCKET_STATE_DRAINING) {
+
+                /* Stop timer (it will be restarted at stop event) */
+                nn_timer_stop( &self->timer_shutdown );
+#endif
+            }
             return;
 
-        } else if (nn_slow( type != NN_TIMER_STOPPED )) {
+        } else if (nn_fast( type == NN_TIMER_STOPPED )) {
+
+#if OFI_DRAIN_TIMEOUT > 0
+            if (nn_fast( self->socket_state == NN_SOFI_SOCKET_STATE_DRAINING)) {
+                /* Shutdown connection & close endpoint */
+                _ofi_debug("OFI[S]: Stopping endpoint\n");
+                self->socket_state = NN_SOFI_SOCKET_STATE_CLOSING;
+                ofi_cm_shutdown( self->ep );
+
+                /* Restart timer to track shutdown timeouts */
+                nn_timer_start( &self->timer_shutdown, 
+                    NN_SOFI_TIMEOUT_SHUTDOWN );
+                return;
+
+            } else
+#endif
+            if (nn_slow( self->socket_state == NN_SOFI_SOCKET_STATE_CLOSING)) {
+                /* Timed out waiting for shutdown */
+                _ofi_debug("OFI[S]: Timed out waiting for shutdown EQ event\n");
+                self->socket_state = NN_SOFI_SOCKET_STATE_CLOSED;
+
+            }else if(nn_slow(self->socket_state!=NN_SOFI_SOCKET_STATE_CLOSED)) {
+                nn_fsm_bad_state (self->state, src, type);
+            }
+
+        } else {
             nn_fsm_bad_action (self->state, src, type);
         }
 
@@ -1371,20 +1406,23 @@ static void nn_sofi_shutdown (struct nn_fsm *fsm, int src, int type,
 
     if (self->socket_state == NN_SOFI_SOCKET_STATE_CONNECTED) {
 
-        /* TODO: This is a hack to allow pending messages to be flushed,
-                 I don't know why I need this, but it seems that even after I
-                 have received the CQs from all outgoing messages, they haven't
-                 been delivered to the other end! */
-        usleep(50000);
-
+#if OFI_DRAIN_TIMEOUT > 0
+        /* Start draining socket */
+        _ofi_debug("OFI[S]: Draining pending endpoint events (%i us)\n", 
+            NN_SOFI_TIMEOUT_DRAIN);
+        self->socket_state = NN_SOFI_SOCKET_STATE_DRAINING;
+        nn_timer_start( &self->timer_shutdown, 
+            NN_SOFI_TIMEOUT_DRAIN );
+#else
         /* Shutdown connection & close endpoint */
         _ofi_debug("OFI[S]: Stopping endpoint\n");
+        self->socket_state = NN_SOFI_SOCKET_STATE_CLOSING;
         ofi_cm_shutdown( self->ep );
 
-        /* Wait for the EQ event, or timeout */
-        self->socket_state = NN_SOFI_SOCKET_STATE_CLOSING;
+        /* Restart timer to track shutdown timeouts */
         nn_timer_start( &self->timer_shutdown, 
             NN_SOFI_TIMEOUT_SHUTDOWN );
+#endif
         return;
 
     } else if (self->socket_state == NN_SOFI_STATE_CONNECTING) {

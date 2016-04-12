@@ -41,6 +41,11 @@
    a more optimized worker polling */
 // #define OFI_USE_WAITSET
 
+/* Draining timer before stopping SOFI. Ideally this should
+   be 0 (=disabled), but since there are some bugs in some
+   providers this acts as a fallback */
+#define OFI_DRAIN_TIMEOUT 500
+
 /* Disable handshake negotiation (usnic fix) */
 #define OFI_DISABLE_HANDSHAKE
 

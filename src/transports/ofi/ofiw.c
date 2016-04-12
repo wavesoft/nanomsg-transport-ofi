@@ -152,6 +152,12 @@ static void nn_ofiw_poller_thread( void *arg )
                             self->lock_safe = 1;
                             nn_ctx_enter (worker->owner->ctx);
                             for (i=0; i<ret; i++) {
+
+                                // printf("§§<< ack_ctx=%p, (ptr=%p, len=%zu)\n", 
+                                //     ((struct fi_cq_data_entry *)item->data)[i].op_context, 
+                                //     ((struct fi_cq_data_entry *)item->data)[i].buf,
+                                //     ((struct fi_cq_data_entry *)item->data)[i].len);
+
                                 nn_fsm_feed (worker->owner, 
                                     item->src,
                                     NN_OFIW_COMPLETED,

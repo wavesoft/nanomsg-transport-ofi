@@ -248,7 +248,7 @@ static int nn_sofi_egress_post_aux( struct nn_sofi * self, size_t len )
     msg.desc = &desc[0];
     msg.msg_iov = iov;
     msg.iov_count = 1;
-    msg.context = NULL;
+    msg.context = &self->aux_context;
 
     /* Send data, without generating a CQ */
     _ofi_debug("OFI[S]: Sending AUX egress (len=%zu)\n", len);

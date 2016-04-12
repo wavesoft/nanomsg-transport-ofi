@@ -848,6 +848,9 @@ int ofi_sendmsg( struct ofi_active_endpoint * ep, const struct fi_msg *msg,
 {
     int ret;
 
+    // printf("§§>> send_ctx=%p, (ptr=%p, len=%zu)\n", msg->context, 
+        // msg->msg_iov[0].iov_base, msg->msg_iov[0].iov_len);
+
     /* Try to send the message */
     ret = fi_sendmsg( ep->ep, msg, flags );
     if (ret) {
@@ -866,6 +869,9 @@ int ofi_recvmsg( struct ofi_active_endpoint * ep, const struct fi_msg *msg,
     uint64_t flags )
 {
     int ret;
+
+    // printf("§§>> recv_ctx=%p, (ptr=%p, len=%zu)\n", msg->context, 
+        // msg->msg_iov[0].iov_base, msg->msg_iov[0].iov_len);
 
     /* Try to send the message */
     ret = fi_recvmsg( ep->ep, msg, flags );

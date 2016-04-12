@@ -123,6 +123,7 @@ struct nn_sofi {
 
     /* Ancillary buffer */
     uint8_t                     aux_buf[NN_SOFI_ANCILLARY_SIZE];
+    struct fi_context           aux_context;
     struct fid_mr               *aux_mr;
 
     /* Egress properties */

@@ -178,7 +178,7 @@ int ofi_init( struct ofi_resources * R, enum fi_ep_type ep_type )
 
     /* Fabric */
     R->hints->caps          = FI_MSG;
-    R->hints->mode          = FI_CONTEXT | FI_LOCAL_MR | FI_ASYNC_IOV;
+    R->hints->mode          = FI_CONTEXT | FI_LOCAL_MR | FI_MSG_PREFIX;
 
     /* Specify the address format we are using */
     R->hints->addr_format   = FI_SOCKADDR;
@@ -424,6 +424,16 @@ int ofi_domain_close( struct ofi_domain * domain )
     /* Success */
     return 0;
 
+}
+
+
+/**
+ * Get message prefix size on this domain
+ */
+size_t ofi_domain_prefix_size( struct ofi_domain * domain )
+{
+    return domain->fi->tx_attr->mode & FI_MSG_PREFIX ?
+        domain->fi->ep_attr->msg_prefix_size : 0;
 }
 
 /* ########################################################################## */

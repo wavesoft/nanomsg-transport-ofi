@@ -116,11 +116,10 @@ int run_tests( int sock, int direction, size_t msg_len )
 
 	}
 
-	// Calculate overall lattency
+	// Finalize, display and free bandwidth
 	u_bw_finalize( &bw );
-
-	// Display bandwidth/lattency results
 	u_bw_display( &bw );
+	u_bw_free( &bw );
 
 	// Free message
 	if (direction == DIRECTION_OUT)

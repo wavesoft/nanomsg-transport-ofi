@@ -637,6 +637,7 @@ int nn_ofiw_remove( struct nn_ofiw * self, void * fd )
             /* Free structure */
             nn_list_erase( &self->items, &item->item );
             nn_list_item_term( &item->item );
+            nn_free( item->data );
             nn_free( item );
             
             /* Break */

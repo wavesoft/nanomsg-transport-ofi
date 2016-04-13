@@ -1154,6 +1154,9 @@ void nn_sofi_term (struct nn_sofi *self)
 
     }
 
+    /* Free ingress messages */
+    nn_free( self->ingress_buffers );
+
     /* Unregister ancillary MR */
     ret = fi_close(&self->aux_mr->fid);
     if (ret) {

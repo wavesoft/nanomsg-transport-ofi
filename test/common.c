@@ -225,3 +225,12 @@ void u_bw_display( struct u_bw_timing * self )
 	printf("----------------------\n");
 
 }
+
+/**
+ * Free bandwidth
+ */
+void u_bw_free( struct u_bw_timing * self )
+{
+	/* Cleanup */
+	nn_free( self->prefix );
+}

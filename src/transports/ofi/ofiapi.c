@@ -334,6 +334,7 @@ int ofi_fabric_close( struct ofi_fabric * F )
     nn_list_erase (&F->parent->fabrics, &F->item);
 
     /* Free structures */
+    nn_freeinfo(F->fi);
     nn_ofiw_pool_term(&F->pool);
     nn_list_term( &F->domains );
     nn_list_item_term(&F->item);

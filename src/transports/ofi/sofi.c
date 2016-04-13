@@ -462,7 +462,7 @@ static void nn_sofi_egress_handle_error( struct nn_sofi * self,
  * Acknowledge the fact that the ougoing data are sent
  */
 static void nn_sofi_egress_handle( struct nn_sofi * self,
-    struct fi_cq_data_entry * cq_entry )
+    struct fi_cq_msg_entry * cq_entry )
 {
     int c;
 
@@ -716,7 +716,7 @@ static void nn_sofi_ingress_handle_error( struct nn_sofi * self,
  * occurs, this function will return the appropriate error code.
  */
 static void nn_sofi_ingress_handle( struct nn_sofi * self, 
-    struct fi_cq_data_entry * cq_entry )
+    struct fi_cq_msg_entry * cq_entry )
 {
     struct nn_sofi_buffer * buf;
 
@@ -1262,7 +1262,7 @@ static void nn_sofi_shutdown (struct nn_fsm *fsm, int src, int type,
     void *srcptr)
 {
     struct nn_sofi *self;
-    struct fi_cq_data_entry * cq_entry;
+    struct fi_cq_msg_entry * cq_entry;
     struct fi_cq_err_entry * cq_error;
 
     /* Get pointer to sofi structure */
@@ -1299,7 +1299,7 @@ static void nn_sofi_shutdown (struct nn_fsm *fsm, int src, int type,
             _ofi_debug("OFI[S]: Draining egress CQ event\n");
             if (type == NN_OFIW_COMPLETED) {
                 /* Handle completed event */
-                cq_entry = (struct fi_cq_data_entry *) srcptr;
+                cq_entry = (struct fi_cq_msg_entry *) srcptr;
                 nn_sofi_egress_handle( self, cq_entry );
             } else if (type == NN_OFIW_ERROR) {
                 /* Handle error event */
@@ -1471,7 +1471,7 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
     int ret;
     struct nn_sofi *self;
     struct fi_eq_cm_entry * cq_cm_entry;
-    struct fi_cq_data_entry * cq_entry;
+    struct fi_cq_msg_entry * cq_entry;
     struct fi_cq_err_entry * cq_error;
 
     /* Get pointer to sofi structure */
@@ -1622,7 +1622,7 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
             case NN_OFIW_COMPLETED:
 
                 /* Get CQ Event */
-                cq_entry = (struct fi_cq_data_entry *) srcptr;
+                cq_entry = (struct fi_cq_msg_entry *) srcptr;
 
                 /* Process incoming data */
                 nn_sofi_ingress_handle( self, cq_entry );
@@ -1661,7 +1661,7 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
             case NN_OFIW_COMPLETED:
 
                 /* Get CQ Event */
-                cq_entry = (struct fi_cq_data_entry *) srcptr;
+                cq_entry = (struct fi_cq_msg_entry *) srcptr;
 
                 /* Data from the output buffer are sent */
                 nn_sofi_egress_handle( self, cq_entry );

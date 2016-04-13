@@ -232,5 +232,5 @@ void u_bw_display( struct u_bw_timing * self )
 void u_bw_free( struct u_bw_timing * self )
 {
 	/* Cleanup */
-	nn_free( self->prefix );
+	free( self->prefix );
 }

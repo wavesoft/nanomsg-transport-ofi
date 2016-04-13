@@ -105,11 +105,15 @@ struct nn_ofiw_pool {
     /* Lock mutex */
     struct nn_mutex         lock_mutex;
 
+#ifndef OFI_USE_WAITSET
+
     /* Efd to place lock request */
     struct nn_efd           efd_lock_req;
 
     /* Efd to place wait lock termination */
     struct nn_efd           efd_lock_ack;
+
+#endif
 
     /* === Local variables === */
 
@@ -141,7 +145,7 @@ struct nn_ofiw_item {
         // struct fi_eq_entry      eq_entry;
         // struct fi_eq_cm_entry   eq_cm_entry;
         struct fi_eq_err_entry  eq_err_entry;
-        // struct fi_cq_data_entry cq_entry;
+        // struct fi_cq_msg_entry cq_entry;
         struct fi_cq_err_entry  cq_err_entry;
     } data_err;
 

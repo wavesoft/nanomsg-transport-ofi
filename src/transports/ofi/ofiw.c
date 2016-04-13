@@ -51,9 +51,12 @@ static void nn_ofiw_lock_thread( struct nn_ofiw_pool* self )
     nn_mutex_lock( &self->lock_mutex );
     self->lock_state = 1;
 
+#ifndef OFI_USE_WAITSET
     /* Wait for thread to lock */
     nn_efd_wait( &self->efd_lock_ack, -1 );
     nn_efd_unsignal( &self->efd_lock_ack );
+#endif
+
 }
 
 /**
@@ -65,8 +68,10 @@ static void nn_ofiw_unlock_thread( struct nn_ofiw_pool* self )
     if (nn_fast( self->lock_safe ))
         return;
 
+#ifndef OFI_USE_WAITSET
     /* Unlock thread */
     nn_efd_signal( &self->efd_lock_req );
+#endif
 
     /* Release lock request */
     self->lock_state = 0;
@@ -95,13 +100,6 @@ static void nn_ofiw_poller_thread( void *arg )
     _ofi_debug("OFI[w]: Starting OFIW pool thread\n");
     while (self->active) {
 
-        /* Handle block request before we start iterating */
-        if (nn_slow( self->lock_state )) {
-            nn_efd_signal( &self->efd_lock_ack );
-            nn_efd_wait( &self->efd_lock_req, -1 );
-            nn_efd_unsignal( &self->efd_lock_req );
-        }
-
 #ifdef OFI_USE_WAITSET
 
         /* If waitsets are available, we have an optimized way for
@@ -110,6 +108,15 @@ static void nn_ofiw_poller_thread( void *arg )
         if (nn_slow( (ret < 0) && (ret != -FI_EAGAIN) )) {
             FT_PRINTERR("fi_wait", ret);
             break;
+        }
+
+#else
+
+        /* Handle block request before we start iterating */
+        if (nn_slow( self->lock_state )) {
+            nn_efd_signal( &self->efd_lock_ack );
+            nn_efd_wait( &self->efd_lock_req, -1 );
+            nn_efd_unsignal( &self->efd_lock_req );
         }
 
 #endif
@@ -154,14 +161,14 @@ static void nn_ofiw_poller_thread( void *arg )
                             for (i=0; i<ret; i++) {
 
                                 // printf("§§<< ack_ctx=%p, (ptr=%p, len=%zu)\n", 
-                                //     ((struct fi_cq_data_entry *)item->data)[i].op_context, 
-                                //     ((struct fi_cq_data_entry *)item->data)[i].buf,
-                                //     ((struct fi_cq_data_entry *)item->data)[i].len);
+                                //     ((struct fi_cq_msg_entry *)item->data)[i].op_context, 
+                                //     ((struct fi_cq_msg_entry *)item->data)[i].buf,
+                                //     ((struct fi_cq_msg_entry *)item->data)[i].len);
 
                                 nn_fsm_feed (worker->owner, 
                                     item->src,
                                     NN_OFIW_COMPLETED,
-                                    &((struct fi_cq_data_entry *)item->data)[i]
+                                    &((struct fi_cq_msg_entry *)item->data)[i]
                                 );
                             }
                             nn_ctx_leave (worker->owner->ctx);
@@ -316,9 +323,6 @@ int nn_ofiw_pool_init( struct nn_ofiw_pool * self, struct fid_fabric *fabric )
     /* Initialize structures */
     nn_list_init( &self->workers );
     nn_mutex_init( &self->lock_mutex );
-    nn_efd_init( &self->efd_lock_req );
-    nn_efd_init( &self->efd_lock_ack );
-
 
 #ifdef OFI_USE_WAITSET
 
@@ -334,6 +338,12 @@ int nn_ofiw_pool_init( struct nn_ofiw_pool * self, struct fid_fabric *fabric )
         FT_PRINTERR("fi_wait_open", ret);
         return ret;
     }
+
+#else
+
+    /* Initialize spinlock-only structures */
+    nn_efd_init( &self->efd_lock_req );
+    nn_efd_init( &self->efd_lock_ack );
 
 #endif
 
@@ -378,9 +388,11 @@ int nn_ofiw_pool_term( struct nn_ofiw_pool * self )
 
     /* Clean-up lock resources */
     nn_mutex_term( &self->lock_mutex );
+#ifndef OFI_USE_WAITSET
     nn_efd_term( &self->efd_lock_req );
     nn_efd_term( &self->efd_lock_ack );
-
+#endif
+    
     /* Success */
     return 0;
 }
@@ -502,7 +514,7 @@ int nn_ofiw_add_cq( struct nn_ofiw * self, struct fid_cq * cq, int cq_count,
     item->src = src;
     item->fd_type = NN_OFIW_ITEM_CQ;
     item->fd = cq;
-    item->data = nn_alloc( sizeof(struct fi_cq_data_entry) * cq_count, 
+    item->data = nn_alloc( sizeof(struct fi_cq_msg_entry) * cq_count, 
                             "ofiw item data");
     item->data_size = cq_count;
 

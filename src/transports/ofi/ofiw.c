@@ -290,7 +290,7 @@ continue_outer:
         
         /* Spinwait for short time */
         if (nn_slow( !--spinwait )) {
-            usleep( 200 );
+            usleep( 10 );
             spinwait = 255;
         }
 

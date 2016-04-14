@@ -39,7 +39,7 @@
 
 /* Enable waitsets (on providers that supports it) for 
    a more optimized worker polling */
-#define OFI_USE_WAITSET
+// #define OFI_USE_WAITSET
 
 /* Draining timer before stopping SOFI. Ideally this should
    be 0 (=disabled), but since there are some bugs in some

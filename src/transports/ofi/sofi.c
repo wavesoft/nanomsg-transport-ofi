@@ -1717,7 +1717,7 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
                     NN_SOFI_TIMEOUT_KEEPALIVE_TICK );
 
                 /* Post all input buffers */
-                ret = nn_sofi_ingress_post_all( self );
+                ret = nn_sofi_ingress_post( self );
                 if (ret) {
                     FT_PRINTERR("nn_sofi_ingress_post_all", ret);
                     nn_sofi_critical_error( self, ret );

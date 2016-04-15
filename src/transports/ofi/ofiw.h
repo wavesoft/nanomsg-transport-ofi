@@ -92,6 +92,11 @@ struct nn_ofiw_pool {
     /* Global waitset */
     struct fid_wait         *waitset;
 
+#else
+
+    /* How many kilo-instructions per second we can run */
+    uint32_t                kinst_per_ms;
+
 #endif
 
     /* === Thread lock helpers === */

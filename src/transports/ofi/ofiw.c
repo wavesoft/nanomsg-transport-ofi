@@ -21,7 +21,9 @@
 */
 
 #include <unistd.h>
+#include <sched.h>
 
+#include "oficommon.h"
 #include "ofiw.h"
 #include "ofi.h"
 
@@ -37,6 +39,40 @@
 /* ============================== */
 /*       HELPER FUNCTIONS         */
 /* ============================== */
+
+/**
+ * Calculate how many kilo-cycles we can run per millisedon
+ */
+static uint32_t nn_ofiw_kinstr_per_ms()
+{
+    struct timespec a, b;
+    uint64_t kinst_ms;
+
+    /* Run one million actions and count how much time it takes */
+    clock_gettime(CLOCK_MONOTONIC, &a);
+    for (int i=0; i<1000000; i++) {
+        /* Do some moderate heap alloc/math operations */
+        volatile int v = 0;
+        v = v + 1;
+    }
+    clock_gettime(CLOCK_MONOTONIC, &b);
+
+    /* Count kinst_ms spent */
+    kinst_ms = 1000000000 / (b.tv_nsec - a.tv_nsec);
+
+    /* Wrap to maximum 32-bit */
+    if (kinst_ms > 4294967295) {
+        return 4294967295;
+    }
+
+    /* Return at least one */
+    if (kinst_ms == 0) {
+        return 1;
+    }
+
+    /* Return */
+    return (uint32_t) kinst_ms;
+}
 
 /**
  * Wait until mutex thread is idle and place a block request
@@ -94,7 +130,9 @@ static void nn_ofiw_poller_thread( void *arg )
 
 #ifndef OFI_USE_WAITSET
     uint32_t                spinwait;
-    spinwait = 255;
+    uint32_t                kinstr;
+    spinwait = self->kinst_per_ms;
+    kinstr = 10000; /* 10 ms of spinlock */
 #endif
 
     _ofi_debug("OFI[w]: Starting OFIW pool thread\n");
@@ -289,9 +327,16 @@ continue_outer:
 #ifndef OFI_USE_WAITSET
         
         /* Spinwait for short time */
-        if (nn_slow( !--spinwait )) {
-            usleep( 10 );
-            spinwait = 255;
+        if (nn_slow( !--kinstr )) {
+            kinstr = 10000;
+            if (nn_slow( !--spinwait )) {
+                spinwait = self->kinst_per_ms;
+                usleep( 100 );
+            } else {
+                sched_yield();
+            }
+        } else {
+            sched_yield();
         }
 
 #else
@@ -319,6 +364,13 @@ int nn_ofiw_pool_init( struct nn_ofiw_pool * self, struct fid_fabric *fabric )
     self->fabric = fabric;
     self->lock_state = 0;
     self->lock_safe = 0;
+
+#ifndef OFI_USE_WAITSET
+    /* Calculate how many kilo-instructions we can count per millisecond */
+    self->kinst_per_ms = nn_ofiw_kinstr_per_ms();
+    _ofi_debug("OFI[W]: We delay with %u kilo-instructions/ms\n",
+        self->kinst_per_ms);
+#endif
 
     /* Initialize structures */
     nn_list_init( &self->workers );

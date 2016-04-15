@@ -56,6 +56,7 @@
  * Enums of different polling items
  */
 enum nn_ofiw_item_type {
+    NN_OFIW_NONE,
     NN_OFIW_ITEM_EQ,
     NN_OFIW_ITEM_CQ,
 };
@@ -67,63 +68,16 @@ struct nn_ofiw_pool {
 
     /* === NanoMsg Specific === */
 
-    /* Pool poller thread */
-    struct nn_thread        thread;
-
     /* List of workers */
     struct nn_list          workers;
 
     /* === libfabric Specific === */
 
-    /* Pollset for waiting for events across various CQ/EQ */
-    struct fid_poll         *pollset;
-
     /* The fabric associated with this pool */
     struct fid_fabric       *fabric;
 
-    /* The EQ that passes signals to main thread */
-    struct fid_eq           *eq;
-
-    /* Context used by various operations */
-    struct fi_context       context;
-
-#ifdef OFI_USE_WAITSET
-
-    /* Global waitset */
-    struct fid_wait         *waitset;
-
-#else
-
-    /* How many kilo-instructions per second we can run */
-    uint32_t                kinst_per_ms;
-
-#endif
-
-    /* === Thread lock helpers === */
-
-    /* Lock state flag */
-    uint8_t                 lock_state;
-
-    /* Sate state flag */
-    uint8_t                 lock_safe;
-
-    /* Lock mutex */
-    struct nn_mutex         lock_mutex;
-
-#ifndef OFI_USE_WAITSET
-
-    /* Efd to place lock request */
-    struct nn_efd           efd_lock_req;
-
-    /* Efd to place wait lock termination */
-    struct nn_efd           efd_lock_ack;
-
-#endif
-
-    /* === Local variables === */
-
-    /* Flag that allows termination of the thread */
-    uint8_t                 active;
+    /* State of the pool */
+    uint8_t                 state;
 
 };
 
@@ -135,22 +89,24 @@ struct nn_ofiw_item {
     /* Myself as an item in the worker */
     struct nn_list_item     item;
 
-    /* Polling function to use */
-    uint8_t                 fd_type;
+    /* Parent worker */
+    struct nn_ofiw          *worker;
 
-    /* Pointer to the FD to test */
-    void *                  fd;
+    /* Pool poller thread */
+    struct nn_thread        thread;
+
+    /* State of the item */
+    uint8_t                 state;
 
     /* Event source */
     int                     src;
 
-    /* Memory for temporary storing the CQ details
-       until they are handled by the FSM */
+    /* Pointer to the FD to test */
+    void *                  fd;
+
+    /* Memory for error CQ/EQ events */
     union { 
-        // struct fi_eq_entry      eq_entry;
-        // struct fi_eq_cm_entry   eq_cm_entry;
         struct fi_eq_err_entry  eq_err_entry;
-        // struct fi_cq_msg_entry cq_entry;
         struct fi_cq_err_entry  cq_err_entry;
     } data_err;
 
@@ -183,9 +139,6 @@ struct nn_ofiw {
 
     /* Status flag */
     uint8_t                 active;
-
-    /* Sync flag */
-    struct nn_efd           efd_sync;
 
 };
 
@@ -231,9 +184,5 @@ int nn_ofiw_open_cq( struct nn_ofiw * self, int src, struct fid_domain *domain,
 
 /* Remove a particular file descriptor from the monitor */
 int nn_ofiw_remove( struct nn_ofiw * worker, void * fd );
-
-/* Enable/Disable this worker */
-void nn_ofiw_start( struct nn_ofiw * worker );
-void nn_ofiw_stop( struct nn_ofiw * worker );
 
 #endif

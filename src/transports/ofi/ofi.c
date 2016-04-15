@@ -23,6 +23,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
+#include <stdio.h>
 
 #include "ofi.h"
 #include "bofi.h"
@@ -43,7 +44,6 @@ struct nn_ofi_optset {
     int rx_queue_size;
     int tx_queue_size;
     int slab_size;
-    size_t mem_align;
 };
 
 /* Optset interface */
@@ -152,14 +152,9 @@ static struct nn_optset *nn_ofi_optset (void)
     optset->base.vfptr = &nn_ofi_optset_vfptr;
 
     /*  Default values for OFI socket options (0=max). */
-    optset->rx_queue_size = 2;
-    optset->tx_queue_size = 0;
+    optset->rx_queue_size = 16;
+    optset->tx_queue_size = 16;
     optset->slab_size = 4096;
-#if _POSIX_C_SOURCE >= 200112L
-    optset->mem_align = sysconf(_SC_PAGESIZE);
-#else
-    optset->mem_align = sizeof(void*);
-#endif
 
     return &optset->base;
 }
@@ -196,11 +191,6 @@ static int nn_ofi_optset_setopt (struct nn_optset *self, int option,
             return -EINVAL;
         optset->tx_queue_size = val;
         return 0;
-    case NN_OFI_MEM_ALIGN:
-        if (nn_slow (val < 1))
-            return -EINVAL;
-        optset->mem_align = val * sizeof(void*);
-        return 0;
     case NN_OFI_SLAB_SIZE:
         if (nn_slow (val < 0))
             return -EINVAL;
@@ -226,9 +216,6 @@ static int nn_ofi_optset_getopt (struct nn_optset *self, int option,
     case NN_OFI_TX_QUEUE_SIZE:
         intval = optset->tx_queue_size;
         break;
-    case NN_OFI_MEM_ALIGN:
-        intval = optset->mem_align / sizeof(void*);
-        break;
     case NN_OFI_SLAB_SIZE:
         intval = optset->slab_size;
         break;
@@ -241,3 +228,38 @@ static int nn_ofi_optset_getopt (struct nn_optset *self, int option,
     return 0;
 }
 
+// #define PAGE_SHIFT 12
+// #define PAGEMAP_LENGTH 8
+
+// unsigned long get_page_frame_number_of_address(void *addr) {
+//    // Open the pagemap file for the current process
+//    FILE *pagemap = fopen("/proc/self/pagemap", "rb");
+
+//    // Seek to the page that the buffer is on
+//    unsigned long offset = (unsigned long)addr / getpagesize() * PAGEMAP_LENGTH;
+//    if(fseek(pagemap, (unsigned long)offset, SEEK_SET) != 0) {
+//       fprintf(stderr, "Failed to seek pagemap to proper location\n");
+//       exit(1);
+//    }
+
+//    // The page frame number is in bits 0-54 so read the first 7 bytes and clear the 55th bit
+//    unsigned long page_frame_number = 0;
+//    fread(&page_frame_number, 1, PAGEMAP_LENGTH-1, pagemap);
+
+//    page_frame_number &= 0x7FFFFFFFFFFFFF;
+
+//    fclose(pagemap);
+
+//    return page_frame_number;
+// }
+
+// unsigned long long get_physical_address(void *buffer) {
+
+//     // Find the difference from the buffer to the page boundary
+//     unsigned long page_frame_number = get_page_frame_number_of_address(buffer);
+//     unsigned long distance_from_page_boundary = (unsigned long)buffer % getpagesize();
+
+//     // Return physical page address
+//     return (page_frame_number << PAGE_SHIFT) + distance_from_page_boundary;
+
+// }

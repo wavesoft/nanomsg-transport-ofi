@@ -21,7 +21,9 @@
 */
 
 #include <unistd.h>
+#include <sched.h>
 
+#include "oficommon.h"
 #include "ofiw.h"
 #include "ofi.h"
 
@@ -39,6 +41,40 @@
 /* ============================== */
 
 /**
+ * Calculate how many kilo-cycles we can run per millisedon
+ */
+static uint32_t nn_ofiw_kinstr_per_ms()
+{
+    struct timespec a, b;
+    uint64_t kinst_ms;
+
+    /* Run one million actions and count how much time it takes */
+    clock_gettime(CLOCK_MONOTONIC, &a);
+    for (int i=0; i<1000000; i++) {
+        /* Do some moderate heap alloc/math operations */
+        volatile int v = 0;
+        v = v + 1;
+    }
+    clock_gettime(CLOCK_MONOTONIC, &b);
+
+    /* Count kinst_ms spent */
+    kinst_ms = 1000000000 / (b.tv_nsec - a.tv_nsec);
+
+    /* Wrap to maximum 32-bit */
+    if (kinst_ms > 4294967295) {
+        return 4294967295;
+    }
+
+    /* Return at least one */
+    if (kinst_ms == 0) {
+        return 1;
+    }
+
+    /* Return */
+    return (uint32_t) kinst_ms;
+}
+
+/**
  * Wait until mutex thread is idle and place a block request
  */
 static void nn_ofiw_lock_thread( struct nn_ofiw_pool* self )
@@ -51,9 +87,12 @@ static void nn_ofiw_lock_thread( struct nn_ofiw_pool* self )
     nn_mutex_lock( &self->lock_mutex );
     self->lock_state = 1;
 
+#ifndef OFI_USE_WAITSET
     /* Wait for thread to lock */
     nn_efd_wait( &self->efd_lock_ack, -1 );
     nn_efd_unsignal( &self->efd_lock_ack );
+#endif
+
 }
 
 /**
@@ -65,8 +104,10 @@ static void nn_ofiw_unlock_thread( struct nn_ofiw_pool* self )
     if (nn_fast( self->lock_safe ))
         return;
 
+#ifndef OFI_USE_WAITSET
     /* Unlock thread */
     nn_efd_signal( &self->efd_lock_req );
+#endif
 
     /* Release lock request */
     self->lock_state = 0;
@@ -82,24 +123,20 @@ static void nn_ofiw_poller_thread( void *arg )
     struct nn_list_item *it, *jt;
     ssize_t sret;
     int ret;
+    int i;
 
     struct fi_eq_cm_entry   eq_entry;
     uint32_t                event;
 
 #ifndef OFI_USE_WAITSET
     uint32_t                spinwait;
-    spinwait = 255;
+    uint32_t                kinstr;
+    spinwait = self->kinst_per_ms;
+    kinstr = 10000; /* 10 ms of spinlock */
 #endif
 
     _ofi_debug("OFI[w]: Starting OFIW pool thread\n");
     while (self->active) {
-
-        /* Handle block request before we start iterating */
-        if (nn_slow( self->lock_state )) {
-            nn_efd_signal( &self->efd_lock_ack );
-            nn_efd_wait( &self->efd_lock_req, -1 );
-            nn_efd_unsignal( &self->efd_lock_req );
-        }
 
 #ifdef OFI_USE_WAITSET
 
@@ -109,6 +146,15 @@ static void nn_ofiw_poller_thread( void *arg )
         if (nn_slow( (ret < 0) && (ret != -FI_EAGAIN) )) {
             FT_PRINTERR("fi_wait", ret);
             break;
+        }
+
+#else
+
+        /* Handle block request before we start iterating */
+        if (nn_slow( self->lock_state )) {
+            nn_efd_signal( &self->efd_lock_ack );
+            nn_efd_wait( &self->efd_lock_req, -1 );
+            nn_efd_unsignal( &self->efd_lock_req );
         }
 
 #endif
@@ -142,19 +188,27 @@ static void nn_ofiw_poller_thread( void *arg )
 
                         /* Read completion queue */
                         ret = fi_cq_read( (struct fid_cq *)item->fd,
-                            &item->data.cq_entry, 1);
+                            item->data, item->data_size);
                         if (nn_slow(ret > 0)) {
-                            _ofi_debug("OFI[w]: Got CQ Event from src=%i, worker=%p, fd=%p\n",
-                                item->src, worker, item);
+                            _ofi_debug("OFI[w]: Got %i CQ Event(s) from src=%i,"
+                               " worker=%p, fd=%p\n",ret,item->src,worker,item);
 
                             /* Feed event to the FSM */
                             self->lock_safe = 1;
                             nn_ctx_enter (worker->owner->ctx);
-                            nn_fsm_feed (worker->owner, 
-                                item->src,
-                                NN_OFIW_COMPLETED,
-                                &item->data.cq_entry
-                            );
+                            for (i=0; i<ret; i++) {
+
+                                // printf("§§<< ack_ctx=%p, (ptr=%p, len=%zu)\n", 
+                                //     ((struct fi_cq_msg_entry *)item->data)[i].op_context, 
+                                //     ((struct fi_cq_msg_entry *)item->data)[i].buf,
+                                //     ((struct fi_cq_msg_entry *)item->data)[i].len);
+
+                                nn_fsm_feed (worker->owner, 
+                                    item->src,
+                                    NN_OFIW_COMPLETED,
+                                    &((struct fi_cq_msg_entry *)item->data)[i]
+                                );
+                            }
                             nn_ctx_leave (worker->owner->ctx);
                             self->lock_safe = 0;
 
@@ -166,7 +220,7 @@ static void nn_ofiw_poller_thread( void *arg )
 
                             /* Get error details */
                             ret = fi_cq_readerr( (struct fid_cq *)item->fd,
-                                &item->data.cq_err_entry, 0);
+                                &item->data_err.cq_err_entry, 0);
 
                             _ofi_debug("OFI[w]: Got CQ Error from src=%i, worker=%p, fd=%p\n",
                                 item->src, worker, item);
@@ -177,7 +231,7 @@ static void nn_ofiw_poller_thread( void *arg )
                             nn_fsm_feed (worker->owner, 
                                 item->src,
                                 NN_OFIW_ERROR,
-                                &item->data.cq_err_entry
+                                &item->data_err.cq_err_entry
                             );
                             nn_ctx_leave (worker->owner->ctx);
                             self->lock_safe = 0;
@@ -195,13 +249,13 @@ static void nn_ofiw_poller_thread( void *arg )
 
                         /* Read event queue */
                         ret = fi_eq_read( (struct fid_eq *)item->fd, 
-                            &event, &item->data.eq_entry, sizeof(item->data.eq_entry),0);
+                            &event, item->data, item->data_size,0);
                         if (nn_slow(ret != -FI_EAGAIN)) {
 
                             if (nn_slow( ret == -FI_EAVAIL )) {
 
                                 sret = fi_eq_readerr( (struct fid_eq *)item->fd,
-                                    &item->data.eq_err_entry, 0);
+                                    &item->data_err.eq_err_entry, 0);
                                 if (nn_slow( sret != sizeof(struct fi_eq_err_entry) )) {
                                     FT_PRINTERR("fi_eq_readerr", sret);
                                     break;
@@ -210,15 +264,15 @@ static void nn_ofiw_poller_thread( void *arg )
                                 _ofi_debug("OFI[w]: Got EQ Error Event from "
                                     "src=%i, worker=%p, fd=%p, error=%i\n",
                                     item->src, worker, item,
-                                    item->data.eq_err_entry.err);
+                                    item->data_err.eq_err_entry.err);
 
                                 /* Feed event to the FSM */
                                 self->lock_safe = 1;
                                 nn_ctx_enter (worker->owner->ctx);
                                 nn_fsm_feed (worker->owner, 
                                     item->src,
-                                    -item->data.eq_err_entry.err,
-                                    &item->data.eq_err_entry
+                                    -item->data_err.eq_err_entry.err,
+                                    &item->data_err.eq_err_entry
                                 );
                                 nn_ctx_leave (worker->owner->ctx);
                                 self->lock_safe = 0;
@@ -235,7 +289,7 @@ static void nn_ofiw_poller_thread( void *arg )
                                 nn_fsm_feed (worker->owner, 
                                     item->src,
                                     event,
-                                    &item->data.eq_entry
+                                    item->data
                                 );
                                 nn_ctx_leave (worker->owner->ctx);
                                 self->lock_safe = 0;
@@ -273,9 +327,16 @@ continue_outer:
 #ifndef OFI_USE_WAITSET
         
         /* Spinwait for short time */
-        if (nn_slow( !--spinwait )) {
-            usleep( 200 );
-            spinwait = 255;
+        if (nn_slow( !--kinstr )) {
+            kinstr = 10000;
+            if (nn_slow( !--spinwait )) {
+                spinwait = self->kinst_per_ms;
+                usleep( 100 );
+            } else {
+                sched_yield();
+            }
+        } else {
+            sched_yield();
         }
 
 #else
@@ -304,12 +365,16 @@ int nn_ofiw_pool_init( struct nn_ofiw_pool * self, struct fid_fabric *fabric )
     self->lock_state = 0;
     self->lock_safe = 0;
 
+#ifndef OFI_USE_WAITSET
+    /* Calculate how many kilo-instructions we can count per millisecond */
+    self->kinst_per_ms = nn_ofiw_kinstr_per_ms();
+    _ofi_debug("OFI[W]: We delay with %u kilo-instructions/ms\n",
+        self->kinst_per_ms);
+#endif
+
     /* Initialize structures */
     nn_list_init( &self->workers );
     nn_mutex_init( &self->lock_mutex );
-    nn_efd_init( &self->efd_lock_req );
-    nn_efd_init( &self->efd_lock_ack );
-
 
 #ifdef OFI_USE_WAITSET
 
@@ -325,6 +390,12 @@ int nn_ofiw_pool_init( struct nn_ofiw_pool * self, struct fid_fabric *fabric )
         FT_PRINTERR("fi_wait_open", ret);
         return ret;
     }
+
+#else
+
+    /* Initialize spinlock-only structures */
+    nn_efd_init( &self->efd_lock_req );
+    nn_efd_init( &self->efd_lock_ack );
 
 #endif
 
@@ -369,9 +440,11 @@ int nn_ofiw_pool_term( struct nn_ofiw_pool * self )
 
     /* Clean-up lock resources */
     nn_mutex_term( &self->lock_mutex );
+#ifndef OFI_USE_WAITSET
     nn_efd_term( &self->efd_lock_req );
     nn_efd_term( &self->efd_lock_ack );
-
+#endif
+    
     /* Success */
     return 0;
 }
@@ -481,7 +554,8 @@ void nn_ofiw_stop( struct nn_ofiw * worker )
 
 /* Monitor the specified OFI Completion Queue, and trigger the specified type
    event to the handling FSM */
-int nn_ofiw_add_cq( struct nn_ofiw * self, struct fid_cq * cq, int src )
+int nn_ofiw_add_cq( struct nn_ofiw * self, struct fid_cq * cq, int cq_count, 
+    int src )
 {
     /* Allocate new item */
     struct nn_ofiw_item * item = nn_alloc( sizeof(struct nn_ofiw_item), 
@@ -492,6 +566,9 @@ int nn_ofiw_add_cq( struct nn_ofiw * self, struct fid_cq * cq, int src )
     item->src = src;
     item->fd_type = NN_OFIW_ITEM_CQ;
     item->fd = cq;
+    item->data = nn_alloc( sizeof(struct fi_cq_msg_entry) * cq_count, 
+                            "ofiw item data");
+    item->data_size = cq_count;
 
     /* Put item on list queue */
     nn_list_item_init( &item->item );
@@ -519,6 +596,8 @@ int nn_ofiw_add_eq( struct nn_ofiw * self, struct fid_eq * eq, int src )
     item->src = src;
     item->fd_type = NN_OFIW_ITEM_EQ;
     item->fd = eq;
+    item->data = nn_alloc( sizeof(struct fi_eq_cm_entry), "ofiw item data" );
+    item->data_size = sizeof(struct fi_eq_cm_entry);
 
     /* Put item on list queue */
     nn_list_item_init( &item->item );
@@ -597,7 +676,7 @@ int nn_ofiw_open_cq( struct nn_ofiw * self, int src, struct fid_domain *domain,
     }
 
     /* Register */
-    return nn_ofiw_add_cq( self, *cq, src );
+    return nn_ofiw_add_cq( self, *cq, attr->size, src );
 
 }
 
@@ -622,6 +701,7 @@ int nn_ofiw_remove( struct nn_ofiw * self, void * fd )
             /* Free structure */
             nn_list_erase( &self->items, &item->item );
             nn_list_item_term( &item->item );
+            nn_free( item->data );
             nn_free( item );
             
             /* Break */

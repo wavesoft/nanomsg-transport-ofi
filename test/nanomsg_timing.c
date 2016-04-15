@@ -55,16 +55,20 @@ int run_tests( int sock, int direction, size_t msg_len )
 	int iterations = ITERATIONS;
 	int sz_n, i;
 
+	// Allocate a test data chunk
+	ptr = malloc( msg_len );
+	assert( ptr );
+
+	// Populate message contents
+	for (i=0; i<msg_len; i++)
+		((uint8_t*)ptr)[i] = i % 0xFF;
+
 	// When sending, start counting before transmittion
 	if (direction == DIRECTION_OUT) {
 		u_bw_init( &bw, "OUT: ");
-#if _POSIX_C_SOURCE >= 200112L
-	assert( posix_memalign(&ptr, sysconf(_SC_PAGESIZE), msg_len) == 0);
-#else
-	ptr = malloc( msg_len );
-	assert( ptr );
-#endif
-		msg = nn_allocmsg_ptr( ptr, msg_len, freefn, NULL );
+		msg = nn_allocmsg( msg_len, NN_ALLOC_PAGEALIGN );
+		if (!msg) msg = nn_allocmsg( msg_len, 0 );
+		memcpy( msg, ptr, msg_len );
 	}
 
 
@@ -95,6 +99,9 @@ int run_tests( int sock, int direction, size_t msg_len )
             if (sz_n != msg_len) {
 	            printf("!! Received %d instead of %zu\n", sz_n, msg_len);
 	        }
+	        if (memcmp(msg, ptr, msg_len) != 0) {
+	        	printf("!! Invalid message (comparing %zu bytes)\n", msg_len);
+	        }
 			nn_freemsg (msg);
 			printf("-- Received %i\n", i);
 
@@ -109,11 +116,14 @@ int run_tests( int sock, int direction, size_t msg_len )
 
 	}
 
-	// Calculate overall lattency
+	// Finalize, display and free bandwidth
 	u_bw_finalize( &bw );
-
-	// Display bandwidth/lattency results
 	u_bw_display( &bw );
+	u_bw_free( &bw );
+
+	// Free message
+	if (direction == DIRECTION_OUT)
+		nn_freemsg(msg);
 
     return 0;
 }

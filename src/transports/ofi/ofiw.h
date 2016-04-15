@@ -92,6 +92,11 @@ struct nn_ofiw_pool {
     /* Global waitset */
     struct fid_wait         *waitset;
 
+#else
+
+    /* How many kilo-instructions per second we can run */
+    uint32_t                kinst_per_ms;
+
 #endif
 
     /* === Thread lock helpers === */
@@ -105,11 +110,15 @@ struct nn_ofiw_pool {
     /* Lock mutex */
     struct nn_mutex         lock_mutex;
 
+#ifndef OFI_USE_WAITSET
+
     /* Efd to place lock request */
     struct nn_efd           efd_lock_req;
 
     /* Efd to place wait lock termination */
     struct nn_efd           efd_lock_ack;
+
+#endif
 
     /* === Local variables === */
 
@@ -138,12 +147,16 @@ struct nn_ofiw_item {
     /* Memory for temporary storing the CQ details
        until they are handled by the FSM */
     union { 
-        struct fi_eq_entry      eq_entry;
-        struct fi_eq_cm_entry   eq_cm_entry;
+        // struct fi_eq_entry      eq_entry;
+        // struct fi_eq_cm_entry   eq_cm_entry;
         struct fi_eq_err_entry  eq_err_entry;
-        struct fi_cq_data_entry cq_entry;
+        // struct fi_cq_msg_entry cq_entry;
         struct fi_cq_err_entry  cq_err_entry;
-    } data;
+    } data_err;
+
+    /* Memory for the CQ/EQ events */
+    void                    *data;
+    size_t                  data_size;
 
 };
 
@@ -197,7 +210,8 @@ void nn_ofiw_term( struct nn_ofiw * self );
 
 /* Monitor the specified OFI Completion Queue, and trigger the specified type
    event to the handling FSM */
-int nn_ofiw_add_cq( struct nn_ofiw * worker, struct fid_cq * cq, int src );
+int nn_ofiw_add_cq( struct nn_ofiw * worker, struct fid_cq * cq, int cq_count,
+    int src );
 
 /* Monitor the specified OFI Completion Queue, and trigger the specified type
    event to the handling FSM */

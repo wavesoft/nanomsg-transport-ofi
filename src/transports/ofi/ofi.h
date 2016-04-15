@@ -32,7 +32,7 @@
    You can specify them as compiler definitions */
 
 /* Enable debug logs */
-#define OFI_DEBUG_LOG
+// #define OFI_DEBUG_LOG
 
 /* Open one domain per endpoint */
 // #define OFI_DOMAIN_PER_EP
@@ -40,6 +40,11 @@
 /* Enable waitsets (on providers that supports it) for 
    a more optimized worker polling */
 // #define OFI_USE_WAITSET
+
+/* Draining timer before stopping SOFI. Ideally this should
+   be 0 (=disabled), but since there are some bugs in some
+   providers this acts as a fallback */
+#define OFI_DRAIN_TIMEOUT 500
 
 /* Disable handshake negotiation (usnic fix) */
 #define OFI_DISABLE_HANDSHAKE
@@ -54,7 +59,7 @@
         clock_gettime(CLOCK_MONOTONIC, &ts); \
         char __msg[1024]; \
         sprintf(__msg, __VA_ARGS__); \
-        printf("[%010li.%06li] %s", ts.tv_sec, ts.tv_nsec, __msg); \
+        printf("[%010li.%07li] %s", ts.tv_sec, ts.tv_nsec, __msg); \
         fflush(stdout); \
     };
     // #define _ofi_debug(...)     printf(__VA_ARGS__)

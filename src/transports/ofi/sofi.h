@@ -67,8 +67,8 @@ struct nn_sofi_handshake
 
 };
 
-/* Ingress buffer for dual-buffered ingress */
-struct nn_sofi_buffer {
+/* Structure that keeps track of ingress messages */
+struct nn_sofi_in_buf {
 
     /* Body chunk */
     void * chunk;
@@ -82,8 +82,33 @@ struct nn_sofi_buffer {
     /* MR Descriptor */
     void * mr_desc[1];
 
-    /* Buffer flags */
-    uint8_t flags;
+    /* This structure acts as a libfabric context */
+    struct fi_context context;
+
+    /* Linked list pointers */
+    struct nn_sofi_in_buf * next;
+    struct nn_sofi_in_buf * prev;
+
+};
+
+/* Structure that keeps track of egress messages */
+struct nn_sofi_out_ctx {
+
+    /* The message in transit */
+    struct nn_msg msg;
+
+    /* Pointer to SOFI */
+    struct nn_sofi * sofi;
+
+    /* The MRM handle */
+    void * mr_handle;
+
+    /* This structure acts as a libfabric context */
+    struct fi_context context;  
+
+    /* Linked list pointers */
+    struct nn_sofi_out_ctx * next;
+    struct nn_sofi_out_ctx * prev;
 
 };
 
@@ -120,24 +145,26 @@ struct nn_sofi {
 
     /* Ancillary buffer */
     uint8_t                     aux_buf[NN_SOFI_ANCILLARY_SIZE];
+    struct fi_context           aux_context;
     struct fid_mr               *aux_mr;
 
     /* Egress properties */
     struct nn_msg               outmsg;
-    struct nn_mutex             stageout_mutex;
     struct nn_atomic            stageout_counter;
     uint8_t                     stageout_state;
     uint8_t                     out_state;
     int                         egress_max;
-    struct nn_list              egress_bookkeeping;
+    struct nn_sofi_out_ctx      *egress_contexts;
+    struct nn_sofi_out_ctx      *egress_ctx_head;
+    struct nn_sofi_out_ctx      *egress_ctx_tail;
 
     /* Ingress properties */
-    struct nn_sofi_buffer       *ingress_buffers;
+    struct nn_sofi_in_buf       *ingress_buffers;
+    struct nn_sofi_in_buf       *ingress_buf_free;
+    struct nn_sofi_in_buf       *ingress_buf_busy;
+    struct nn_sofi_in_buf       *ingress_buf_pop_head;
+    struct nn_sofi_in_buf       *ingress_buf_pop_tail;
     int                         ingress_max;
-    int                         ingress_len;
-    int                         ingress_head;
-    int                         ingress_tail;
-    int                         ingress_active;
     size_t                      ingress_buf_size;
     uint8_t                     ingress_flags;
 
@@ -151,7 +178,7 @@ struct nn_sofi {
 };
 
 /*  Initialize the state machine */
-void nn_sofi_init (struct nn_sofi *self, struct ofi_domain *domain, int offset,
+int nn_sofi_init (struct nn_sofi *self, struct ofi_domain *domain, int offset,
     struct nn_epbase *epbase, int src, struct nn_fsm *owner);
 
 /* Start the state machine either in receiving or sending side */

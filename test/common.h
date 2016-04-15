@@ -57,3 +57,6 @@ void u_bw_finalize( struct u_bw_timing * self );
 
 /* Call this to display results */
 void u_bw_display( struct u_bw_timing * self );
+
+/* Free bandwidth internals */
+void u_bw_free( struct u_bw_timing * self );

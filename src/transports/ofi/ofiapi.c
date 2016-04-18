@@ -468,11 +468,15 @@ int ofi_passive_endpoint_open( struct ofi_fabric * fabric, struct nn_ofiw * wrk,
         .size = 1,
         .flags = FI_WRITE,
         .wait_obj = FI_WAIT_UNSPEC,
-        .wait_set = NULL,
+        .wait_set = nn_ofiw_waitset( wrk ),
     };
 
+    /* Use waitset if available */
+    if (eq_attr.wait_set)
+        eq_attr.wait_obj = FI_WAIT_SET;
+
     /* Open an event queue for this endpoint, through poller */
-    ret = nn_ofiw_open_eq( wrk, src | OFI_SRC_EQ, context, &eq_attr, &pep->eq );
+    ret = fi_eq_open( fabric->fabric, &eq_attr, &pep->eq, context );
     if (ret) {
         FT_PRINTERR("nn_ofiw_open_eq", ret);
         nn_free(pep);
@@ -484,6 +488,15 @@ int ofi_passive_endpoint_open( struct ofi_fabric * fabric, struct nn_ofiw * wrk,
     ret = fi_pep_bind(pep->ep, &pep->eq->fid, 0);
     if (ret) {
         FT_PRINTERR("fi_pep_bind", ret);
+        return ret;
+    }
+
+    /* Start polling on this */
+    ret = nn_ofiw_add_eq( wrk, pep->eq, src | OFI_SRC_EQ );
+    if (ret) {
+        FT_PRINTERR("nn_ofiw_add_eq", ret);
+        nn_free(pep);
+        *_pep = NULL;
         return ret;
     }
 
@@ -589,13 +602,17 @@ int ofi_active_endpoint_open( struct ofi_domain* domain, struct nn_ofiw* wrk,
         .size = 1,
         .flags = FI_WRITE,
         .wait_obj = FI_WAIT_UNSPEC,
-        .wait_set = NULL,
+        .wait_set = nn_ofiw_waitset( wrk ),
     };
+
+    /* Use waitset if available */
+    if (eq_attr.wait_set)
+        eq_attr.wait_obj = FI_WAIT_SET;
 
     /* Open an event queue for this endpoint, through poller */
     ret = fi_eq_open( domain->parent->fabric, &eq_attr, &aep->eq, context );
     if (ret) {
-        FT_PRINTERR("nn_ofiw_open_eq", ret);
+        FT_PRINTERR("fi_eq_open", ret);
         nn_free(aep);
         *a = NULL;
         return ret;
@@ -610,10 +627,10 @@ int ofi_active_endpoint_open( struct ofi_domain* domain, struct nn_ofiw* wrk,
         return ret;
     }
 
-    /* Open an event queue for this endpoint, through poller */
+    /* Start polling on this */
     ret = nn_ofiw_add_eq( wrk, aep->eq, src | OFI_SRC_EQ );
     if (ret) {
-        FT_PRINTERR("nn_ofiw_open_eq", ret);
+        FT_PRINTERR("nn_ofiw_add_eq", ret);
         nn_free(aep);
         *a = NULL;
         return ret;
@@ -628,8 +645,12 @@ int ofi_active_endpoint_open( struct ofi_domain* domain, struct nn_ofiw* wrk,
         .format = FI_CQ_FORMAT_MSG,
         .wait_cond = FI_CQ_COND_NONE,
         .wait_obj = FI_WAIT_UNSPEC,
-        .wait_set = NULL,
+        .wait_set = nn_ofiw_waitset( wrk ),
     };
+
+    /* Use waitset if available */
+    if (cq_attr.wait_set)
+        cq_attr.wait_obj = FI_WAIT_SET;
 
     /* Open an event queue for this endpoint, through poller */
     ret = fi_cq_open( ep_domain, &cq_attr, &aep->cq_tx, context);

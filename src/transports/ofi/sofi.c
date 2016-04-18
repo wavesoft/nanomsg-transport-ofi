@@ -196,8 +196,8 @@ static int nn_sofi_egress_get_context( struct nn_sofi * self,
     }
 
     /* Get the head */
-    _ofi_debug("OFI[S]: get_out_context: Got free ctx=%p\n", *ctx);
     *ctx = self->egress_ctx_head;
+    _ofi_debug("OFI[S]: get_out_context: Got free ctx=%p\n", *ctx);
     return 0;
 
 }
@@ -1745,8 +1745,8 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
 
                 /* Start keepalive timer */
                 _ofi_debug("OFI[S]: Starting keepalive timer\n");
-                // nn_timer_start( &self->timer_keepalive, 
-                    // NN_SOFI_TIMEOUT_KEEPALIVE_TICK );
+                nn_timer_start( &self->timer_keepalive, 
+                    NN_SOFI_TIMEOUT_KEEPALIVE_TICK );
 
                 /* Post all input buffers */
                 ret = nn_sofi_ingress_post( self );

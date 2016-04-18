@@ -78,6 +78,11 @@ struct nn_ofiw_pool {
 
     /* === Local properties === */
 
+    /* State of the pool */
+    uint8_t                 state;
+
+#if defined OFI_USE_MANYTHREAD_POLL
+
     /* Thread reaper */
     struct nn_thread        reap_thread;
 
@@ -90,8 +95,29 @@ struct nn_ofiw_pool {
     /* Reaper mutex */
     struct nn_mutex         reap_mutex;
 
-    /* State of the pool */
-    uint8_t                 state;
+#else
+    
+    /* Pool poller thread */
+    struct nn_thread        thread;
+
+    /* List of ofiw items */
+    struct nn_list          items;
+
+    /* Mutex and fast counter lock */
+    struct nn_mutex         list_mutex;
+    uint8_t                 list_mutex_id;
+
+    /* How many kilo-instructions per second we can run */
+    uint32_t                kinst_per_ms;
+
+#endif
+
+#if defined OFI_USE_WAITSET
+
+    /* Global waitset */
+    struct fid_wait         *waitset;
+
+#endif
 
 };
 
@@ -105,9 +131,6 @@ struct nn_ofiw_item {
 
     /* Parent worker */
     struct nn_ofiw          *worker;
-
-    /* Pool poller thread */
-    struct nn_thread        thread;
 
     /* State of the item */
     uint8_t                 state;
@@ -128,6 +151,18 @@ struct nn_ofiw_item {
     void                    *data;
     size_t                  data_size;
 
+#if defined OFI_USE_MANYTHREAD_POLL
+
+    /* Item polling thread */
+    struct nn_thread        thread;
+
+#else
+
+    /* Item type */
+    enum nn_ofiw_item_type  fd_type;
+
+#endif
+
 };
 
 /**
@@ -140,9 +175,6 @@ struct nn_ofiw {
     /* Myself as an item in the worker pool */
     struct nn_list_item     item;
     
-    /* List of items to monitor */
-    struct nn_list          items;
-
     /* The owner FSM */
     struct nn_fsm           *owner;
 
@@ -153,6 +185,13 @@ struct nn_ofiw {
 
     /* Status flag */
     uint8_t                 active;
+
+#if defined OFI_USE_MANYTHREAD_POLL
+
+    /* List of items to monitor */
+    struct nn_list          items;
+
+#endif
 
 };
 
@@ -175,6 +214,11 @@ void nn_ofiw_term( struct nn_ofiw * self );
 
 /* ####################################### */
 
+/* Return worker's waitset, used to correctly open the CQ/EQ.
+   This function may return NULL if there is no waitset associated with the
+   worker. In this case the CQ/EQ must be oppened with FI_WAIT_NONE or FI_WAIT_UNSPEC */
+struct fid_wait * nn_ofiw_waitset( struct nn_ofiw * worker );
+
 /* Monitor the specified OFI Completion Queue, and trigger the specified type
    event to the handling FSM */
 int nn_ofiw_add_cq( struct nn_ofiw * worker, struct fid_cq * cq, int cq_count,
@@ -183,18 +227,6 @@ int nn_ofiw_add_cq( struct nn_ofiw * worker, struct fid_cq * cq, int cq_count,
 /* Monitor the specified OFI Completion Queue, and trigger the specified type
    event to the handling FSM */
 int nn_ofiw_add_eq( struct nn_ofiw * worker, struct fid_eq * eq, int src );
-
-/* Wrapping function to fi_eq_open that properly registers the resulting EQ
-   in the worker. This function might update EQ attributes accordingly in order
-   to configure waitsets. */
-int nn_ofiw_open_eq( struct nn_ofiw * self, int src, void *context, 
-    struct fi_eq_attr *attr, struct fid_eq **eq );
-
-/* Wrapping function to fi_cq_open that properly registers the resulting CQ
-   in the worker. This function might update CQ attributes accordingly in order
-   to configure waitsets. */
-int nn_ofiw_open_cq( struct nn_ofiw * self, int src, struct fid_domain *domain,
-    void *context, struct fi_cq_attr *attr, struct fid_cq **cq );
 
 /* Remove a particular file descriptor from the monitor */
 int nn_ofiw_remove( struct nn_ofiw * worker, void * fd );

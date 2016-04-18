@@ -41,10 +41,14 @@
    a more optimized worker polling */
 // #define OFI_USE_WAITSET
 
+/* Enable multithread polling (an attempt to get closer
+   to libfabric code) */
+// #define OFI_USE_MANYTHREAD_POLL
+
 /* Draining timer before stopping SOFI. Ideally this should
    be 0 (=disabled), but since there are some bugs in some
    providers this acts as a fallback */
-#define OFI_DRAIN_TIMEOUT 500
+#define OFI_DRAIN_TIMEOUT 0
 
 /* Disable handshake negotiation (usnic fix) */
 #define OFI_DISABLE_HANDSHAKE

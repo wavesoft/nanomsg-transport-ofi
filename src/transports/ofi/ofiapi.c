@@ -467,7 +467,7 @@ int ofi_passive_endpoint_open( struct ofi_fabric * fabric, struct nn_ofiw * wrk,
     struct fi_eq_attr eq_attr = {
         .size = 1,
         .flags = FI_WRITE,
-        .wait_obj = FI_WAIT_NONE,
+        .wait_obj = FI_WAIT_UNSPEC,
         .wait_set = NULL,
     };
 
@@ -588,7 +588,7 @@ int ofi_active_endpoint_open( struct ofi_domain* domain, struct nn_ofiw* wrk,
     struct fi_eq_attr eq_attr = {
         .size = 1,
         .flags = FI_WRITE,
-        .wait_obj = FI_WAIT_NONE,
+        .wait_obj = FI_WAIT_UNSPEC,
         .wait_set = NULL,
     };
 
@@ -616,7 +616,7 @@ int ofi_active_endpoint_open( struct ofi_domain* domain, struct nn_ofiw* wrk,
         .flags = 0,
         .format = FI_CQ_FORMAT_MSG,
         .wait_cond = FI_CQ_COND_NONE,
-        .wait_obj = FI_WAIT_NONE,
+        .wait_obj = FI_WAIT_UNSPEC,
         .wait_set = NULL,
     };
 

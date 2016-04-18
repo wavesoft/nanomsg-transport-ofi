@@ -564,11 +564,11 @@ int nn_ofiw_remove( struct nn_ofiw * self, void * fd )
             nn_ofiw_term_item( item );
             
             /* Break */
-            break;
+            return 0;
         }
 
     }
 
-    /* Success */
-    return 0;
+    /* Not found */
+    return -ENOENT;
 }

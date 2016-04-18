@@ -159,16 +159,16 @@ static int nn_bofi_start_accepting ( struct nn_bofi* self )
         return ret;
     }
 
+    /* We are listening */
+    self->state = NN_BOFI_STATE_ACTIVE;
+    _ofi_debug("OFI[B]: We are listening for connections\n");
+
     /* Listen for incoming PEP EQ event */
     ret = ofi_cm_listen( self->pep );
     if (ret) {
         FT_PRINTERR("ofi_cm_listen", ret);        
         return ret;
     }
-
-    /* We are listening */
-    self->state = NN_BOFI_STATE_ACTIVE;
-    _ofi_debug("OFI[B]: We are listening for connections\n");
 
     /* Success */
     return 0;

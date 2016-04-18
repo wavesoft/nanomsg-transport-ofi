@@ -33,6 +33,9 @@
 #include "../../utils/fast.h"
 #include "../../aio/ctx.h"
 
+#define NN_OFI_UNSIGNAL_NO      0
+#define NN_OFI_UNSIGNAL_YES     1
+
 #define NN_OFIW_STATE_INACTIVE  0
 #define NN_OFIW_STATE_ACTIVE    1
 
@@ -84,8 +87,8 @@ static void nn_ofiw_reap_list( struct nn_ofiw_pool * self, uint8_t unsignal )
 
     }
 
-    /* Unsignal efd if requested */
-    if (unsignal) 
+    /* We drained the reap_list, unsignal */
+    if (unsignal)
         nn_efd_unsignal( &self->reap_do );
 
     /* leave reap context */
@@ -107,7 +110,7 @@ static void nn_ofiw_thread_reaper( void * dat )
         nn_efd_wait( &self->reap_do, -1 );
 
         /* Reap list & unsignal efd */
-        nn_ofiw_reap_list( self, 1 );
+        nn_ofiw_reap_list( self, NN_OFI_UNSIGNAL_YES );
 
     }
 }
@@ -335,7 +338,7 @@ int nn_ofiw_pool_term( struct nn_ofiw_pool * self )
 
     /* Reap reaping thread & manually reap possibly pending items */
     nn_thread_term( &self->reap_thread );
-    nn_ofiw_reap_list( self, 0 );
+    nn_ofiw_reap_list( self, NN_OFI_UNSIGNAL_NO );
 
     /* Free reaper resources */
     nn_efd_term( &self->reap_do );

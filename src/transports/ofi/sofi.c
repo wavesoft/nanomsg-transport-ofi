@@ -534,14 +534,37 @@ static int nn_sofi_ingress_pop_isempty( struct nn_sofi * self )
 }
 
 /**
+ * Check if populated queue has only 1 item
+ */
+static int nn_sofi_ingress_pop_only1( struct nn_sofi * self )
+{
+    int ret = 0;
+
+    /* We are going to perform 2 tests, so lock */
+    nn_mutex_lock( &self->ingress_mutex );
+    if (self->ingress_buf_pop_head != NULL) {
+        if (self->ingress_buf_pop_head->next == NULL) {
+            ret = 1;
+        }
+    }
+    nn_mutex_unlock( &self->ingress_mutex );
+
+    return ret;
+}
+
+/**
  * Return the first available populated ingress buffer (to be handled)
  */
 static int nn_sofi_ingress_pop_populated( struct nn_sofi * self, 
     struct nn_sofi_in_buf ** buf )
 {
+    /* Enter critical session */
+    nn_mutex_lock( &self->ingress_mutex );
+
     /* Return EAGAIN if empty */
     if (!self->ingress_buf_pop_head) {
         _ofi_debug("OFI[S]: pop_in_populated: No items on queue\n");
+        nn_mutex_unlock( &self->ingress_mutex );
         return -EAGAIN;
     }
 
@@ -563,6 +586,7 @@ static int nn_sofi_ingress_pop_populated( struct nn_sofi * self,
     (*buf)->next = NULL;
 
     /* Success */
+    nn_mutex_unlock( &self->ingress_mutex );
     return 0;
 }
 
@@ -685,6 +709,9 @@ static void nn_sofi_ingress_mark_populated( struct nn_sofi * self,
         if (buf->prev) buf->prev->next = buf->next;
     }
 
+    /* Enter critical section */
+    nn_mutex_lock( &self->ingress_mutex );
+
     /* If we already have an item, put it first */
     if (self->ingress_buf_pop_tail) {
 
@@ -703,6 +730,9 @@ static void nn_sofi_ingress_mark_populated( struct nn_sofi * self,
         buf->next = NULL;
         buf->prev = NULL;
     }
+
+    /* Exit critical section */
+    nn_mutex_unlock( &self->ingress_mutex );
 
 }
 
@@ -970,18 +1000,14 @@ static int nn_sofi_ingress_fetch( struct nn_sofi * self,
     if (self->ingress_flags & NN_SOFI_IN_FLAG_NNLATER) {
         _ofi_debug("OFI[S]: Notifying NanoMsg (later)\n");
 
-        /* Reset flags */
-        self->ingress_flags |= NN_SOFI_IN_FLAG_NNBUSY;
-
-        /* IF empty, reset nnlater flag */
-        if (nn_sofi_ingress_pop_isempty(self)) {
-            _ofi_debug("OFI[S]: No more items pending, reseting later flag\n");
+        /* If we have only 1 item on the queue, remove the NNLATER flag */
+        if (nn_sofi_ingress_pop_only1(self)) {
+            _ofi_debug("OFI[S]: Only 1 item pending, reseting later flag\n");
             self->ingress_flags &= ~NN_SOFI_IN_FLAG_NNLATER;
-        } else {
-            _ofi_debug("OFI[S]: Items are pending, keeping later flag\n");
         }
 
-        /* We have data */
+        /* Handle more data */
+        self->ingress_flags |= NN_SOFI_IN_FLAG_NNBUSY;
         nn_pipebase_received( &self->pipebase );
 
     }
@@ -1208,6 +1234,9 @@ int nn_sofi_init ( struct nn_sofi *self, struct ofi_domain *domain, int offset,
     self->ingress_buf_pop_tail = NULL;
     self->ingress_flags = 0;
 
+    /* Initialize list mutex */
+    nn_mutex_init( &self->ingress_mutex );
+
     /* Populate ingress properties */
     self->ingress_buf_size = rx_msg_size;
     self->ingress_max = rx_queue;
@@ -1359,6 +1388,9 @@ void nn_sofi_term (struct nn_sofi *self)
         ctx = ctx->next;
     }
     nn_free( self->egress_contexts );
+
+    /* Terminate mutex */
+    nn_mutex_term( &self->ingress_mutex );
 
     /* ----------------------------------- */
     /*  NanoMSG Core Termination           */

@@ -164,6 +164,7 @@ struct nn_sofi {
     struct nn_sofi_in_buf       *ingress_buf_busy;
     struct nn_sofi_in_buf       *ingress_buf_pop_head;
     struct nn_sofi_in_buf       *ingress_buf_pop_tail;
+    struct nn_mutex             ingress_mutex;
     int                         ingress_max;
     size_t                      ingress_buf_size;
     uint8_t                     ingress_flags;

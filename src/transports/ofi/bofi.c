@@ -67,6 +67,9 @@ struct nn_bofi {
     /* The worker that receives EQ events */
     struct nn_ofiw *worker;
 
+    /* The EQ context */
+    struct fi_context eq_ctx;
+
     /*  This object is a specific type of endpoint.
         Thus it is derived from epbase. */
     struct nn_epbase epbase;

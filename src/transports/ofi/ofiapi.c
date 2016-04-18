@@ -593,7 +593,7 @@ int ofi_active_endpoint_open( struct ofi_domain* domain, struct nn_ofiw* wrk,
     };
 
     /* Open an event queue for this endpoint, through poller */
-    ret = nn_ofiw_open_eq( wrk, src | OFI_SRC_EQ, context, &eq_attr, &aep->eq );
+    ret = fi_eq_open( domain->parent->fabric, &eq_attr, &aep->eq, context );
     if (ret) {
         FT_PRINTERR("nn_ofiw_open_eq", ret);
         nn_free(aep);
@@ -605,6 +605,17 @@ int ofi_active_endpoint_open( struct ofi_domain* domain, struct nn_ofiw* wrk,
     ret = fi_ep_bind(aep->ep, &aep->eq->fid, 0);
     if (ret) {
         FT_PRINTERR("fi_ep_bind[eq]", ret);
+        nn_free(aep);
+        *a = NULL;
+        return ret;
+    }
+
+    /* Open an event queue for this endpoint, through poller */
+    ret = nn_ofiw_add_eq( wrk, aep->eq, src | OFI_SRC_EQ );
+    if (ret) {
+        FT_PRINTERR("nn_ofiw_open_eq", ret);
+        nn_free(aep);
+        *a = NULL;
         return ret;
     }
 
@@ -621,10 +632,9 @@ int ofi_active_endpoint_open( struct ofi_domain* domain, struct nn_ofiw* wrk,
     };
 
     /* Open an event queue for this endpoint, through poller */
-    ret = nn_ofiw_open_cq( wrk, src | OFI_SRC_CQ_TX, ep_domain, context, 
-        &cq_attr, &aep->cq_tx );
+    ret = fi_cq_open( ep_domain, &cq_attr, &aep->cq_tx, context);
     if (ret) {
-        FT_PRINTERR("nn_ofiw_open_cq", ret);
+        FT_PRINTERR("fi_cq_open", ret);
         nn_free(aep);
         *a = NULL;
         return ret;
@@ -634,6 +644,17 @@ int ofi_active_endpoint_open( struct ofi_domain* domain, struct nn_ofiw* wrk,
     ret = fi_ep_bind(aep->ep, &aep->cq_tx->fid, FI_TRANSMIT | FI_SELECTIVE_COMPLETION);
     if (ret) {
         FT_PRINTERR("fi_ep_bind[cq_tx]", ret);
+        nn_free(aep);
+        *a = NULL;
+        return ret;
+    }
+
+    /* Add CQ to the polling worker */
+    ret = nn_ofiw_add_cq( wrk, aep->cq_tx, cq_attr.size, src | OFI_SRC_CQ_TX);
+    if (ret) {
+        FT_PRINTERR("nn_ofiw_add_cq", ret);
+        nn_free(aep);
+        *a = NULL;
         return ret;
     }
 
@@ -643,10 +664,9 @@ int ofi_active_endpoint_open( struct ofi_domain* domain, struct nn_ofiw* wrk,
     cq_attr.size = aep->fi->rx_attr->size;
 
     /* Open an event queue for this endpoint, through poller */
-    ret = nn_ofiw_open_cq( wrk, src | OFI_SRC_CQ_RX, ep_domain, context, 
-        &cq_attr, &aep->cq_rx );
+    ret = fi_cq_open( ep_domain, &cq_attr, &aep->cq_rx, context);
     if (ret) {
-        FT_PRINTERR("nn_ofiw_open_cq", ret);
+        FT_PRINTERR("fi_cq_open", ret);
         nn_free(aep);
         *a = NULL;
         return ret;
@@ -656,6 +676,17 @@ int ofi_active_endpoint_open( struct ofi_domain* domain, struct nn_ofiw* wrk,
     ret = fi_ep_bind(aep->ep, &aep->cq_rx->fid, FI_RECV);
     if (ret) {
         FT_PRINTERR("fi_ep_bind[cq_rx]", ret);
+        nn_free(aep);
+        *a = NULL;
+        return ret;
+    }
+
+    /* Add CQ to the polling worker */
+    ret = nn_ofiw_add_cq( wrk, aep->cq_rx, cq_attr.size, src | OFI_SRC_CQ_RX);
+    if (ret) {
+        FT_PRINTERR("nn_ofiw_add_cq", ret);
+        nn_free(aep);
+        *a = NULL;
         return ret;
     }
 

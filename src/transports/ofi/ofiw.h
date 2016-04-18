@@ -76,6 +76,20 @@ struct nn_ofiw_pool {
     /* The fabric associated with this pool */
     struct fid_fabric       *fabric;
 
+    /* === Local properties === */
+
+    /* Thread reaper */
+    struct nn_thread        reap_thread;
+
+    /* List of items in the thread reaper */
+    struct nn_list          reap_list;
+
+    /* Reaper signal and acknowledgement */
+    struct nn_efd           reap_do;
+
+    /* Reaper mutex */
+    struct nn_mutex         reap_mutex;
+
     /* State of the pool */
     uint8_t                 state;
 

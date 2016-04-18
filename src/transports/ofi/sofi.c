@@ -526,6 +526,14 @@ static int nn_sofi_ingress_empty( struct nn_sofi * self )
 }
 
 /**
+ * Check if populated queue is empty
+ */
+static int nn_sofi_ingress_pop_isempty( struct nn_sofi * self )
+{
+    return (self->ingress_buf_pop_head == NULL);
+}
+
+/**
  * Return the first available populated ingress buffer (to be handled)
  */
 static int nn_sofi_ingress_pop_populated( struct nn_sofi * self, 
@@ -963,8 +971,15 @@ static int nn_sofi_ingress_fetch( struct nn_sofi * self,
         _ofi_debug("OFI[S]: Notifying NanoMsg (later)\n");
 
         /* Reset flags */
-        self->ingress_flags = (self->ingress_flags & ~NN_SOFI_IN_FLAG_NNLATER) 
-                            | NN_SOFI_IN_FLAG_NNBUSY;
+        self->ingress_flags |= NN_SOFI_IN_FLAG_NNBUSY;
+
+        /* IF empty, reset nnlater flag */
+        if (nn_sofi_ingress_pop_isempty(self)) {
+            _ofi_debug("OFI[S]: No more items pending, reseting later flag\n");
+            self->ingress_flags &= ~NN_SOFI_IN_FLAG_NNLATER;
+        } else {
+            _ofi_debug("OFI[S]: Items are pending, keeping later flag\n");
+        }
 
         /* We have data */
         nn_pipebase_received( &self->pipebase );
@@ -1698,8 +1713,8 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
 
                 /* Start keepalive timer */
                 _ofi_debug("OFI[S]: Starting keepalive timer\n");
-                nn_timer_start( &self->timer_keepalive, 
-                    NN_SOFI_TIMEOUT_KEEPALIVE_TICK );
+                // nn_timer_start( &self->timer_keepalive, 
+                    // NN_SOFI_TIMEOUT_KEEPALIVE_TICK );
 
                 /* Post all input buffers */
                 ret = nn_sofi_ingress_post( self );

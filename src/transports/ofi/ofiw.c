@@ -41,6 +41,111 @@
 /* ============================== */
 
 /**
+ * An item in the reaper thread
+ */
+struct nn_ofiw_reap_item {
+
+    /* Item on list */
+    struct nn_list_item item;
+
+    /* Pointer to reap */
+    struct nn_thread * ptr_thread;
+
+    /* Pointer to free */
+    struct nn_thread * ptr_free;
+
+};
+
+/**
+ * Reap all pending items on list
+ */
+static void nn_ofiw_reap_list( struct nn_ofiw_pool * self, uint8_t unsignal )
+{
+    struct nn_ofiw_reap_item *item;
+    struct nn_list_item *it;
+
+    /* Enter reap context */
+    nn_mutex_lock( &self->reap_mutex );
+
+    /* Reap all items in list */
+    while ((it=nn_list_begin(&self->reap_list)) != nn_list_end (&self->reap_list)) {
+        item = nn_cont (it, struct nn_ofiw_reap_item, item);
+
+        /* Remove item from list */
+        nn_list_erase( &self->reap_list, &item->item );
+        nn_list_item_term( &item->item );
+
+        /* Reap/free */
+        if (item->ptr_thread) nn_thread_term( item->ptr_thread );
+        if (item->ptr_free) nn_free( item->ptr_free );
+
+        /* Free item */
+        nn_free( item );
+
+    }
+
+    /* Unsignal efd if requested */
+    if (unsignal) 
+        nn_efd_unsignal( &self->reap_do );
+
+    /* leave reap context */
+    nn_mutex_unlock( &self->reap_mutex );
+
+}
+
+/**
+ * A thread that takes care of reaping the
+ * CQ/EQ threads
+ */
+static void nn_ofiw_thread_reaper( void * dat )
+{
+    struct nn_ofiw_pool * self  = dat;
+
+    while (self->state == NN_OFIW_STATE_ACTIVE) {
+
+        /* Wait for reap signal */
+        nn_efd_wait( &self->reap_do, -1 );
+
+        /* Reap list & unsignal efd */
+        nn_ofiw_reap_list( self, 1 );
+
+    }
+}
+
+/**
+ * Helper function to reap a thread outside current scope
+ */
+static void nn_ofiw_pool_reap( struct nn_ofiw_pool * self, struct nn_thread * t,
+    void * f )
+{
+
+    /* Allocate new reap item structure */
+    struct nn_ofiw_reap_item * reap = nn_alloc( sizeof(struct nn_ofiw_reap_item), 
+        "reap item" );
+
+    /* Initialize */
+    reap->ptr_thread = t;
+    reap->ptr_free = f;
+    nn_list_item_init( &reap->item );
+
+    /* Acquire lock */
+    nn_mutex_lock( &self->reap_mutex );
+
+    /* If that's the first item, signal */
+    if (nn_list_begin(&self->reap_list) != nn_list_end (&self->reap_list)) {
+        nn_efd_signal( &self->reap_do );
+    }
+
+    /* Add item on list */
+    nn_list_insert (&self->reap_list, &reap->item,
+        nn_list_end (&self->reap_list));
+
+    /* Free lock */
+    nn_mutex_unlock( &self->reap_mutex );
+
+}
+
+/**
  * Polling thread of an OFI CQ item
  */
 static void nn_ofiw_thread_cq( void * dat )
@@ -104,7 +209,7 @@ static void nn_ofiw_thread_eq( void * dat )
 {
     int ret;
     ssize_t sret;
-    uint32_t event;
+    uint32_t event = 0;
     struct nn_ofiw_item * self = dat;
     struct nn_ofiw * worker = self->worker;
 
@@ -175,7 +280,7 @@ static void nn_ofiw_term_item( struct nn_ofiw_item * item )
         item->state = NN_OFIW_STATE_INACTIVE;
 
         /* Reap it */
-        // nn_thread_term( &item->thread );
+        nn_ofiw_pool_reap( item->worker->parent, &item->thread, item );
 
     }
 }
@@ -196,6 +301,12 @@ int nn_ofiw_pool_init( struct nn_ofiw_pool * self, struct fid_fabric *fabric )
 
     /* Initialize structures */
     nn_list_init( &self->workers );
+
+    /* Initialize thread reaper */
+    nn_list_init( &self->reap_list );
+    nn_efd_init( &self->reap_do );
+    nn_mutex_init( &self->reap_mutex );
+    nn_thread_init( &self->reap_thread, &nn_ofiw_thread_reaper, self );
 
     /* Success */
     return 0;
@@ -221,6 +332,14 @@ int nn_ofiw_pool_term( struct nn_ofiw_pool * self )
 
     /* Free list */
     nn_list_term( &self->workers );
+
+    /* Reap reaping thread & manually reap possibly pending items */
+    nn_thread_term( &self->reap_thread );
+    nn_ofiw_reap_list( self, 0 );
+
+    /* Free reaper resources */
+    nn_efd_term( &self->reap_do );
+    nn_mutex_term( &self->reap_mutex );
 
     /* Success */
     return 0;
@@ -267,13 +386,13 @@ void nn_ofiw_term( struct nn_ofiw * self )
     while ((it = nn_list_begin (&self->items)) != nn_list_end (&self->items)) {
         item = nn_cont (it, struct nn_ofiw_item, item);
 
-        /* Terminate item */
-        nn_ofiw_term_item( item );
-
         /* Free structures */
         nn_list_erase( &self->items, &item->item );
         nn_list_item_term( &item->item );
-        nn_free( item );
+        nn_free( item->data );
+
+        /* Terminate (and free) item */
+        nn_ofiw_term_item( item );
 
     }
 
@@ -433,14 +552,13 @@ int nn_ofiw_remove( struct nn_ofiw * self, void * fd )
 
             _ofi_debug("OFI[w]: Removed fd=%p from worker=%p\n", item, self);
 
-            /* Terminate item */
-            nn_ofiw_term_item( item );
-
-            /* Free structure */
+            /* Free structures */
             nn_list_erase( &self->items, &item->item );
             nn_list_item_term( &item->item );
             nn_free( item->data );
-            nn_free( item );
+
+            /* Terminate (and free) item */
+            nn_ofiw_term_item( item );
             
             /* Break */
             break;

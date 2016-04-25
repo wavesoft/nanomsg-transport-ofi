@@ -76,12 +76,6 @@ struct nn_sofi_in_buf {
     /* Underlying message */
     struct nn_msg msg;
 
-    /* Memory registration hint */
-    struct fid_mr *mr;
-
-    /* MR Descriptor */
-    void * mr_desc[1];
-
     /* This structure acts as a libfabric context */
     struct fi_context context;
 
@@ -167,6 +161,7 @@ struct nn_sofi {
     struct nn_mutex             ingress_mutex;
     int                         ingress_max;
     size_t                      ingress_buf_size;
+    struct fid_mr               *ingress_buf_mr;
     uint8_t                     ingress_flags;
 
     /* Local and remote handshake information */

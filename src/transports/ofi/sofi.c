@@ -95,6 +95,13 @@
 #define NN_SOFI_MRM_RECV_KEY            0x0800
 #define NN_SOFI_MRM_KEY_PAGE_SIZE       0x1000
 
+/* Page size */
+#ifdef _SC_PAGESIZE
+#define NN_SOFI_PAGE_SIZE 4096
+#else
+#define NN_SOFI_PAGE_SIZE sysconf(_SC_PAGESIZE)
+#endif
+
 /* Forward Declarations */
 static void nn_sofi_handler (struct nn_fsm *self, int src, int type, 
     void *srcptr);
@@ -778,6 +785,7 @@ static int nn_sofi_ingress_post_buffer( struct nn_sofi * self,
     struct nn_sofi_in_buf * buf )
 {
     int ret;
+    void * desc[0];
     struct iovec iov[1];
     struct fi_msg msg;
 
@@ -788,7 +796,8 @@ static int nn_sofi_ingress_post_buffer( struct nn_sofi * self,
     memset( &msg, 0, sizeof(msg) );
     iov[0].iov_base = nn_chunk_deref( buf->chunk );
     iov[0].iov_len = self->ingress_buf_size;
-    msg.desc = &buf->mr_desc[0];
+    desc[0] = fi_mr_desc( self->ingress_buf_mr );
+    msg.desc = &desc[0];
     msg.msg_iov = &iov[0];
     msg.iov_count = 1;
     msg.context = &buf->context;
@@ -1022,6 +1031,21 @@ static int nn_sofi_ingress_fetch( struct nn_sofi * self,
     return 0;
 }
 
+/**
+ * Chunk termination function that is called when the user frees
+ * a chunk pointer.
+ */
+static void nn_sofi_ingress_term( void * chunk, void * user )
+{
+    struct nn_sofi *self = (struct nn_sofi *) user;
+    struct nn_sofi_in_buf *buf = (struct nn_sofi_in_buf *)
+        ( (uint8_t*)chunk + nn_chunk_hdrsize() - NN_SOFI_PAGE_SIZE );
+
+    /* Re-initialize terminated chunk */
+    nn_chunk_init( chunk, self->ingress_buf_size + nn_chunk_hdrsize(),
+                   nn_sofi_ingress_term, self, &buf->chunk );
+
+}
 
 /* ########################################################################## */
 /*  Implementation  Functions                                                 */
@@ -1178,57 +1202,67 @@ int nn_sofi_init ( struct nn_sofi *self, struct ofi_domain *domain, int offset,
 
     /* ####[ INGRESS ]#### */
 
+    /* Wrap buffer size to page-size multiplicants */
+    self->ingress_buf_size = (1 + ((rx_msg_size - 1) / NN_SOFI_PAGE_SIZE)) 
+                                * NN_SOFI_PAGE_SIZE;
+
+    /* Claculate the size of the buffer */
+    size_t ibufsz = self->ingress_buf_size + NN_SOFI_PAGE_SIZE;
+
     /* Allocate ingress buffers */
-    self->ingress_buffers = nn_alloc( sizeof(struct nn_sofi_in_buf) * rx_queue, 
-        "ingress sofi buffer" );
+#if _POSIX_C_SOURCE >= 200112L
+    self->ingress_buffers = NULL;
+    ret = posix_memalign( (void**)self->ingress_buffers, sysconf(_SC_PAGESIZE), 
+        ibufsz * rx_queue );
+    _ofi_debug("OFI[S]: Allocated page-aligned egress aux sz=%zu, at=%p\n",
+        ibufsz * rx_queue, self->ingress_buffers);
+#else
+    self->ingress_buffers = nn_alloc( ibufsz * rx_queue, "ingress sofi buffer");
+    _ofi_debug("OFI[S]: Allocated system-aligned egress aux sz=%zu, at=%p\n",
+        ibufsz * rx_queue, self->ingress_buffers);
+#endif
+
+    /* Ensure correct allocation and initialize */
     nn_assert( self->ingress_buffers );
     memset( self->ingress_buffers, 0, sizeof(struct nn_sofi_in_buf) * rx_queue);
 
+    /* Register block of memory */
+    ret = fi_mr_reg(self->domain->domain, self->ingress_buffers, 
+        ibufsz * rx_queue, mr_flags, 0, mr_page_offset+NN_SOFI_MRM_RECV_KEY, 0, 
+        &self->ingress_buf_mr, NULL);
+    if (ret) {
+        FT_PRINTERR("fi_mr_reg", ret);
+    }
+
     /* Initilaize buffers */
+    struct nn_sofi_in_buf *iprev = NULL, *ibuf = self->ingress_buffers;
     for (i=0; i<rx_queue; ++i) {
 
-        /* Allocate chunk */
-        ret = nn_chunk_alloc( rx_msg_size, NN_ALLOC_PAGEALIGN, 
-            &self->ingress_buffers[i].chunk );
-        if (ret == -ENOSYS) {
-            /* Page-aligned allocator failed, use default */
-            ret = nn_chunk_alloc( rx_msg_size, 0, 
-                &self->ingress_buffers[i].chunk );
-            _ofi_debug("OFI[S]: Allocated non-aligned ingress chunk=%p\n",
-                self->ingress_buffers[i].chunk);
-        } else {
-            _ofi_debug("OFI[S]: Allocated aligned ingress chunk=%p\n",
-                self->ingress_buffers[i].chunk);
-        }
+        /* Initialize chunk */
+        ret = nn_chunk_init((uint8_t*)ibuf+NN_SOFI_PAGE_SIZE-nn_chunk_hdrsize(),
+                            self->ingress_buf_size + nn_chunk_hdrsize(),
+                            nn_sofi_ingress_term, self,
+                            &ibuf->chunk );
         if (ret) {
             FT_PRINTERR("nn_chunk_alloc", ret);
             return ret;
         }
 
-        /* Register memory */
-        ret = fi_mr_reg(self->domain->domain, self->ingress_buffers[i].chunk, 
-            rx_msg_size, mr_flags, 0, mr_page_offset+NN_SOFI_MRM_RECV_KEY+i, 0, 
-            &self->ingress_buffers[i].mr, NULL);
-        if (ret) {
-            FT_PRINTERR("fi_mr_reg", ret);
-        }
-
-        /* Get desc */
-        self->ingress_buffers[i].mr_desc[0] = 
-            fi_mr_desc( self->ingress_buffers[i].mr );
+        /* Init inbuf properties */
+        nn_msg_init( &ibuf->msg, 0 );
 
         /* Implement bi-directional linked list */
-        if (i > 0) {
-            self->ingress_buffers[i-1].next = &self->ingress_buffers[i];
-        }
-        if (i < rx_queue-1) {
-            self->ingress_buffers[i+1].prev = &self->ingress_buffers[i];
-        }
+        if (i > 0) iprev->next = ibuf;
+        ibuf->prev = iprev;
+
+        /* Keep prev and forward */
+        iprev = ibuf;
+        ibuf = (struct nn_sofi_in_buf *)((uint8_t*)ibuf + ibufsz);
 
     }
 
     /* Initial linked list values */
-    self->ingress_buf_free = &self->ingress_buffers[0];
+    self->ingress_buf_free = self->ingress_buffers;
     self->ingress_buf_busy = NULL;
     self->ingress_buf_pop_head = NULL;
     self->ingress_buf_pop_tail = NULL;
@@ -1238,7 +1272,6 @@ int nn_sofi_init ( struct nn_sofi *self, struct ofi_domain *domain, int offset,
     nn_mutex_init( &self->ingress_mutex );
 
     /* Populate ingress properties */
-    self->ingress_buf_size = rx_msg_size;
     self->ingress_max = rx_queue;
 
     /* Success */
@@ -1347,22 +1380,14 @@ void nn_sofi_term (struct nn_sofi *self)
     /* Terminate MR manager */
     ofi_mr_term( &self->mrm_egress );
 
-    /* Free chunks */
-    for (i=0; i<self->ingress_max; ++i) {
-
-        /* Unregister memory */
-        ret = fi_close(&self->ingress_buffers[i].mr->fid);
-        if (ret) {
-            FT_PRINTERR("fi_mr_reg", ret);
-        }
-
-        /* Free chunk */
-        nn_chunk_free( self->ingress_buffers[i].chunk );
-
-    }
-
-    /* Free ingress messages */
+    /* Free ingress buffers */
     nn_free( self->ingress_buffers );
+
+    /* Unregister ingress MR */
+    ret = fi_close(&self->ingress_buf_mr->fid);
+    if (ret) {
+        FT_PRINTERR("fi_mr_reg", ret);
+    }
 
     /* Unregister ancillary MR */
     ret = fi_close(&self->aux_mr->fid);

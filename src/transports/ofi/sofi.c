@@ -1122,6 +1122,9 @@ void nn_sofi_term (struct nn_sofi *self)
     /*  OFI Sub-Component Termination      */
     /* ----------------------------------- */
 
+    /* Terminate worker */
+    nn_ofiw_term( self->worker );
+
     /* Terminate MR manager */
     ofi_mr_term( &self->mrm_egress );
 
@@ -1419,8 +1422,8 @@ static void nn_sofi_shutdown (struct nn_fsm *fsm, int src, int type,
 
     }
 
-    /* Terminate worker */
-    nn_ofiw_term( self->worker );
+    /* Stop worker */
+    nn_ofiw_stop( self->worker );
 
     /* Close endpoint */
     _ofi_debug("OFI[S]: Closing endpoint\n");

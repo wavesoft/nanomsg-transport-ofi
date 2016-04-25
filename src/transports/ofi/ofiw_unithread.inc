@@ -516,6 +516,14 @@ struct nn_ofiw * nn_ofiw_pool_getworker( struct nn_ofiw_pool * self,
     return worker;
 }
 
+/* Stop a worker */
+void nn_ofiw_stop( struct nn_ofiw * self )
+{
+    /* Remove from worker list */
+    nn_list_erase( &self->parent->workers, &self->item );
+    nn_list_item_term( &self->item );
+}
+
 /* Terminate a worker */
 void nn_ofiw_term( struct nn_ofiw * self )
 {
@@ -524,8 +532,10 @@ void nn_ofiw_term( struct nn_ofiw * self )
     struct nn_list_item *it;
 
     /* Remove from worker list */
-    nn_list_erase( &self->parent->workers, &self->item );
-    nn_list_item_term( &self->item );
+    if (nn_list_item_isinlist( &self->item )) {    
+        nn_list_erase( &self->parent->workers, &self->item );
+        nn_list_item_term( &self->item );
+    }
 
     /* Acquire lock & notify thread to use it */
     nn_mutex_lock( &self->parent->list_mutex );

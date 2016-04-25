@@ -209,6 +209,9 @@ int nn_ofiw_pool_term( struct nn_ofiw_pool * pool );
 struct nn_ofiw * nn_ofiw_pool_getworker( struct nn_ofiw_pool * pool,
     struct nn_fsm * owner );
 
+/* Stop a worker */
+void nn_ofiw_stop( struct nn_ofiw * self );
+
 /* Close a worker */
 void nn_ofiw_term( struct nn_ofiw * self );
 

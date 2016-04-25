@@ -1,11 +1,10 @@
-# nanomsg-transport-ofi (1.0.2b)
+# nanomsg-transport-ofi (1.1.0b)
 
 Nanomsg transport for interfacing with the OpenFabrics Interfaces (OFI) Library (libfabric).
 
 ## Known Problems
 
  1. The current version handles only IPV4 address families.
- 2. The keepalive mechanism is not yet implemented in the current state of the devel branch
 
 ## How to use
 
@@ -23,18 +22,22 @@ Hello
 
 ## How to compile
 
+The following copy-paste-friendly instructions can help you getting started:
+
  1. Make sure you have [libfabric](http://ofiwg.github.io/libfabric/) installed in your system.
- 2. Download the [latest sources of nanonsg](https://github.com/nanomsg/nanomsg/releases):
+ 2. Check-out the [customized nanomsg sources from wavesoft](https://github.com/wavesoft/nanomsg) (until they are available from upstream) and prepare the autogen scripts:
 
     ```sh
-    wget https://github.com/nanomsg/nanomsg/releases/download/0.8-beta/nanomsg-0.8-beta.tar.gz
-    tar -zxf nanomsg-0.8-beta.tar.gz
-    NANOMSG_SROUCES=$(pwd)/nanomsg-0.8-beta
-    ``` 
+    git clone -b pull-nn_allocmsg_ptr https://github.com/wavesoft/nanomsg
+    NANOMSG_SROUCES=$(pwd)/nanomsg
+    cd $NANOMSG_SROUCES; ./autogen.sh; cd ..
+    ```
+
  3. Check-out `nanomsg-transport-ofi`:
 
     ```sh
     git clone https://github.com/wavesoft/nanomsg-transport-ofi.git
+    cd nanomsg-transport-ofi
     ```
  4. Patch the sources of nanomsg, using the `patch-nanomsg.sh` script that comes with this project.
 
@@ -45,6 +48,6 @@ Hello
 
     ```
     cd $NANOMSG_SROUCES
-    ./configure && make
+    ./configure --enable-ofi && make
     sudo make install
     ```

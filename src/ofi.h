@@ -27,7 +27,7 @@
 extern "C" {
 #endif
 
-#define NN_OFI -6
+#define NN_OFI -5
 
 #define NN_OFI_RX_QUEUE_SIZE 1
 #define NN_OFI_TX_QUEUE_SIZE 2

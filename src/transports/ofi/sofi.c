@@ -31,6 +31,7 @@
 #include "../../utils/cont.h"
 #include "../../utils/alloc.h"
 #include "../../utils/fast.h"
+#include "../../utils/wire.h"
 #include "../../core/ep.h"
 #include "../../core/sock.h"
 
@@ -305,8 +306,9 @@ static int nn_sofi_egress_post_buffers( struct nn_sofi * self,
     struct nn_msg * outmsg )
 {   
     int ret;
+    uint8_t hdr[4];
     struct fi_msg msg;
-    struct iovec iov [2];
+    struct iovec iov [3];
     struct nn_sofi_out_ctx * ctx;
 
     /* Get a free transit context */
@@ -319,32 +321,24 @@ static int nn_sofi_egress_post_buffers( struct nn_sofi * self,
     /* Move message in context */
     nn_msg_mv(&ctx->msg, outmsg);
 
+    /* Prepare header.
+       NOTE: You will notice that we are assigning data to be sent
+             that are allocated on heap. That's ok, because they
+             will be copied to a slab buffer by ofi_mr_describe */
+    nn_putl( hdr, nn_chunkref_size (&ctx->msg.sphdr) + 
+                  nn_chunkref_size (&ctx->msg.body) );
+    iov[0].iov_base = &hdr;
+    iov[0].iov_len = 4;
+
     /* Get SP Header length */
-    iov [0].iov_len = nn_chunkref_size (&ctx->msg.sphdr);
+    iov[1].iov_len = nn_chunkref_size (&ctx->msg.sphdr);
 
     /* If SP Header is empty, use only 1 iov */
-    if (nn_fast( iov[0].iov_len == 0 )) {
+    if (nn_fast( iov[1].iov_len == 0 )) {
 
         /* Prepare Body IOVs */
-        iov [0].iov_base = nn_chunkref_data (&ctx->msg.body);
-        iov [0].iov_len = nn_chunkref_size (&ctx->msg.body);
-
-        /* Prepare message */
-        msg.msg_iov = iov;
-        msg.iov_count = 1;
-
-        /* TODO: Register a custom free function in the
-                 body chunk and call ofi_mr_invalidate when
-                 the user frees the chunk. */
-
-        _ofi_debug("OFI[S]: Sending BODY[%zu]\n", iov[0].iov_len);
-
-    } else {
-
-        /* Prepare SP-Header + Body IOVs */
-        iov [0].iov_base = nn_chunkref_data (&ctx->msg.sphdr);
-        iov [1].iov_base = nn_chunkref_data (&ctx->msg.body);
-        iov [1].iov_len = nn_chunkref_size (&ctx->msg.body);
+        iov[1].iov_base = nn_chunkref_data (&ctx->msg.body);
+        iov[1].iov_len = nn_chunkref_size (&ctx->msg.body);
 
         /* Prepare message */
         msg.msg_iov = iov;
@@ -352,11 +346,28 @@ static int nn_sofi_egress_post_buffers( struct nn_sofi * self,
 
         /* TODO: Register a custom free function in the
                  body chunk and call ofi_mr_invalidate when
+                 the user frees the chunk. */
+
+        _ofi_debug("OFI[S]: Sending BODY[%zu]\n", iov[1].iov_len);
+
+    } else {
+
+        /* Prepare SP-Header + Body IOVs */
+        iov[1].iov_base = nn_chunkref_data (&ctx->msg.sphdr);
+        iov[2].iov_base = nn_chunkref_data (&ctx->msg.body);
+        iov[2].iov_len = nn_chunkref_size (&ctx->msg.body);
+
+        /* Prepare message */
+        msg.msg_iov = iov;
+        msg.iov_count = 3;
+
+        /* TODO: Register a custom free function in the
+                 body chunk and call ofi_mr_invalidate when
                  the user frees the chunk. SPHeader is 
                  small enough to be copied in an MR slab */
 
         _ofi_debug("OFI[S]: Sending SPHDR[%zu]+BODY[%zu]\n", 
-            iov[0].iov_len, iov[1].iov_len);
+            iov[1].iov_len, iov[2].iov_len);
 
     }
 
@@ -405,7 +416,7 @@ static void nn_sofi_egress_handle_error( struct nn_sofi * self,
  * Acknowledge the fact that the ougoing data are sent
  */
 static void nn_sofi_egress_handle( struct nn_sofi * self,
-    struct fi_cq_msg_entry * cq_entry )
+    struct fi_cq_entry * cq_entry )
 {
     int c;
 
@@ -528,219 +539,7 @@ static int nn_sofi_egress_stage( struct nn_sofi * self,
  */
 static int nn_sofi_ingress_empty( struct nn_sofi * self )
 {
-    return (self->ingress_buf_pop_head == NULL) &&
-           (self->ingress_buf_busy == NULL);
-}
-
-/**
- * Check if populated queue is empty
- */
-static int nn_sofi_ingress_pop_isempty( struct nn_sofi * self )
-{
-    return (self->ingress_buf_pop_head == NULL);
-}
-
-/**
- * Check if populated queue has only 1 item
- */
-static int nn_sofi_ingress_pop_only1( struct nn_sofi * self )
-{
-    int ret = 0;
-
-    /* We are going to perform 2 tests, so lock */
-    nn_mutex_lock( &self->ingress_mutex );
-    if (self->ingress_buf_pop_head != NULL) {
-        if (self->ingress_buf_pop_head->next == NULL) {
-            ret = 1;
-        }
-    }
-    nn_mutex_unlock( &self->ingress_mutex );
-
-    return ret;
-}
-
-/**
- * Return the first available populated ingress buffer (to be handled)
- */
-static int nn_sofi_ingress_pop_populated( struct nn_sofi * self, 
-    struct nn_sofi_in_buf ** buf )
-{
-    /* Enter critical session */
-    nn_mutex_lock( &self->ingress_mutex );
-
-    /* Return EAGAIN if empty */
-    if (!self->ingress_buf_pop_head) {
-        _ofi_debug("OFI[S]: pop_in_populated: No items on queue\n");
-        nn_mutex_unlock( &self->ingress_mutex );
-        return -EAGAIN;
-    }
-
-    /* Pop populated item */
-    *buf = self->ingress_buf_pop_head;
-    _ofi_debug("OFI[S]: pop_in_populated: Popping buf=%p\n", *buf);
-    self->ingress_buf_pop_head = self->ingress_buf_pop_head->next;
-    if (self->ingress_buf_pop_head)
-        self->ingress_buf_pop_head->prev = NULL;
-
-    /* If that was the last item, also reset tail */
-    if (!self->ingress_buf_pop_head) {
-        _ofi_debug("OFI[S]: pop_in_populated: This was last item\n");
-        self->ingress_buf_pop_tail = NULL;
-    }
-
-    /* Detach item */
-    (*buf)->prev = NULL;
-    (*buf)->next = NULL;
-
-    /* Success */
-    nn_mutex_unlock( &self->ingress_mutex );
-    return 0;
-}
-
-/**
- * Return the first available free ingress buffer (to be posted)
- */
-static int nn_sofi_ingress_pop_free( struct nn_sofi * self,
-    struct nn_sofi_in_buf ** buf )
-{
-    /* Return EAGAIN if empty */
-    if (!self->ingress_buf_free) {
-        _ofi_debug("OFI[S]: pop_in_free: No items on queue\n");
-        return -EAGAIN;
-    }
-
-    /* Pop free item */
-    *buf = self->ingress_buf_free;
-    _ofi_debug("OFI[S]: pop_in_free: Popping buf=%p\n", *buf);
-    self->ingress_buf_free = self->ingress_buf_free->next;
-    if (self->ingress_buf_free)
-        self->ingress_buf_free->prev = NULL;
-
-    /* Detach item */
-    (*buf)->prev = NULL;
-    (*buf)->next = NULL;
-
-    /* Success */
-    return 0;
-}
-
-/**
- * Mark specified buffer as free (avalable to be posted)
- */
-static void nn_sofi_ingress_mark_free( struct nn_sofi * self,
-    struct nn_sofi_in_buf * buf )
-{
-
-    /* If this was a 'busy' item, it was in the busy linked list,
-       remove it from there. */
-    if (self->ingress_buf_busy == buf) {
-        /* If we were the head, pop us */
-        _ofi_debug("OFI[S]: mark_in_free: Shifting buf=%p from busy\n", buf);
-        self->ingress_buf_busy = self->ingress_buf_busy->next;
-        if (self->ingress_buf_busy)
-            self->ingress_buf_busy->prev = NULL;
-        buf->prev = NULL;
-        buf->next = NULL;
-    } else if (buf->prev || buf->next) {
-        /* If we are somewhere in the middle, remove us */
-        _ofi_debug("OFI[S]: mark_in_free: Deleting buf=%p from busy\n", buf);
-        if (buf->next) buf->next->prev = buf->prev;
-        if (buf->prev) buf->prev->next = buf->next;
-    }
-
-    /* If we already have an item, put it first */
-    if (self->ingress_buf_free) {
-        /* Unshift on free queue */
-        _ofi_debug("OFI[S]: mark_in_free: Unshifting buf=%p at list\n", buf);
-        buf->next = self->ingress_buf_free;
-        self->ingress_buf_free->prev = buf;
-        self->ingress_buf_free = buf;
-        buf->prev = NULL;
-    } else {
-        /* Make this item first buffer */
-        _ofi_debug("OFI[S]: mark_in_free: Making buf=%p first item\n", buf);
-        self->ingress_buf_free = buf;
-        buf->next = NULL;
-        buf->prev = NULL;
-    }
-
-}
-
-/**
- * Mark specified buffer as busy (in transit)
- */
-static void nn_sofi_ingress_mark_busy( struct nn_sofi * self,
-    struct nn_sofi_in_buf * buf )
-{
-    /* If we already have an item, put it first */
-    if (self->ingress_buf_busy) {
-
-        /* Unshift on free queue */
-        _ofi_debug("OFI[S]: mark_in_busy: Unshifting buf=%p at list\n", buf);
-        buf->next = self->ingress_buf_busy;
-        self->ingress_buf_busy->prev = buf;
-        self->ingress_buf_busy = buf;
-        buf->prev = NULL;
-
-    } else {
-        /* Make this item first buffer */
-        _ofi_debug("OFI[S]: mark_in_busy: Making buf=%p first item\n", buf);
-        self->ingress_buf_busy = buf;
-        buf->next = NULL;
-        buf->prev = NULL;
-    }
-
-}
-
-/**
- * Mark specified buffer as populated (with data)
- */
-static void nn_sofi_ingress_mark_populated( struct nn_sofi * self,
-    struct nn_sofi_in_buf * buf )
-{
-
-    /* If this was a 'busy' item, it was in the busy linked list,
-       remove it from there. */
-    if (self->ingress_buf_busy == buf) {
-        /* If we were the head, pop us */
-        _ofi_debug("OFI[S]: mark_in_pop: Shifting buf=%p from busy\n", buf);
-        self->ingress_buf_busy = self->ingress_buf_busy->next;
-        if (self->ingress_buf_busy)
-            self->ingress_buf_busy->prev = NULL;
-        buf->prev = NULL;
-        buf->next = NULL;
-    } else if (buf->prev || buf->next) {
-        /* If we are somewhere in the middle, remove us */
-        _ofi_debug("OFI[S]: mark_in_pop: Deleting buf=%p from busy\n", buf);
-        if (buf->next) buf->next->prev = buf->prev;
-        if (buf->prev) buf->prev->next = buf->next;
-    }
-
-    /* Enter critical section */
-    nn_mutex_lock( &self->ingress_mutex );
-
-    /* If we already have an item, put it first */
-    if (self->ingress_buf_pop_tail) {
-
-        /* Put item on tail */
-        _ofi_debug("OFI[S]: mark_in_pop: Unshifting buf=%p at list\n", buf);
-        buf->prev = self->ingress_buf_pop_tail;
-        self->ingress_buf_pop_tail->next = buf;
-        self->ingress_buf_pop_tail = buf;
-        buf->next = NULL;
-
-    } else {
-        /* Make this item first buffer */
-        _ofi_debug("OFI[S]: mark_in_pop: Making buf=%p first item\n", buf);
-        self->ingress_buf_pop_head = buf;
-        self->ingress_buf_pop_tail = buf;
-        buf->next = NULL;
-        buf->prev = NULL;
-    }
-
-    /* Exit critical section */
-    nn_mutex_unlock( &self->ingress_mutex );
-
+    return nn_queue_empty( &self->ingress_busy );
 }
 
 /**
@@ -750,31 +549,9 @@ static void nn_sofi_ingress_flush( struct nn_sofi * self )
 {
     struct nn_sofi_in_buf * buf;
 
-    /* Mark all items on busy queue as 'free', effectively ignoring
-       all messages pending in the rx queue. */
-    while (self->ingress_buf_busy) {
-        nn_sofi_ingress_mark_free( self, self->ingress_buf_busy );
-    }
-
-    /* If there is a pending nanomsg operation, don't flush now */
-    if (self->ingress_flags & NN_SOFI_IN_FLAG_NNBUSY) {
-
-        /* Mark ingress queue for delayed flushing */
-        self->ingress_flags |= NN_SOFI_IN_FLAG_FLUSH;
-        _ofi_debug("OFI[S]: Nanomsg is busy, delaying ingress flush\n");
-        return;
-
-    }
-
-    /* Discard all receiving messages */
-    while (self->ingress_buf_pop_head) {
-        nn_sofi_ingress_pop_populated( self, &buf );
-        nn_sofi_ingress_mark_free( self, buf );
-    }
-
-    /* Discard all items on ingress buffer */
-    self->ingress_flags &= ~NN_SOFI_IN_FLAG_POSTLATER;
-    self->ingress_flags &= ~NN_SOFI_IN_FLAG_NNLATER;
+    /* Drain busy */
+    while (!nn_queue_empty( &self->ingress_busy ))
+        nn_queue_pop( &self->ingress_busy );
 
 }
 
@@ -789,12 +566,9 @@ static int nn_sofi_ingress_post_buffer( struct nn_sofi * self,
     struct iovec iov[1];
     struct fi_msg msg;
 
-    /* Keep index of active buffer */
-    _ofi_debug("OFI[S]: Posting ingress buffer=%p\n", nn_chunk_deref( buf->chunk ));
-
     /* Prepare message from active ingress buffer */
     memset( &msg, 0, sizeof(msg) );
-    iov[0].iov_base = nn_chunk_deref( buf->chunk );
+    iov[0].iov_base = ((uint8_t*)nn_chunk_deref( buf->chunk )) - sizeof(uint32_t);
     iov[0].iov_len = self->ingress_buf_size;
     desc[0] = fi_mr_desc( self->ingress_buf_mr );
     msg.desc = &desc[0];
@@ -802,57 +576,24 @@ static int nn_sofi_ingress_post_buffer( struct nn_sofi * self,
     msg.iov_count = 1;
     msg.context = &buf->context;
 
+    _ofi_debug("OFI[S]: Posting ingress buffer=%p (chunk=%p)\n", buf, iov[0].iov_base);
+
+    /* We have a buffer posted */
+    nn_atomic_inc( &self->ingress_posted, 1 );
+
     /* Post receive buffers */
     ret = ofi_recvmsg( self->ep, &msg, 0 );
     if (ret) {
 
-        /* Mark buffer as free */
-        nn_sofi_ingress_mark_free( self, buf );
-
         /* Return error */
         FT_PRINTERR("ofi_recvmsg", ret);
+        nn_atomic_dec( &self->ingress_posted, 1 );
         return ret;
 
     }
 
-    /* Mark buffer as busy */
-    nn_sofi_ingress_mark_busy( self, buf );
-
     /* Success */
     return 0;
-
-}
-
-/**
- * Post all ingress messages
- */
-static int nn_sofi_ingress_post_all( struct nn_sofi * self )
-{
-    int ret;
-    struct nn_sofi_in_buf * buf;
-
-    /* Post ingress buffers until we ran ount of items */
-    while (self->ingress_buf_free) {
-
-        /* Pop free item */
-        ret = nn_sofi_ingress_pop_free( self, &buf );
-        if (ret) {
-            FT_PRINTERR("nn_sofi_ingress_pop_free", ret);
-            _ofi_debug("OFI[S]: Failed to get next free buffer!\n");
-            return ret;
-        }
-
-        /* Post free item */
-        ret = nn_sofi_ingress_post_buffer( self, buf );
-        if (ret) {
-            FT_PRINTERR("nn_sofi_ingress_post_buffer", ret);
-            _ofi_debug("OFI[S]: Failed to post all ingress buffers!\n");
-            return ret;
-        }
-    }
-
-    /* Success */
-    return ret;
 }
 
 /**
@@ -866,16 +607,17 @@ static int nn_sofi_ingress_post( struct nn_sofi * self )
 {
     int ret;
     struct nn_sofi_in_buf * buf;
+    struct nn_queue_item * item;
 
-    /* Get the input buffer to post */
-    ret = nn_sofi_ingress_pop_free( self, &buf );
-    if (ret == -EAGAIN) {
-        _ofi_debug("OFI[S]: No free ingress buffers found\n");
+    /* If we have no free items return -EAGAIN */
+    if (nn_slow( nn_queue_empty( &self->ingress_free )) ) {
+        _ofi_debug("OFI[S]: No free buffers to post\n");
         return -EAGAIN;
-    } else if (ret) {
-        FT_PRINTERR("nn_sofi_ingress_pop_free", ret);
-        return ret;
     }
+
+    /* Pop free item */
+    item = nn_queue_pop( &self->ingress_free );
+    buf = nn_cont( item, struct nn_sofi_in_buf, item );
 
     /* Post the input buffer */
     ret = nn_sofi_ingress_post_buffer( self, buf );
@@ -886,6 +628,62 @@ static int nn_sofi_ingress_post( struct nn_sofi * self )
 
     /* Success */
     return 0;
+}
+
+/**
+ * Post all ingress messages
+ */
+static int nn_sofi_ingress_post_all( struct nn_sofi * self )
+{
+    int ret;
+
+    /* Post ingress buffers until we ran ount of items */
+    while (1) {
+
+        /* Post item */
+        ret = nn_sofi_ingress_post( self );
+
+        /* If unavailable, we are done */
+        if (ret == -EAGAIN)
+            return 0;
+
+        /* Handle errors */
+        if (ret) {
+            FT_PRINTERR("nn_sofi_ingress_post", ret);
+            _ofi_debug("OFI[S]: Failed post next free buffer!\n");
+            return ret;
+        }
+
+    }
+
+    /* Never reached */
+    return 0;
+}
+
+/**
+ * This function is called when it's a good idea to check
+ * if there are any ingress buffer posted, and if not to post one.
+ */
+static void nn_sofi_ingress_post_eager( struct nn_sofi * self )
+{
+    /* If we haven't posted anything, post something now */
+    if (!nn_queue_empty( &self->ingress_free )) {
+        _ofi_debug("OFI[S]: Posting another ingress buffer\n");
+        nn_sofi_ingress_post( self );
+    }
+}
+
+/**
+ * This function is called when it's a good idea to check
+ * if there are any busy buffers in queue, and if not to notify nanomsg for one.
+ */
+static void nn_sofi_ingress_busy_eager( struct nn_sofi * self )
+{
+    /* If there are ingress items, call pipebase_received */
+    if (!nn_queue_empty( &self->ingress_busy )) {
+        _ofi_debug("OFI[S]: There are pending busy buffers, notifying pipe\n");
+        nn_pipebase_received( &self->pipebase );
+    }
 }
 
 /**
@@ -905,65 +703,47 @@ static void nn_sofi_ingress_handle_error( struct nn_sofi * self,
  * occurs, this function will return the appropriate error code.
  */
 static void nn_sofi_ingress_handle( struct nn_sofi * self, 
-    struct fi_cq_msg_entry * cq_entry )
+    struct fi_cq_entry * cq_entry )
 {
     struct nn_sofi_in_buf * buf;
+    uint32_t len;
 
     /* Reset keepalive timer */
     self->ticks_in = 0;
 
-    /* Get the posted ingress buffer */
+    /* Get the pointer to the ingress buffer */
     buf = nn_cont( cq_entry->op_context, struct nn_sofi_in_buf, context );
-    _ofi_debug("OFI[S]: Handling ingress=%i\n", 
-        (int)(buf - self->ingress_buffers));
 
-    /* Check if this is a keepalive message */
-    if (cq_entry->len == NN_SOFI_KEEPALIVE_PACKET_LEN) {
+    /* Get message length */
+    len = nn_getl( (uint8_t*) (((uint32_t*) buf->chunk) - 1) );
 
-        /* Test payload contents */
-        if (memcmp( nn_chunk_deref(buf->chunk), NN_SOFI_KEEPALIVE_PACKET, 
-            NN_SOFI_KEEPALIVE_PACKET_LEN ) == 0)
-        {
+    /* We have a limit of <4GB on the message, so we reserved the max for 
+       keepalive packets */
+    if (len == 0xFFFFFFFF) {
 
-            /* Mark buffer as free */
-            _ofi_debug("OFI[S]: Received KEEPALIVE\n");
-            nn_sofi_ingress_mark_free( self, buf );
+        /* Mark buffer as free */
+        _ofi_debug("OFI[S]: Received KEEPALIVE\n");
+        nn_queue_push( &self->ingress_free, &buf->item );
 
-            /* If we have a POSTLATER flag, try again now */
-            if (self->ingress_flags & NN_SOFI_IN_FLAG_POSTLATER) {
+        /* Eager post */
+        nn_sofi_ingress_post_eager(self);
 
-                /* Post another ingress buffer */
-                _ofi_debug("OFI[S]: Posting late ingress buffers\n");
-                self->ingress_flags &= ~NN_SOFI_IN_FLAG_POSTLATER;
-                nn_sofi_ingress_post( self );
-
-            }
-
-            /* No need to continue */
-            return;
-
-        }
+        /* No need to continue */
+        return;
 
     }
+
+    /* Recover damaged chunk tag */
+    nn_putl( (uint8_t*) (((uint32_t*) buf->chunk) - 1), 0xdeadcafe );
 
     /* Prepare message from the active staged buffer */
-    _ofi_debug("OFI[S]: Received BODY[%zu]\n", cq_entry->len);
-    nn_chunk_reset( buf->chunk, cq_entry->len );
+    _ofi_debug("OFI[S]: Received BODY[%u]\n", len);
+    nn_chunk_reset( buf->chunk, len );
     nn_msg_init_chunk( &buf->msg, buf->chunk );
-    nn_chunk_addref( buf->chunk, 1 );
 
-    /* Mark buffer as populated */
-    nn_sofi_ingress_mark_populated( self, buf );
-
-    /* If nanomsg is busy, try later */
-    if (self->ingress_flags & NN_SOFI_IN_FLAG_NNBUSY) {
-        _ofi_debug("OFI[S]: NanoMsg is busy, will try later\n");
-        self->ingress_flags |= NN_SOFI_IN_FLAG_NNLATER;
-    } else {
-        _ofi_debug("OFI[S]: Notifying NanoMsg\n");
-        self->ingress_flags |= NN_SOFI_IN_FLAG_NNBUSY;
-        nn_pipebase_received( &self->pipebase );
-    }
+    /* Stage for pickup  */
+    nn_queue_push( &self->ingress_busy, &buf->item );
+    nn_sofi_ingress_busy_eager( self );
 
 }
 
@@ -974,58 +754,22 @@ static int nn_sofi_ingress_fetch( struct nn_sofi * self,
     struct nn_msg * msg )
 {
     int ret;
+    struct nn_queue_item * item;
     struct nn_sofi_in_buf * buf;
-    nn_assert(nn_fast( self->ingress_flags & NN_SOFI_IN_FLAG_NNBUSY ));
 
-    /* Pick first busy buffer to receive */
-    ret = nn_sofi_ingress_pop_populated( self, &buf );
-    if (ret) {
-        FT_PRINTERR("nn_sofi_ingress_pop_populated", ret);
-        _ofi_debug("OFI[S]: Unable to fetch next populated buffer\n");
-        return ret;
-    }
+    /* This should not be called on empty queue */
+    nn_assert(nn_slow( !nn_queue_empty(&self->ingress_busy) ));
+
+    /* Pop busy item */
+    item = nn_queue_pop( &self->ingress_busy );
+    buf = nn_cont( item, struct nn_sofi_in_buf, item );
 
     /* Move message to output */
-    _ofi_debug("OFI[S]: Passing to nanomsg ingress buffer=%i\n", ret);
+    _ofi_debug("OFI[S]: Passing to nanomsg ingress buffer=%p\n", buf);
     nn_msg_mv( msg, &buf->msg );
 
-    /* Mark buffer as free */
-    nn_sofi_ingress_mark_free( self, buf );
-
-    /* If we have a POSTLATER flag, post now */
-    if (self->ingress_flags & NN_SOFI_IN_FLAG_POSTLATER) {
-
-        /* Post another ingress buffer */
-        _ofi_debug("OFI[S]: Posting late ingress buffers\n");
-        self->ingress_flags &= ~NN_SOFI_IN_FLAG_POSTLATER;
-        nn_sofi_ingress_post( self );
-
-    }
-
-    /* We are not busy any more */
-    self->ingress_flags &= ~NN_SOFI_IN_FLAG_NNBUSY;
-
-    /* Check if we should post another nanomsg trigger */
-    if (self->ingress_flags & NN_SOFI_IN_FLAG_NNLATER) {
-        _ofi_debug("OFI[S]: Notifying NanoMsg (later)\n");
-
-        /* If we have only 1 item on the queue, remove the NNLATER flag */
-        if (nn_sofi_ingress_pop_only1(self)) {
-            _ofi_debug("OFI[S]: Only 1 item pending, reseting later flag\n");
-            self->ingress_flags &= ~NN_SOFI_IN_FLAG_NNLATER;
-        }
-
-        /* Handle more data */
-        self->ingress_flags |= NN_SOFI_IN_FLAG_NNBUSY;
-        nn_pipebase_received( &self->pipebase );
-
-    }
-
-    /* If we must be flushed, retry now */
-    if (self->ingress_flags & NN_SOFI_IN_FLAG_FLUSH) {
-        _ofi_debug("OFI[S]: Executing delayed ingress queue flush\n");
-        nn_sofi_ingress_flush( self );
-    }
+    /* We are eager to received another one if available */
+    nn_sofi_ingress_busy_eager( self );
 
     /* Return success */
     return 0;
@@ -1035,15 +779,21 @@ static int nn_sofi_ingress_fetch( struct nn_sofi * self,
  * Chunk termination function that is called when the user frees
  * a chunk pointer.
  */
-static void nn_sofi_ingress_term( void * chunk, void * user )
+static void nn_sofi_ingress_freefn( void * chunk, void * user )
 {
     struct nn_sofi *self = (struct nn_sofi *) user;
     struct nn_sofi_in_buf *buf = (struct nn_sofi_in_buf *)
-        ( (uint8_t*)chunk + nn_chunk_hdrsize() - NN_SOFI_PAGE_SIZE );
+        ( (uint8_t*)chunk + nn_chunk_hdrsize() - NN_SOFI_PAGE_SIZE + sizeof(uint32_t) );
+
+    _ofi_debug("OFI[S]: User released buf=%p\n", buf);
 
     /* Re-initialize terminated chunk */
     nn_chunk_init( chunk, self->ingress_buf_size + nn_chunk_hdrsize(),
-                   nn_sofi_ingress_term, self, &buf->chunk );
+                   nn_sofi_ingress_freefn, self, &buf->chunk );
+
+    /* Mark buffer as free */
+    nn_queue_push( &self->ingress_free, &buf->item );
+    nn_sofi_ingress_post_eager( self );
 
 }
 
@@ -1109,6 +859,10 @@ int nn_sofi_init ( struct nn_sofi *self, struct ofi_domain *domain, int offset,
 
     /* Outgoing message */
     nn_msg_init (&self->outmsg, 0);
+
+    /* Initialize queues */
+    nn_queue_init( &self->ingress_free );
+    nn_queue_init( &self->ingress_busy );
 
     /* ----------------------------------- */
     /*  OFI Sub-Component Initialization   */
@@ -1202,6 +956,9 @@ int nn_sofi_init ( struct nn_sofi *self, struct ofi_domain *domain, int offset,
 
     /* ####[ INGRESS ]#### */
 
+    /* Initialize atomic counters */
+    nn_atomic_init( &self->ingress_posted, 0 );
+
     /* Wrap buffer size to page-size multiplicants */
     self->ingress_buf_size = (1 + ((rx_msg_size - 1) / NN_SOFI_PAGE_SIZE)) 
                                 * NN_SOFI_PAGE_SIZE;
@@ -1212,7 +969,7 @@ int nn_sofi_init ( struct nn_sofi *self, struct ofi_domain *domain, int offset,
     /* Allocate ingress buffers */
 #if _POSIX_C_SOURCE >= 200112L
     self->ingress_buffers = NULL;
-    ret = posix_memalign( (void**)self->ingress_buffers, sysconf(_SC_PAGESIZE), 
+    ret = posix_memalign( (void**)&self->ingress_buffers, sysconf(_SC_PAGESIZE), 
         ibufsz * rx_queue );
     _ofi_debug("OFI[S]: Allocated page-aligned egress aux sz=%zu, at=%p\n",
         ibufsz * rx_queue, self->ingress_buffers);
@@ -1235,13 +992,15 @@ int nn_sofi_init ( struct nn_sofi *self, struct ofi_domain *domain, int offset,
     }
 
     /* Initilaize buffers */
-    struct nn_sofi_in_buf *iprev = NULL, *ibuf = self->ingress_buffers;
+    struct nn_sofi_in_buf *ibuf = self->ingress_buffers;
     for (i=0; i<rx_queue; ++i) {
 
-        /* Initialize chunk */
-        ret = nn_chunk_init((uint8_t*)ibuf+NN_SOFI_PAGE_SIZE-nn_chunk_hdrsize(),
+        /* Initialize chunk in such a way that it's page-aligned to
+           the tag. (The tag will be replaced when receiving data) */
+        ret = nn_chunk_init( (uint8_t*)ibuf + NN_SOFI_PAGE_SIZE - 
+                                nn_chunk_hdrsize() - sizeof(uint32_t),
                             self->ingress_buf_size + nn_chunk_hdrsize(),
-                            nn_sofi_ingress_term, self,
+                            nn_sofi_ingress_freefn, self,
                             &ibuf->chunk );
         if (ret) {
             FT_PRINTERR("nn_chunk_alloc", ret);
@@ -1250,26 +1009,15 @@ int nn_sofi_init ( struct nn_sofi *self, struct ofi_domain *domain, int offset,
 
         /* Init inbuf properties */
         nn_msg_init( &ibuf->msg, 0 );
+        nn_queue_item_init( &ibuf->item );
 
-        /* Implement bi-directional linked list */
-        if (i > 0) iprev->next = ibuf;
-        ibuf->prev = iprev;
+        /* Keep free items on queue */
+        nn_queue_push( &self->ingress_free, &ibuf->item );
 
-        /* Keep prev and forward */
-        iprev = ibuf;
+        /* Forward */
         ibuf = (struct nn_sofi_in_buf *)((uint8_t*)ibuf + ibufsz);
 
     }
-
-    /* Initial linked list values */
-    self->ingress_buf_free = self->ingress_buffers;
-    self->ingress_buf_busy = NULL;
-    self->ingress_buf_pop_head = NULL;
-    self->ingress_buf_pop_tail = NULL;
-    self->ingress_flags = 0;
-
-    /* Initialize list mutex */
-    nn_mutex_init( &self->ingress_mutex );
 
     /* Populate ingress properties */
     self->ingress_max = rx_queue;
@@ -1374,9 +1122,6 @@ void nn_sofi_term (struct nn_sofi *self)
     /*  OFI Sub-Component Termination      */
     /* ----------------------------------- */
 
-    /* Terminate worker */
-    nn_ofiw_term( self->worker );
-
     /* Terminate MR manager */
     ofi_mr_term( &self->mrm_egress );
 
@@ -1405,6 +1150,7 @@ void nn_sofi_term (struct nn_sofi *self)
 
     /* Stop throttles */
     nn_atomic_term( &self->stageout_counter );
+    nn_atomic_term( &self->ingress_posted );
 
     /* Release all transit contexts in book-keeping */
     ctx = self->egress_ctx_head;
@@ -1414,8 +1160,9 @@ void nn_sofi_term (struct nn_sofi *self)
     }
     nn_free( self->egress_contexts );
 
-    /* Terminate mutex */
-    nn_mutex_term( &self->ingress_mutex );
+    /* Terminate queues */
+    nn_queue_term( &self->ingress_free );
+    nn_queue_term( &self->ingress_busy );
 
     /* ----------------------------------- */
     /*  NanoMSG Core Termination           */
@@ -1493,7 +1240,7 @@ static void nn_sofi_shutdown (struct nn_fsm *fsm, int src, int type,
     void *srcptr)
 {
     struct nn_sofi *self;
-    struct fi_cq_msg_entry * cq_entry;
+    struct fi_cq_entry * cq_entry;
     struct fi_cq_err_entry * cq_error;
 
     /* Get pointer to sofi structure */
@@ -1526,24 +1273,17 @@ static void nn_sofi_shutdown (struct nn_fsm *fsm, int src, int type,
            state is now in NN_SOFI_STATE_CLOSING */
 
         /* Wait for successful egress completion only on clean shutdown */
-        if (self->error == 0) {
-            _ofi_debug("OFI[S]: Draining egress CQ event\n");
-            if (type == NN_OFIW_COMPLETED) {
-                /* Handle completed event */
-                cq_entry = (struct fi_cq_msg_entry *) srcptr;
-                nn_sofi_egress_handle( self, cq_entry );
-            } else if (type == NN_OFIW_ERROR) {
-                /* Handle error event */
-                cq_error = (struct fi_cq_err_entry *) srcptr;
-                nn_sofi_egress_handle_error( self, cq_error );
-            } else {
-                nn_fsm_bad_action (self->state, src, type);
-            }
+        _ofi_debug("OFI[S]: Draining egress CQ event\n");
+        if (type == NN_OFIW_COMPLETED) {
+            /* Handle completed event */
+            cq_entry = (struct fi_cq_entry *) srcptr;
+            nn_sofi_egress_handle( self, cq_entry );
+        } else if (type == NN_OFIW_ERROR) {
+            /* Handle error event */
+            cq_error = (struct fi_cq_err_entry *) srcptr;
+            nn_sofi_egress_handle_error( self, cq_error );
         } else {
-            _ofi_debug("OFI[S]: Discarding egress CQ event due to error\n");
-            if ((type != NN_OFIW_COMPLETED) && (type != NN_OFIW_ERROR)) {
-                nn_fsm_bad_action (self->state, src, type);
-            }
+            nn_fsm_bad_action (self->state, src, type);
         }
 
     } else if (nn_slow(src == (NN_SOFI_SRC_ENDPOINT | OFI_SRC_CQ_RX) )) {
@@ -1679,6 +1419,9 @@ static void nn_sofi_shutdown (struct nn_fsm *fsm, int src, int type,
 
     }
 
+    /* Terminate worker */
+    nn_ofiw_term( self->worker );
+
     /* Close endpoint */
     _ofi_debug("OFI[S]: Closing endpoint\n");
     ofi_active_endpoint_close( self->ep );
@@ -1699,7 +1442,7 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
     int ret;
     struct nn_sofi *self;
     struct fi_eq_cm_entry * cq_cm_entry;
-    struct fi_cq_msg_entry * cq_entry;
+    struct fi_cq_entry * cq_entry;
     struct fi_cq_err_entry * cq_error;
 
     /* Get pointer to sofi structure */
@@ -1773,10 +1516,10 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
                 nn_timer_start( &self->timer_keepalive, 
                     NN_SOFI_TIMEOUT_KEEPALIVE_TICK );
 
-                /* Post all input buffers */
+                /* Post first ingress buffer */
                 ret = nn_sofi_ingress_post( self );
                 if (ret) {
-                    FT_PRINTERR("nn_sofi_ingress_post_all", ret);
+                    FT_PRINTERR("nn_sofi_ingress_post", ret);
                     nn_sofi_critical_error( self, ret );
                     return;
                 }
@@ -1855,20 +1598,10 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
             case NN_OFIW_COMPLETED:
 
                 /* Get CQ Event */
-                cq_entry = (struct fi_cq_msg_entry *) srcptr;
+                cq_entry = (struct fi_cq_entry *) srcptr;
 
                 /* Process incoming data */
                 nn_sofi_ingress_handle( self, cq_entry );
-
-                /* Post (if possible) ingress buffers */
-                ret = nn_sofi_ingress_post( self );
-                if (ret == -EAGAIN) {
-
-                    /* Set postlater flag if not possible to post buffer */
-                    _ofi_debug("OFI[S]: Back-pressure from ingress\n");
-                    self->ingress_flags |= NN_SOFI_IN_FLAG_POSTLATER;
-
-                }
                 return;
 
             case NN_OFIW_ERROR:
@@ -1894,7 +1627,7 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
             case NN_OFIW_COMPLETED:
 
                 /* Get CQ Event */
-                cq_entry = (struct fi_cq_msg_entry *) srcptr;
+                cq_entry = (struct fi_cq_entry *) srcptr;
 
                 /* Data from the output buffer are sent */
                 nn_sofi_egress_handle( self, cq_entry );

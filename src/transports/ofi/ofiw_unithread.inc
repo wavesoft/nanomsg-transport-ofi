@@ -249,7 +249,7 @@ static void nn_ofiw_polling_thread( void * data )
                             nn_fsm_feed (worker->owner, 
                                 item->src,
                                 NN_OFIW_COMPLETED,
-                                &((struct fi_cq_msg_entry *)item->data)[i]
+                                &((struct fi_cq_entry *)item->data)[i]
                             );
                         }
                         nn_ctx_leave (worker->owner->ctx);
@@ -585,7 +585,7 @@ int nn_ofiw_add_cq( struct nn_ofiw * self, struct fid_cq * cq, int cq_count,
     item->src = src;
     item->fd = cq;
     item->fd_type = NN_OFIW_ITEM_CQ;
-    item->data = nn_alloc( sizeof(struct fi_cq_msg_entry) * cq_count, 
+    item->data = nn_alloc( sizeof(struct fi_cq_entry) * cq_count, 
                             "ofiw item data");
     item->data_size = cq_count;
 

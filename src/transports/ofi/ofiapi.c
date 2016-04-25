@@ -642,7 +642,7 @@ int ofi_active_endpoint_open( struct ofi_domain* domain, struct nn_ofiw* wrk,
     struct fi_cq_attr cq_attr = {
         .size = aep->fi->tx_attr->size,
         .flags = 0,
-        .format = FI_CQ_FORMAT_MSG,
+        .format = FI_CQ_FORMAT_CONTEXT,
         .wait_cond = FI_CQ_COND_NONE,
         .wait_obj = FI_WAIT_UNSPEC,
         .wait_set = nn_ofiw_waitset( wrk ),

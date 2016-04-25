@@ -33,6 +33,7 @@
 #include "../../utils/thread.h"
 #include "../../utils/efd.h"
 #include "../../utils/mutex.h"
+#include "../../utils/queue.h"
 
 /* Outgoing FSM events towards FSM IN/OUT */
 #define NN_SOFI_EVENT_RX_EVENT          1201
@@ -70,11 +71,17 @@ struct nn_sofi_handshake
 /* Structure that keeps track of ingress messages */
 struct nn_sofi_in_buf {
 
+    /* The state of this buffer */
+    uint8_t state;
+
     /* Body chunk */
     void * chunk;
 
     /* Underlying message */
     struct nn_msg msg;
+
+    /* This structure acts as a nanomsg queue item  */
+    struct nn_queue_item item;
 
     /* This structure acts as a libfabric context */
     struct fi_context context;
@@ -82,6 +89,9 @@ struct nn_sofi_in_buf {
     /* Linked list pointers */
     struct nn_sofi_in_buf * next;
     struct nn_sofi_in_buf * prev;
+
+    /* Base address to aux data */
+    uint8_t aux[0];
 
 };
 
@@ -154,11 +164,9 @@ struct nn_sofi {
 
     /* Ingress properties */
     struct nn_sofi_in_buf       *ingress_buffers;
-    struct nn_sofi_in_buf       *ingress_buf_free;
-    struct nn_sofi_in_buf       *ingress_buf_busy;
-    struct nn_sofi_in_buf       *ingress_buf_pop_head;
-    struct nn_sofi_in_buf       *ingress_buf_pop_tail;
-    struct nn_mutex             ingress_mutex;
+    struct nn_atomic            ingress_posted;
+    struct nn_queue             ingress_free;
+    struct nn_queue             ingress_busy;
     int                         ingress_max;
     size_t                      ingress_buf_size;
     struct fid_mr               *ingress_buf_mr;

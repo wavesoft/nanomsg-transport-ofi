@@ -664,7 +664,7 @@ int nn_ofiw_remove( struct nn_ofiw * self, void * fd )
             nn_ofiw_pool_term_item( item );
 
             /* Unlock */
-            nn_mutex_lock( &self->parent->list_mutex );
+            nn_mutex_unlock( &self->parent->list_mutex );
             
             /* Break */
             return 0;
@@ -673,5 +673,6 @@ int nn_ofiw_remove( struct nn_ofiw * self, void * fd )
     }
 
     /* Not found */
+    nn_mutex_unlock( &self->parent->list_mutex );
     return -ENOENT;
 }

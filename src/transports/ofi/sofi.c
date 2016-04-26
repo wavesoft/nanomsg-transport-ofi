@@ -597,15 +597,15 @@ static int nn_sofi_ingress_post( struct nn_sofi * self )
     struct nn_sofi_in_buf * buf;
     struct nn_queue_item * item;
 
-    /* If we have no free items return -EAGAIN */
-    if (nn_slow( nn_queue_empty( &self->ingress_free )) ) {
-        _ofi_debug("OFI[S]: No free buffers to post\n");
-        return -EAGAIN;
-    }
-
     /* Pop free item */
     item = nn_queue_pop( &self->ingress_free );
     buf = nn_cont( item, struct nn_sofi_in_buf, item );
+
+    /* Check if empty */
+    if (nn_slow( buf == NULL )) {
+        _ofi_debug("OFI[S]: No free buffers to post\n");
+        return -EAGAIN;
+    }
 
     /* Post the input buffer */
     ret = nn_sofi_ingress_post_buffer( self, buf );
@@ -702,9 +702,9 @@ static void nn_sofi_ingress_handle( struct nn_sofi * self,
 
     /* Get the pointer to the ingress buffer */
     buf = nn_cont( cq_entry->op_context, struct nn_sofi_in_buf, context );
+    _ofi_debug("OFI[S]: EQ Event len=%zu, buf=%p\n", cq_entry->len, buf);
 
-    /* We have a limit of <4GB on the message, so we reserved the max for 
-       keepalive packets */
+    /* Test for keepalive packet */
     if (cq_entry->len == NN_SOFI_KEEPALIVE_PACKET_LEN) {
 
         /* Test for keepalive packet */
@@ -749,14 +749,13 @@ static int nn_sofi_ingress_fetch( struct nn_sofi * self,
     struct nn_queue_item * item;
     struct nn_sofi_in_buf * buf;
 
-    /* This should not be called on empty queue */
-    if (nn_slow( nn_queue_empty(&self->ingress_busy) )) {
-        return -ETIMEDOUT;
-    }
-
     /* Pop busy item */
     item = nn_queue_pop( &self->ingress_busy );
     buf = nn_cont( item, struct nn_sofi_in_buf, item );
+    if (nn_slow( item == NULL )) {
+        _ofi_debug("OFI[S]: Trying to fetch from empty queue\n")
+        return -ETIMEDOUT;
+    }
 
     /* Move message to output */
     _ofi_debug("OFI[S]: Passing to nanomsg ingress buffer=%p\n", buf);
@@ -1520,7 +1519,7 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
                 /* Post first ingress buffer */
                 ret = nn_sofi_ingress_post_all( self );
                 if (ret) {
-                    FT_PRINTERR("nn_sofi_ingress_post_all", ret);
+                    FT_PRINTERR("nn_sofi_ingress_post", ret);
                     nn_sofi_critical_error( self, ret );
                     return;
                 }

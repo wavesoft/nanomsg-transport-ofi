@@ -40,8 +40,8 @@
  * Macro to test if a value changes across repeated checks
  * in order to make atomic updates safe. 
  *
- * Effectively we are trying to delay enough for a read, increment
- * and write operation sequence to complete.
+ * Effectively we are trying to delay enough for a squence of
+ * read, increment and write operation to complete.
  */
 #define ATOMIC_SAFE(x) ( x || x || x || x || x || x || x || x )
 

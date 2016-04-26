@@ -5,6 +5,8 @@ Nanomsg transport for interfacing with the OpenFabrics Interfaces (OFI) Library 
 ## Known Problems
 
  1. The current version handles only IPV4 address families.
+ 2. **HACK:** We are faking Rx requests to nanomsg, making it always think there is a message available, in order to block-wait for Rx CQs while in the `nn_recvmsg` call.
+ 3. Due to previous hack, the keepalive mechanism is not functional.
 
 ## How to use
 

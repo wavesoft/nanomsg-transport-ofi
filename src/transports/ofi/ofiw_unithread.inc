@@ -644,6 +644,10 @@ int nn_ofiw_remove( struct nn_ofiw * self, void * fd )
     struct nn_ofiw_item *item;
     struct nn_list_item *it;
 
+    /* Acquire lock & notify thread to use it */
+    nn_mutex_lock( &self->parent->list_mutex );
+    self->parent->list_mutex_id++;
+
     /* Lookup specified item */
     for (it = nn_list_begin (&pool->items);
           it != nn_list_end (&pool->items);
@@ -658,6 +662,9 @@ int nn_ofiw_remove( struct nn_ofiw * self, void * fd )
             /* Delete and clean-up */
             nn_ofiw_pool_del_item( pool, item );
             nn_ofiw_pool_term_item( item );
+
+            /* Unlock */
+            nn_mutex_lock( &self->parent->list_mutex );
             
             /* Break */
             return 0;

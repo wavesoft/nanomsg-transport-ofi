@@ -708,7 +708,7 @@ static void nn_sofi_ingress_handle( struct nn_sofi * self,
 
     /* Get the pointer to the ingress buffer */
     buf = nn_cont( cq_entry->op_context, struct nn_sofi_in_buf, context );
-    _ofi_debug("OFI[S]: EQ Event len=%zu, buf=%p\n", cq_entry->len, buf);
+    _ofi_debug("OFI[S]: CQ Event len=%zu, buf=%p\n", cq_entry->len, buf);
 
     /* Test for keepalive packet */
     if (cq_entry->len == NN_SOFI_KEEPALIVE_PACKET_LEN) {
@@ -764,7 +764,8 @@ static int nn_sofi_ingress_fetch( struct nn_sofi * self,
     }
 
     /* Move message to output */
-    _ofi_debug("OFI[S]: Passing to nanomsg ingress buffer=%p\n", buf);
+    _ofi_debug("OFI[S]: Passing to nanomsg ingress buffer=%p"
+        " (chunk=%p)\n", buf, buf->chunk);
     nn_msg_mv( msg, &buf->msg );
 
     /* We are eager to received another one if available */

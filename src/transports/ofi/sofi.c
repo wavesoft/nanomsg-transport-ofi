@@ -304,9 +304,8 @@ static int nn_sofi_egress_post_buffers( struct nn_sofi * self,
     struct nn_msg * outmsg )
 {   
     int ret;
-    uint8_t hdr[4];
     struct fi_msg msg;
-    struct iovec iov [3];
+    struct iovec iov [2];
     struct nn_sofi_out_ctx * ctx;
 
     /* Get a free transit context */
@@ -319,22 +318,30 @@ static int nn_sofi_egress_post_buffers( struct nn_sofi * self,
     /* Move message in context */
     nn_msg_mv(&ctx->msg, outmsg);
 
-    /* Prepare header.
-       NOTE: You will notice that we are assigning data to be sent
-             that are allocated on heap. That's ok, because they
-             will be copied to a slab buffer by ofi_mr_describe */
-    nn_putl( &hdr[0], nn_chunkref_size (&ctx->msg.sphdr) + 
-                      nn_chunkref_size (&ctx->msg.body) );
-    iov[0].iov_base = &hdr[0];
-    iov[0].iov_len = 4;
-
     /* Get SP Header length */
-    iov[1].iov_len = nn_chunkref_size (&ctx->msg.sphdr);
+    iov[0].iov_len = nn_chunkref_size (&ctx->msg.sphdr);
 
     /* If SP Header is empty, use only 2 iov */
-    if (nn_fast( iov[1].iov_len == 0 )) {
+    if (nn_fast( iov[0].iov_len == 0 )) {
 
         /* Prepare Body IOVs */
+        iov[0].iov_base = nn_chunkref_data (&ctx->msg.body);
+        iov[0].iov_len = nn_chunkref_size (&ctx->msg.body);
+
+        /* Prepare message */
+        msg.msg_iov = iov;
+        msg.iov_count = 1;
+
+        /* TODO: Register a custom free function in the
+                 body chunk and call ofi_mr_invalidate when
+                 the user frees the chunk. */
+
+        _ofi_debug("OFI[S]: Sending BODY[%zu]\n", iov[0].iov_len);
+
+    } else {
+
+        /* Prepare SP-Header + Body IOVs */
+        iov[0].iov_base = nn_chunkref_data (&ctx->msg.sphdr);
         iov[1].iov_base = nn_chunkref_data (&ctx->msg.body);
         iov[1].iov_len = nn_chunkref_size (&ctx->msg.body);
 
@@ -344,29 +351,11 @@ static int nn_sofi_egress_post_buffers( struct nn_sofi * self,
 
         /* TODO: Register a custom free function in the
                  body chunk and call ofi_mr_invalidate when
-                 the user frees the chunk. */
-
-        _ofi_debug("OFI[S]: Sending HDR[%zu]+BODY[%zu]\n", 
-            iov[0].iov_len, iov[1].iov_len);
-
-    } else {
-
-        /* Prepare SP-Header + Body IOVs */
-        iov[1].iov_base = nn_chunkref_data (&ctx->msg.sphdr);
-        iov[2].iov_base = nn_chunkref_data (&ctx->msg.body);
-        iov[2].iov_len = nn_chunkref_size (&ctx->msg.body);
-
-        /* Prepare message */
-        msg.msg_iov = iov;
-        msg.iov_count = 3;
-
-        /* TODO: Register a custom free function in the
-                 body chunk and call ofi_mr_invalidate when
                  the user frees the chunk. SPHeader is 
                  small enough to be copied in an MR slab */
 
-        _ofi_debug("OFI[S]: Sending HDR[%zu]+SPHDR[%zu]+BODY[%zu]\n", 
-            iov[0].iov_len, iov[1].iov_len, iov[2].iov_len);
+        _ofi_debug("OFI[S]: Sending SPHDR[%zu]+BODY[%zu]\n", 
+            iov[0].iov_len, iov[1].iov_len);
 
     }
 
@@ -415,7 +404,7 @@ static void nn_sofi_egress_handle_error( struct nn_sofi * self,
  * Acknowledge the fact that the ougoing data are sent
  */
 static void nn_sofi_egress_handle( struct nn_sofi * self,
-    struct fi_cq_entry * cq_entry )
+    struct fi_cq_msg_entry * cq_entry )
 {
     int c;
 
@@ -567,8 +556,8 @@ static int nn_sofi_ingress_post_buffer( struct nn_sofi * self,
 
     /* Prepare message from active ingress buffer */
     memset( &msg, 0, sizeof(msg) );
-    iov[0].iov_base = ((uint8_t*)nn_chunk_deref( buf->chunk )) - sizeof(uint32_t);
-    iov[0].iov_len = self->ingress_buf_size + sizeof(uint32_t);
+    iov[0].iov_base = nn_chunk_deref( buf->chunk );
+    iov[0].iov_len = self->ingress_buf_size;
     desc[0] = fi_mr_desc( self->ingress_buf_mr );
     msg.desc = &desc[0];
     msg.msg_iov = &iov[0];
@@ -704,10 +693,9 @@ static void nn_sofi_ingress_handle_error( struct nn_sofi * self,
  * occurs, this function will return the appropriate error code.
  */
 static void nn_sofi_ingress_handle( struct nn_sofi * self, 
-    struct fi_cq_entry * cq_entry )
+    struct fi_cq_msg_entry * cq_entry )
 {
     struct nn_sofi_in_buf * buf;
-    uint32_t len;
 
     /* Reset keepalive timer */
     self->ticks_in = 0;
@@ -715,34 +703,34 @@ static void nn_sofi_ingress_handle( struct nn_sofi * self,
     /* Get the pointer to the ingress buffer */
     buf = nn_cont( cq_entry->op_context, struct nn_sofi_in_buf, context );
 
-    /* Get message length */
-    len = nn_getl( (uint8_t*) (((uint32_t*) buf->chunk) - 1) );
-
     /* We have a limit of <4GB on the message, so we reserved the max for 
        keepalive packets */
-    if (len == 0xFFFFFFFF) {
+    if (cq_entry->len == NN_SOFI_KEEPALIVE_PACKET_LEN) {
 
-        /* Mark buffer as free */
-        _ofi_debug("OFI[S]: Received KEEPALIVE\n");
-        nn_queue_push( &self->ingress_free, &buf->item );
+        /* Test for keepalive packet */
+        if (nn_fast( memcmp( buf->chunk, NN_SOFI_KEEPALIVE_PACKET, 
+                        NN_SOFI_KEEPALIVE_PACKET_LEN ) == 0 )) {
 
-        /* Eager post */
-        nn_sofi_ingress_post_eager(self);
+            /* Mark buffer as free */
+            _ofi_debug("OFI[S]: Received KEEPALIVE\n");
+            nn_queue_push( &self->ingress_free, &buf->item );
 
-        /* No need to continue */
-        return;
+            /* Eager post */
+            nn_sofi_ingress_post_eager(self);
+
+            /* No need to continue */
+            return;
+
+        }
 
     }
 
     /* Eager post */
     nn_sofi_ingress_post_eager(self);
 
-    /* Recover damaged chunk tag */
-    nn_putl( (uint8_t*) (((uint32_t*) buf->chunk) - 1), 0xdeadcafe );
-
     /* Prepare message from the active staged buffer */
-    _ofi_debug("OFI[S]: Received BODY[%u]\n", len);
-    nn_chunk_reset( buf->chunk, len );
+    _ofi_debug("OFI[S]: Received BODY[%zu]\n", cq_entry->len);
+    nn_chunk_reset( buf->chunk, cq_entry->len );
     nn_msg_init_chunk( &buf->msg, buf->chunk );
 
     /* Stage for pickup  */
@@ -762,7 +750,9 @@ static int nn_sofi_ingress_fetch( struct nn_sofi * self,
     struct nn_sofi_in_buf * buf;
 
     /* This should not be called on empty queue */
-    nn_assert(nn_slow( !nn_queue_empty(&self->ingress_busy) ));
+    if (nn_slow( nn_queue_empty(&self->ingress_busy) )) {
+        return -ETIMEDOUT;
+    }
 
     /* Pop busy item */
     item = nn_queue_pop( &self->ingress_busy );
@@ -788,7 +778,7 @@ static void nn_sofi_ingress_freefn( void * chunk, void * user )
 {
     struct nn_sofi *self = (struct nn_sofi *) user;
     struct nn_sofi_in_buf *buf = (struct nn_sofi_in_buf *)
-        ( (uint8_t*)chunk + nn_chunk_hdrsize() - NN_SOFI_PAGE_SIZE - sizeof(uint32_t) );
+        ( (uint8_t*)chunk + nn_chunk_hdrsize() - NN_SOFI_PAGE_SIZE );
 
     _ofi_debug("OFI[S]: User released buf=%p\n", buf);
 
@@ -968,11 +958,6 @@ int nn_sofi_init ( struct nn_sofi *self, struct ofi_domain *domain, int offset,
     /* Wrap buffer size to page-size multiplicants */
     self->ingress_buf_size = (1 + ((rx_msg_size - 1) / NN_SOFI_PAGE_SIZE)) 
                                 * NN_SOFI_PAGE_SIZE;
-
-    /* Make sure it fits the prefix header */
-    if ((self->ingress_buf_size - rx_msg_size) < sizeof(uint32_t) ) {
-        self->ingress_buf_size += NN_SOFI_PAGE_SIZE;
-    }
     _ofi_debug("OFI[S]:          Effective-Recv-Size: %zu b\n", 
         self->ingress_buf_size);
 
@@ -1011,7 +996,7 @@ int nn_sofi_init ( struct nn_sofi *self, struct ofi_domain *domain, int offset,
         /* Initialize chunk in such a way that it's page-aligned to
            the tag. (The tag will be replaced when receiving data) */
         ret = nn_chunk_init( (uint8_t*)ibuf + NN_SOFI_PAGE_SIZE - 
-                                nn_chunk_hdrsize() + sizeof(uint32_t),
+                                nn_chunk_hdrsize(),
                             self->ingress_buf_size + nn_chunk_hdrsize(),
                             nn_sofi_ingress_freefn, self,
                             &ibuf->chunk );
@@ -1256,7 +1241,7 @@ static void nn_sofi_shutdown (struct nn_fsm *fsm, int src, int type,
     void *srcptr)
 {
     struct nn_sofi *self;
-    struct fi_cq_entry * cq_entry;
+    struct fi_cq_msg_entry * cq_entry;
     struct fi_cq_err_entry * cq_error;
 
     /* Get pointer to sofi structure */
@@ -1292,7 +1277,7 @@ static void nn_sofi_shutdown (struct nn_fsm *fsm, int src, int type,
         _ofi_debug("OFI[S]: Draining egress CQ event\n");
         if (type == NN_OFIW_COMPLETED) {
             /* Handle completed event */
-            cq_entry = (struct fi_cq_entry *) srcptr;
+            cq_entry = (struct fi_cq_msg_entry *) srcptr;
             nn_sofi_egress_handle( self, cq_entry );
         } else if (type == NN_OFIW_ERROR) {
             /* Handle error event */
@@ -1458,7 +1443,7 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
     int ret;
     struct nn_sofi *self;
     struct fi_eq_cm_entry * cq_cm_entry;
-    struct fi_cq_entry * cq_entry;
+    struct fi_cq_msg_entry * cq_entry;
     struct fi_cq_err_entry * cq_error;
 
     /* Get pointer to sofi structure */
@@ -1533,7 +1518,7 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
                     NN_SOFI_TIMEOUT_KEEPALIVE_TICK );
 
                 /* Post first ingress buffer */
-                ret = nn_sofi_ingress_post( self );
+                ret = nn_sofi_ingress_post_all( self );
                 if (ret) {
                     FT_PRINTERR("nn_sofi_ingress_post_all", ret);
                     nn_sofi_critical_error( self, ret );
@@ -1614,7 +1599,7 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
             case NN_OFIW_COMPLETED:
 
                 /* Get CQ Event */
-                cq_entry = (struct fi_cq_entry *) srcptr;
+                cq_entry = (struct fi_cq_msg_entry *) srcptr;
 
                 /* Process incoming data */
                 nn_sofi_ingress_handle( self, cq_entry );
@@ -1643,7 +1628,7 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
             case NN_OFIW_COMPLETED:
 
                 /* Get CQ Event */
-                cq_entry = (struct fi_cq_entry *) srcptr;
+                cq_entry = (struct fi_cq_msg_entry *) srcptr;
 
                 /* Data from the output buffer are sent */
                 nn_sofi_egress_handle( self, cq_entry );

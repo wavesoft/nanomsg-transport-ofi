@@ -967,7 +967,7 @@ int nn_sofi_init ( struct nn_sofi *self, struct ofi_domain *domain, int offset,
                                 * NN_SOFI_PAGE_SIZE;
 
     /* Make sure it fits the prefix header */
-    if ((self->ingress_buf_size - self->rx_msg_size) < sizeof(uint32_t) ) {
+    if ((self->ingress_buf_size - rx_msg_size) < sizeof(uint32_t) ) {
         self->ingress_buf_size += NN_SOFI_PAGE_SIZE;
     }
     _ofi_debug("OFI[S]:          Effective-Recv-Size: %i b\n", 

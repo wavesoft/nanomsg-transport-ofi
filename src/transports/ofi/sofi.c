@@ -607,16 +607,21 @@ static int nn_sofi_ingress_post( struct nn_sofi * self )
     int ret;
     struct nn_sofi_in_buf * buf;
     struct nn_queue_item * item;
+    nn_mutex_lock( &self->ingress_free_mutex );
 
     /* If we have no free items return -EAGAIN */
     if (nn_slow( nn_queue_empty( &self->ingress_free )) ) {
         _ofi_debug("OFI[S]: No free buffers to post\n");
+        nn_mutex_unlock( &self->ingress_free_mutex );
         return -EAGAIN;
     }
 
     /* Pop free item */
     item = nn_queue_pop( &self->ingress_free );
     buf = nn_cont( item, struct nn_sofi_in_buf, item );
+
+    /* Unlock mutex */
+    nn_mutex_unlock( &self->ingress_free_mutex );
 
     /* Post the input buffer */
     ret = nn_sofi_ingress_post_buffer( self, buf );
@@ -724,9 +729,9 @@ static void nn_sofi_ingress_handle( struct nn_sofi * self,
 
         /* Mark buffer as free */
         _ofi_debug("OFI[S]: Received KEEPALIVE\n");
+        nn_mutex_lock( &self->ingress_free_mutex );
         nn_queue_push( &self->ingress_free, &buf->item );
-
-        /* Eager post */
+        nn_mutex_unlock( &self->ingress_free_mutex );
         nn_sofi_ingress_post_eager(self);
 
         /* No need to continue */
@@ -743,7 +748,9 @@ static void nn_sofi_ingress_handle( struct nn_sofi * self,
     nn_msg_init_chunk( &buf->msg, buf->chunk );
 
     /* Stage for pickup  */
+    nn_mutex_lock( &self->ingress_busy_mutex );
     nn_queue_push( &self->ingress_busy, &buf->item );
+    nn_mutex_unlock( &self->ingress_busy_mutex );
     nn_sofi_ingress_busy_eager( self );
 
 }
@@ -757,6 +764,7 @@ static int nn_sofi_ingress_fetch( struct nn_sofi * self,
     int ret;
     struct nn_queue_item * item;
     struct nn_sofi_in_buf * buf;
+    nn_mutex_lock( &self->ingress_busy_mutex );
 
     /* This should not be called on empty queue */
     nn_assert(nn_slow( !nn_queue_empty(&self->ingress_busy) ));
@@ -764,6 +772,9 @@ static int nn_sofi_ingress_fetch( struct nn_sofi * self,
     /* Pop busy item */
     item = nn_queue_pop( &self->ingress_busy );
     buf = nn_cont( item, struct nn_sofi_in_buf, item );
+
+    /* Unlock mutex */
+    nn_mutex_unlock( &self->ingress_busy_mutex );
 
     /* Move message to output */
     _ofi_debug("OFI[S]: Passing to nanomsg ingress buffer=%p\n", buf);
@@ -794,7 +805,9 @@ static void nn_sofi_ingress_freefn( void * chunk, void * user )
                    nn_sofi_ingress_freefn, self, &buf->chunk );
 
     /* Mark buffer as free */
+    nn_mutex_lock( &self->ingress_free_mutex );
     nn_queue_push( &self->ingress_free, &buf->item );
+    nn_mutex_unlock( &self->ingress_free_mutex );
     nn_sofi_ingress_post_eager( self );
 
 }
@@ -865,6 +878,8 @@ int nn_sofi_init ( struct nn_sofi *self, struct ofi_domain *domain, int offset,
     /* Initialize queues */
     nn_queue_init( &self->ingress_free );
     nn_queue_init( &self->ingress_busy );
+    nn_mutex_init( &self->ingress_free_mutex );
+    nn_mutex_init( &self->ingress_busy_mutex );
 
     /* ----------------------------------- */
     /*  OFI Sub-Component Initialization   */
@@ -970,7 +985,7 @@ int nn_sofi_init ( struct nn_sofi *self, struct ofi_domain *domain, int offset,
     if ((self->ingress_buf_size - rx_msg_size) < sizeof(uint32_t) ) {
         self->ingress_buf_size += NN_SOFI_PAGE_SIZE;
     }
-    _ofi_debug("OFI[S]:          Effective-Recv-Size: %i b\n", 
+    _ofi_debug("OFI[S]:          Effective-Recv-Size: %zu b\n", 
         self->ingress_buf_size);
 
     /* Claculate the size of the buffer */
@@ -1176,6 +1191,8 @@ void nn_sofi_term (struct nn_sofi *self)
     /* Terminate queues */
     nn_queue_term( &self->ingress_free );
     nn_queue_term( &self->ingress_busy );
+    nn_mutex_term( &self->ingress_free_mutex );
+    nn_mutex_term( &self->ingress_busy_mutex );
 
     /* ----------------------------------- */
     /*  NanoMSG Core Termination           */

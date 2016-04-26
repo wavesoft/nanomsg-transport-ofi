@@ -671,13 +671,13 @@ int ofi_active_endpoint_open( struct ofi_domain* domain, struct nn_ofiw* wrk,
     }
 
     /* Add CQ to the polling worker */
-    ret = nn_ofiw_add_cq( wrk, aep->cq_tx, cq_attr.size, src | OFI_SRC_CQ_TX);
-    if (ret) {
-        FT_PRINTERR("nn_ofiw_add_cq", ret);
-        nn_free(aep);
-        *a = NULL;
-        return ret;
-    }
+    // ret = nn_ofiw_add_cq( wrk, aep->cq_tx, cq_attr.size, src | OFI_SRC_CQ_TX);
+    // if (ret) {
+    //     FT_PRINTERR("nn_ofiw_add_cq", ret);
+    //     nn_free(aep);
+    //     *a = NULL;
+    //     return ret;
+    // }
 
     /* ###[ RX COMPLETION QUEUE ]############################################ */
 
@@ -703,13 +703,13 @@ int ofi_active_endpoint_open( struct ofi_domain* domain, struct nn_ofiw* wrk,
     }
 
     /* Add CQ to the polling worker */
-    ret = nn_ofiw_add_cq( wrk, aep->cq_rx, cq_attr.size, src | OFI_SRC_CQ_RX);
-    if (ret) {
-        FT_PRINTERR("nn_ofiw_add_cq", ret);
-        nn_free(aep);
-        *a = NULL;
-        return ret;
-    }
+    // ret = nn_ofiw_add_cq( wrk, aep->cq_rx, cq_attr.size, src | OFI_SRC_CQ_RX);
+    // if (ret) {
+    //     FT_PRINTERR("nn_ofiw_add_cq", ret);
+    //     nn_free(aep);
+    //     *a = NULL;
+    //     return ret;
+    // }
 
     /* ###[ FINALIZATION ]################################################### */
 

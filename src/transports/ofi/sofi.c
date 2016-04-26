@@ -615,6 +615,10 @@ static int nn_sofi_ingress_post( struct nn_sofi * self )
         return ret;
     }
 
+    /* Make nanomsg think that there is a message available */
+    self->ingress_state = NN_SOFI_IN_STATE_ACTIVE;
+    nn_pipebase_received( &self->pipebase );
+
     /* Success */
     return 0;
 }
@@ -1222,7 +1226,25 @@ static int nn_sofi_send (struct nn_pipebase *pb, struct nn_msg *msg)
     self->ticks_out = 0;
 
     /* Push a message to the egress queue */
-    return nn_sofi_egress_stage( self, msg );
+    ret = nn_sofi_egress_stage( self, msg );
+    if (ret) {
+        _ofi_debug("OFI[S]: Error while staging message for egress!\n");
+        return ret;
+    }
+
+    /* Blocking wait for CQ event */
+    struct fi_cq_msg_entry cq_entry;
+    ret = fi_cq_sread( self->ep->cq_tx, &cq_entry, 1, NULL, -1 );
+    if (nn_slow( ret != 1 )) {
+        _ofi_debug("OFI[S]: Error while waiting for Tx CQ!\n");
+        return -ret;
+    }
+
+    /* Handle CQ */
+    nn_sofi_egress_handle( self, &cq_entry );
+
+    /* OK! */
+    return 0;
 
 }
 
@@ -1235,6 +1257,17 @@ static int nn_sofi_recv (struct nn_pipebase *pb, struct nn_msg *msg)
     int ret;
     struct nn_sofi *self;
     self = nn_cont (pb, struct nn_sofi, pipebase);
+
+    /* Blocking wait for CQ event */
+    struct fi_cq_msg_entry cq_entry;
+    ret = fi_cq_sread( self->ep->cq_rx, &cq_entry, 1, NULL, -1 );
+    if (nn_slow( ret != 1 )) {
+        _ofi_debug("OFI[S]: Error while waiting for Rx CQ!\n");
+        return ret;
+    }
+
+    /* Handle ingress message */
+    nn_sofi_ingress_handle( self, &cq_entry );
 
     /* Fetch a message from the ingress queue */
     _ofi_debug("OFI[S]: NanoMsg RECV event\n");

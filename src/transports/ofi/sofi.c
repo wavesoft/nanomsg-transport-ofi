@@ -327,7 +327,7 @@ static int nn_sofi_egress_post_buffers( struct nn_sofi * self,
              will be copied to a slab buffer by ofi_mr_describe */
     nn_putl( hdr, nn_chunkref_size (&ctx->msg.sphdr) + 
                   nn_chunkref_size (&ctx->msg.body) );
-    iov[0].iov_base = &hdr;
+    iov[0].iov_base = hdr;
     iov[0].iov_len = 4;
 
     /* Get SP Header length */
@@ -348,7 +348,8 @@ static int nn_sofi_egress_post_buffers( struct nn_sofi * self,
                  body chunk and call ofi_mr_invalidate when
                  the user frees the chunk. */
 
-        _ofi_debug("OFI[S]: Sending BODY[%zu]\n", iov[1].iov_len);
+        _ofi_debug("OFI[S]: Sending HDR[%zu]+BODY[%zu]\n", 
+            iov[0].iov_len, iov[1].iov_len);
 
     } else {
 
@@ -366,8 +367,8 @@ static int nn_sofi_egress_post_buffers( struct nn_sofi * self,
                  the user frees the chunk. SPHeader is 
                  small enough to be copied in an MR slab */
 
-        _ofi_debug("OFI[S]: Sending SPHDR[%zu]+BODY[%zu]\n", 
-            iov[1].iov_len, iov[2].iov_len);
+        _ofi_debug("OFI[S]: Sending HDR[%zu]+SPHDR[%zu]+BODY[%zu]\n", 
+            iov[0].iov_len, iov[1].iov_len, iov[2].iov_len);
 
     }
 
@@ -783,7 +784,7 @@ static void nn_sofi_ingress_freefn( void * chunk, void * user )
 {
     struct nn_sofi *self = (struct nn_sofi *) user;
     struct nn_sofi_in_buf *buf = (struct nn_sofi_in_buf *)
-        ( (uint8_t*)chunk + nn_chunk_hdrsize() - NN_SOFI_PAGE_SIZE + sizeof(uint32_t) );
+        ( (uint8_t*)chunk + nn_chunk_hdrsize() - NN_SOFI_PAGE_SIZE - sizeof(uint32_t) );
 
     _ofi_debug("OFI[S]: User released buf=%p\n", buf);
 
@@ -998,7 +999,7 @@ int nn_sofi_init ( struct nn_sofi *self, struct ofi_domain *domain, int offset,
         /* Initialize chunk in such a way that it's page-aligned to
            the tag. (The tag will be replaced when receiving data) */
         ret = nn_chunk_init( (uint8_t*)ibuf + NN_SOFI_PAGE_SIZE - 
-                                nn_chunk_hdrsize() - sizeof(uint32_t),
+                                nn_chunk_hdrsize() + sizeof(uint32_t),
                             self->ingress_buf_size + nn_chunk_hdrsize(),
                             nn_sofi_ingress_freefn, self,
                             &ibuf->chunk );

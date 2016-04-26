@@ -519,14 +519,6 @@ struct nn_ofiw * nn_ofiw_pool_getworker( struct nn_ofiw_pool * self,
 /* Stop a worker */
 void nn_ofiw_stop( struct nn_ofiw * self )
 {
-    /* Remove from worker list */
-    nn_list_erase( &self->parent->workers, &self->item );
-    nn_list_item_term( &self->item );
-}
-
-/* Terminate a worker */
-void nn_ofiw_term( struct nn_ofiw * self )
-{
     struct nn_ofiw_pool * pool = self->parent;
     struct nn_ofiw_item *item;
     struct nn_list_item *it;
@@ -563,9 +555,18 @@ void nn_ofiw_term( struct nn_ofiw * self )
 
     /* Release lock */
     nn_mutex_unlock( &self->parent->list_mutex );
+}
+
+/* Terminate a worker */
+void nn_ofiw_term( struct nn_ofiw * self )
+{
+
+    /* Stop worker */
+    nn_ofiw_stop( self );
 
     /* Free worker */
     nn_free( self );
+
 }
 
 /* Return the oppened CQ/EQ wait set */

@@ -51,10 +51,8 @@
 #define NN_SOFI_OUT_STATE_ACTIVE         1
 
 /* FSM IN Flags */
-#define NN_SOFI_IN_FLAG_POSTLATER        0x01
-#define NN_SOFI_IN_FLAG_NNBUSY           0x02
-#define NN_SOFI_IN_FLAG_NNLATER          0x04
-#define NN_SOFI_IN_FLAG_FLUSH            0x08
+#define NN_SOFI_IN_STATE_IDLE            0
+#define NN_SOFI_IN_STATE_ACTIVE          1
 
 /* FSM Handshake State */
 #define NN_SOFI_HS_STATE_LOCAL           0
@@ -681,8 +679,10 @@ static void nn_sofi_ingress_post_eager( struct nn_sofi * self )
 static void nn_sofi_ingress_busy_eager( struct nn_sofi * self )
 {
     /* If there are ingress items, call pipebase_received */
-    if (!nn_queue_empty( &self->ingress_busy )) {
+    if ( !nn_queue_empty( &self->ingress_busy ) && 
+         (self->ingress_state = NN_SOFI_IN_STATE_IDLE) ) {
         _ofi_debug("OFI[S]: There are pending busy buffers, notifying pipe\n");
+        self->ingress_state = NN_SOFI_IN_STATE_ACTIVE;
         nn_pipebase_received( &self->pipebase );
     }
 }
@@ -770,6 +770,7 @@ static int nn_sofi_ingress_fetch( struct nn_sofi * self,
     nn_msg_mv( msg, &buf->msg );
 
     /* We are eager to received another one if available */
+    self->ingress_state = NN_SOFI_IN_STATE_IDLE;
     nn_sofi_ingress_busy_eager( self );
 
     /* Return success */
@@ -959,11 +960,16 @@ int nn_sofi_init ( struct nn_sofi *self, struct ofi_domain *domain, int offset,
 
     /* Initialize atomic counters */
     nn_atomic_init( &self->ingress_posted, 0 );
+    self->ingress_state = NN_SOFI_IN_STATE_IDLE;
 
     /* Wrap buffer size to page-size multiplicants */
     self->ingress_buf_size = (1 + ((rx_msg_size - 1) / NN_SOFI_PAGE_SIZE)) 
                                 * NN_SOFI_PAGE_SIZE;
 
+    /* Make sure it fits the prefix header */
+    if ((self->ingress_buf_size - self->rx_msg_size) < sizeof(uint32_t) ) {
+        self->ingress_buf_size += NN_SOFI_PAGE_SIZE;
+    }
     _ofi_debug("OFI[S]:          Effective-Recv-Size: %i b\n", 
         self->ingress_buf_size);
 
@@ -1524,9 +1530,9 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
                     NN_SOFI_TIMEOUT_KEEPALIVE_TICK );
 
                 /* Post first ingress buffer */
-                ret = nn_sofi_ingress_post( self );
+                ret = nn_sofi_ingress_post_all( self );
                 if (ret) {
-                    FT_PRINTERR("nn_sofi_ingress_post", ret);
+                    FT_PRINTERR("nn_sofi_ingress_post_all", ret);
                     nn_sofi_critical_error( self, ret );
                     return;
                 }

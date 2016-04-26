@@ -170,7 +170,7 @@ struct nn_sofi {
     int                         ingress_max;
     size_t                      ingress_buf_size;
     struct fid_mr               *ingress_buf_mr;
-    uint8_t                     ingress_flags;
+    uint8_t                     ingress_state;
 
     /* Local and remote handshake information */
     struct nn_sofi_handshake    hs_local;

@@ -680,7 +680,7 @@ static void nn_sofi_ingress_busy_eager( struct nn_sofi * self )
 {
     /* If there are ingress items, call pipebase_received */
     if ( !nn_queue_empty( &self->ingress_busy ) && 
-         (self->ingress_state = NN_SOFI_IN_STATE_IDLE) ) {
+         (self->ingress_state == NN_SOFI_IN_STATE_IDLE) ) {
         _ofi_debug("OFI[S]: There are pending busy buffers, notifying pipe\n");
         self->ingress_state = NN_SOFI_IN_STATE_ACTIVE;
         nn_pipebase_received( &self->pipebase );

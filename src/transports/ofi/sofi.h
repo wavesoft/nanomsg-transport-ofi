@@ -83,12 +83,21 @@ struct nn_sofi_in_buf {
     /* This structure acts as a nanomsg queue item  */
     struct nn_queue_item item;
 
+    /* === libfabric === */
+
+    /* The I/O Vectors */
+    struct iovec iov[1];
+
+    /* The desc field for the fi_msg */
+    void * desc[1];
+
+    /* The fi_msg structure */
+    struct fi_msg fi_msg;
+
     /* This structure acts as a libfabric context */
     struct fi_context context;
 
-    /* Linked list pointers */
-    struct nn_sofi_in_buf * next;
-    struct nn_sofi_in_buf * prev;
+    /* === misc == */
 
     /* Base address to aux data */
     uint8_t aux[0];
@@ -107,8 +116,18 @@ struct nn_sofi_out_ctx {
     /* The MRM handle */
     void * mr_handle;
 
+    /* === libfabric === */
+
+    /* The I/O Vectors */
+    struct iovec iov[2];
+
+    /* The fi_msg structure */
+    struct fi_msg fi_msg;
+
     /* This structure acts as a libfabric context */
     struct fi_context context;  
+
+    /* === linked list === */
 
     /* Linked list pointers */
     struct nn_sofi_out_ctx * next;

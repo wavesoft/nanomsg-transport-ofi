@@ -304,8 +304,6 @@ static int nn_sofi_egress_post_buffers( struct nn_sofi * self,
     struct nn_msg * outmsg )
 {   
     int ret;
-    struct fi_msg msg;
-    struct iovec iov [2];
     struct nn_sofi_out_ctx * ctx;
 
     /* Get a free transit context */
@@ -314,6 +312,9 @@ static int nn_sofi_egress_post_buffers( struct nn_sofi * self,
         FT_PRINTERR("nn_sofi_egress_get_context", ret);
         return ret;
     }
+
+    struct fi_msg * msg = &ctx->fi_msg;
+    struct iovec * iov = &ctx->iov;
 
     /* Move message in context */
     nn_msg_mv(&ctx->msg, outmsg);
@@ -329,8 +330,8 @@ static int nn_sofi_egress_post_buffers( struct nn_sofi * self,
         iov[0].iov_len = nn_chunkref_size (&ctx->msg.body);
 
         /* Prepare message */
-        msg.msg_iov = iov;
-        msg.iov_count = 1;
+        msg->msg_iov = iov;
+        msg->iov_count = 1;
 
         /* TODO: Register a custom free function in the
                  body chunk and call ofi_mr_invalidate when
@@ -346,8 +347,8 @@ static int nn_sofi_egress_post_buffers( struct nn_sofi * self,
         iov[1].iov_len = nn_chunkref_size (&ctx->msg.body);
 
         /* Prepare message */
-        msg.msg_iov = iov;
-        msg.iov_count = 2;
+        msg->msg_iov = iov;
+        msg->iov_count = 2;
 
         /* TODO: Register a custom free function in the
                  body chunk and call ofi_mr_invalidate when
@@ -360,10 +361,10 @@ static int nn_sofi_egress_post_buffers( struct nn_sofi * self,
     }
 
     /* Keep msg context */
-    msg.context = &ctx->context;
+    msg->context = &ctx->context;
 
     /* Populate MR descriptions through MRM */
-    ret = ofi_mr_describe( &self->mrm_egress, &msg, &ctx->mr_handle );
+    ret = ofi_mr_describe( &self->mrm_egress, msg, &ctx->mr_handle );
     if (ret) {
         FT_PRINTERR("ofi_mr_describe", ret);
         nn_sofi_egress_free_context( self, ctx );
@@ -371,7 +372,7 @@ static int nn_sofi_egress_post_buffers( struct nn_sofi * self,
     }
 
     /* Send Data and generate CQ upon completed transmission */
-    ret = ofi_sendmsg( self->ep, &msg, FI_COMPLETION );
+    ret = ofi_sendmsg( self->ep, msg, FI_COMPLETION );
     if (ret) {
         FT_PRINTERR("ofi_sendmsg", ret);
         nn_sofi_egress_free_context( self, ctx );
@@ -550,19 +551,19 @@ static int nn_sofi_ingress_post_buffer( struct nn_sofi * self,
     struct nn_sofi_in_buf * buf )
 {
     int ret;
-    void * desc[0];
-    struct iovec iov[1];
-    struct fi_msg msg;
+    void ** desc = (void**)&buf->desc;
+    struct iovec * iov = buf->iov;
+    struct fi_msg * msg = &buf->fi_msg;
 
     /* Prepare message from active ingress buffer */
-    memset( &msg, 0, sizeof(msg) );
+    memset( msg, 0, sizeof(*msg) );
     iov[0].iov_base = nn_chunk_deref( buf->chunk );
     iov[0].iov_len = self->ingress_buf_size;
     desc[0] = fi_mr_desc( self->ingress_buf_mr );
-    msg.desc = &desc[0];
-    msg.msg_iov = &iov[0];
-    msg.iov_count = 1;
-    msg.context = &buf->context;
+    msg->desc = &desc[0];
+    msg->msg_iov = &iov[0];
+    msg->iov_count = 1;
+    msg->context = &buf->context;
 
     _ofi_debug("OFI[S]: Posting ingress buffer=%p (chunk=%p)\n", buf, iov[0].iov_base);
 
@@ -570,7 +571,7 @@ static int nn_sofi_ingress_post_buffer( struct nn_sofi * self,
     nn_atomic_inc( &self->ingress_posted, 1 );
 
     /* Post receive buffers */
-    ret = ofi_recvmsg( self->ep, &msg, 0 );
+    ret = ofi_recvmsg( self->ep, msg, 0 );
     if (ret) {
 
         /* Return error */

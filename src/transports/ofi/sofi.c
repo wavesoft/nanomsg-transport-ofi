@@ -1460,9 +1460,6 @@ static void nn_sofi_shutdown (struct nn_fsm *fsm, int src, int type,
 
     }
 
-    /* Stop worker */
-    nn_ofiw_stop( self->worker );
-
     /* Close endpoint */
     _ofi_debug("OFI[S]: Closing endpoint\n");
     ofi_active_endpoint_close( self->ep );

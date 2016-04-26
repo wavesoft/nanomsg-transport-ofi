@@ -655,7 +655,7 @@ static int nn_sofi_ingress_post_all( struct nn_sofi * self )
 static void nn_sofi_ingress_post_eager( struct nn_sofi * self )
 {
     /* If we haven't posted anything, post something now */
-    if (!nn_queue_empty( &self->ingress_free )) {
+    if (!nn_queue_empty( &self->ingress_free ) && (self->ingress_posted.n == 0)) {
         _ofi_debug("OFI[S]: Posting another ingress buffer\n");
         nn_sofi_ingress_post( self );
     }
@@ -682,7 +682,10 @@ static void nn_sofi_ingress_busy_eager( struct nn_sofi * self )
 static void nn_sofi_ingress_handle_error( struct nn_sofi * self, 
     struct fi_cq_err_entry * cq_entry )
 {
-    /* Nothing really to do here */
+
+    /* Decrement items on transit */
+    nn_atomic_dec( &self->ingress_posted, 1 );
+
 }
 
 /**
@@ -696,6 +699,9 @@ static void nn_sofi_ingress_handle( struct nn_sofi * self,
     struct fi_cq_msg_entry * cq_entry )
 {
     struct nn_sofi_in_buf * buf;
+
+    /* Decrement items on transit */
+    nn_atomic_dec( &self->ingress_posted, 1 );
 
     /* Reset keepalive timer */
     self->ticks_in = 0;
@@ -1517,7 +1523,7 @@ static void nn_sofi_handler (struct nn_fsm *fsm, int src, int type,
                     NN_SOFI_TIMEOUT_KEEPALIVE_TICK );
 
                 /* Post first ingress buffer */
-                ret = nn_sofi_ingress_post_all( self );
+                ret = nn_sofi_ingress_post( self );
                 if (ret) {
                     FT_PRINTERR("nn_sofi_ingress_post", ret);
                     nn_sofi_critical_error( self, ret );

@@ -32,7 +32,7 @@
    You can specify them as compiler definitions */
 
 /* Enable debug logs */
-// #define OFI_DEBUG_LOG
+#define OFI_DEBUG_LOG
 
 /* Open one domain per endpoint */
 // #define OFI_DOMAIN_PER_EP
@@ -48,7 +48,7 @@
 /* Draining timer before stopping SOFI. Ideally this should
    be 0 (=disabled), but since there are some bugs in some
    providers this acts as a fallback */
-#define OFI_DRAIN_TIMEOUT 500
+#define OFI_DRAIN_TIMEOUT 0
 
 /* Disable handshake negotiation (usnic fix) */
 #define OFI_DISABLE_HANDSHAKE

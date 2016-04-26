@@ -171,8 +171,6 @@ struct nn_sofi {
     size_t                      ingress_buf_size;
     struct fid_mr               *ingress_buf_mr;
     uint8_t                     ingress_state;
-    struct nn_mutex             ingress_free_mutex;
-    struct nn_mutex             ingress_busy_mutex;
 
     /* Local and remote handshake information */
     struct nn_sofi_handshake    hs_local;

@@ -325,15 +325,15 @@ static int nn_sofi_egress_post_buffers( struct nn_sofi * self,
        NOTE: You will notice that we are assigning data to be sent
              that are allocated on heap. That's ok, because they
              will be copied to a slab buffer by ofi_mr_describe */
-    nn_putl( hdr, nn_chunkref_size (&ctx->msg.sphdr) + 
-                  nn_chunkref_size (&ctx->msg.body) );
-    iov[0].iov_base = hdr;
+    nn_putl( &hdr[0], nn_chunkref_size (&ctx->msg.sphdr) + 
+                      nn_chunkref_size (&ctx->msg.body) );
+    iov[0].iov_base = &hdr[0];
     iov[0].iov_len = 4;
 
     /* Get SP Header length */
     iov[1].iov_len = nn_chunkref_size (&ctx->msg.sphdr);
 
-    /* If SP Header is empty, use only 1 iov */
+    /* If SP Header is empty, use only 2 iov */
     if (nn_fast( iov[1].iov_len == 0 )) {
 
         /* Prepare Body IOVs */
@@ -570,7 +570,7 @@ static int nn_sofi_ingress_post_buffer( struct nn_sofi * self,
     /* Prepare message from active ingress buffer */
     memset( &msg, 0, sizeof(msg) );
     iov[0].iov_base = ((uint8_t*)nn_chunk_deref( buf->chunk )) - sizeof(uint32_t);
-    iov[0].iov_len = self->ingress_buf_size;
+    iov[0].iov_len = self->ingress_buf_size + sizeof(uint32_t);
     desc[0] = fi_mr_desc( self->ingress_buf_mr );
     msg.desc = &desc[0];
     msg.msg_iov = &iov[0];
@@ -869,6 +869,9 @@ int nn_sofi_init ( struct nn_sofi *self, struct ofi_domain *domain, int offset,
     /*  OFI Sub-Component Initialization   */
     /* ----------------------------------- */
 
+    /* Get an OFI worker */
+    self->worker = ofi_fabric_getworker( domain->parent, &self->fsm );
+
     /* Get options */
     int rx_queue, tx_queue, rx_msg_size, slab_size;
     size_t opt_sz = sizeof(int);
@@ -908,9 +911,6 @@ int nn_sofi_init ( struct nn_sofi *self, struct ofi_domain *domain, int offset,
         NN_SOFI_KEEPALIVE_PACKET_LEN );
 
     /* ####[ EGRESS ]#### */
-
-    /* Get an OFI worker */
-    self->worker = ofi_fabric_getworker( domain->parent, &self->fsm );
 
     /* Initialize egress MR Manager with 32 banks */
     struct ofi_mr_bank_attr mrattr_tx = {
@@ -963,6 +963,9 @@ int nn_sofi_init ( struct nn_sofi *self, struct ofi_domain *domain, int offset,
     /* Wrap buffer size to page-size multiplicants */
     self->ingress_buf_size = (1 + ((rx_msg_size - 1) / NN_SOFI_PAGE_SIZE)) 
                                 * NN_SOFI_PAGE_SIZE;
+
+    _ofi_debug("OFI[S]:          Effective-Recv-Size: %i b\n", 
+        self->ingress_buf_size);
 
     /* Claculate the size of the buffer */
     size_t ibufsz = self->ingress_buf_size + NN_SOFI_PAGE_SIZE;

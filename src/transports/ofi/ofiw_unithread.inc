@@ -100,7 +100,7 @@ static void nn_ofiw_pool_term_item( struct nn_ofiw_item * item )
 }
 
 /**
- * Calculate how many kilo-cycles we can run per millisedon
+ * Calculate how many kilo-cycles we can run per millisecond
  */
 static uint32_t nn_ofiw_kinstr_per_ms()
 {
@@ -117,7 +117,7 @@ static uint32_t nn_ofiw_kinstr_per_ms()
     clock_gettime(CLOCK_MONOTONIC, &b);
 
     /* Count kinst_ms spent */
-    kinst_ms = 1000000000 / (b.tv_nsec - a.tv_nsec);
+    kinst_ms = 1000000000 / ((b.tv_sec - a.tv_sec) * 1000000000ULL + b.tv_nsec - a.tv_nsec);
 
     /* Wrap to maximum 32-bit */
     if (kinst_ms > 4294967295) {

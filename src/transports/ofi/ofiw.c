@@ -479,7 +479,7 @@ struct nn_ofiw * nn_ofiw_pool_getworker( struct nn_ofiw_pool * self,
     nn_assert( worker );
 
     /* Initialize */
-    worker->active = 0;
+    worker->active = 2;
     worker->owner = owner;
     worker->parent = self;
     nn_list_init( &worker->items );

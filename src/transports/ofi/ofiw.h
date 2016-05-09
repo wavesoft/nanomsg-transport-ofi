@@ -176,6 +176,9 @@ struct nn_ofiw {
     /* The owner FSM */
     struct nn_fsm           *owner;
 
+    /* Synchronisation mutex */
+    struct nn_mutex         mutex;
+
     /* === Local variables === */
 
     /* The parent pool */
@@ -235,5 +238,9 @@ int nn_ofiw_remove( struct nn_ofiw * worker, void * fd );
 /* Enable/Disable this worker */
 void nn_ofiw_start( struct nn_ofiw * worker );
 void nn_ofiw_stop( struct nn_ofiw * worker );
+
+/* Guard/Unguard thread-safety for the given FD in the worker */
+void nn_ofiw_lock( struct nn_ofiw * worker );
+void nn_ofiw_unlock( struct nn_ofiw * worker );
 
 #endif

@@ -41,7 +41,7 @@
 /* ============================== */
 
 /**
- * Calculate how many kilo-cycles we can run per millisedon
+ * Calculate how many kilo-cycles we can run per millisecond
  */
 static uint32_t nn_ofiw_kinstr_per_ms()
 {
@@ -58,7 +58,7 @@ static uint32_t nn_ofiw_kinstr_per_ms()
     clock_gettime(CLOCK_MONOTONIC, &b);
 
     /* Count kinst_ms spent */
-    kinst_ms = 1000000000 / (b.tv_nsec - a.tv_nsec);
+    kinst_ms = 1000000000 / ((b.tv_sec - a.tv_sec) * 1000000000ULL + b.tv_nsec - a.tv_nsec);
 
     /* Wrap to maximum 32-bit */
     if (kinst_ms > 4294967295) {
@@ -174,6 +174,9 @@ static void nn_ofiw_poller_thread( void *arg )
                 continue;
             }
 
+            /* Synchronisation mutex */
+            nn_mutex_lock( &worker->mutex );
+
             /* Iterate over poll items */
             for (jt = nn_list_begin (&worker->items);
                   jt != nn_list_end (&worker->items);
@@ -192,6 +195,9 @@ static void nn_ofiw_poller_thread( void *arg )
                         if (nn_slow(ret > 0)) {
                             _ofi_debug("OFI[w]: Got %i CQ Event(s) from src=%i,"
                                " worker=%p, fd=%p\n",ret,item->src,worker,item);
+
+                            /* Unlock worker mutex */
+                            nn_mutex_unlock( &worker->mutex );
 
                             /* Feed event to the FSM */
                             self->lock_safe = 1;
@@ -224,6 +230,9 @@ static void nn_ofiw_poller_thread( void *arg )
 
                             _ofi_debug("OFI[w]: Got CQ Error from src=%i, worker=%p, fd=%p\n",
                                 item->src, worker, item);
+
+                            /* Unlock worker mutex */
+                            nn_mutex_unlock( &worker->mutex );
 
                             /* Feed event to the FSM */
                             self->lock_safe = 1;
@@ -266,6 +275,9 @@ static void nn_ofiw_poller_thread( void *arg )
                                     item->src, worker, item,
                                     item->data_err.eq_err_entry.err);
 
+                                /* Unlock worker mutex */
+                                nn_mutex_unlock( &worker->mutex );
+
                                 /* Feed event to the FSM */
                                 self->lock_safe = 1;
                                 nn_ctx_enter (worker->owner->ctx);
@@ -282,6 +294,9 @@ static void nn_ofiw_poller_thread( void *arg )
                                 _ofi_debug("OFI[w]: Got EQ Event from src=%i, "
                                     "worker=%p, fd=%p, event=%i\n",
                                     item->src, worker, item, event);
+
+                                /* Unlock worker mutex */
+                                nn_mutex_unlock( &worker->mutex );
 
                                 /* Feed event to the FSM */
                                 self->lock_safe = 1;
@@ -306,6 +321,9 @@ static void nn_ofiw_poller_thread( void *arg )
                 }
 
             }
+
+            /* Unlock synchronisation mutex */
+            nn_mutex_unlock( &worker->mutex );
 
         }
 
@@ -466,6 +484,7 @@ struct nn_ofiw * nn_ofiw_pool_getworker( struct nn_ofiw_pool * self,
     worker->parent = self;
     nn_list_init( &worker->items );
     nn_efd_init( &worker->efd_sync );
+    nn_mutex_init( &worker->mutex );
 
     /* Add to list */
     nn_list_item_init( &worker->item );
@@ -491,6 +510,7 @@ void nn_ofiw_term( struct nn_ofiw * self )
     /* Remove from worker list */
     nn_list_erase( &pool->workers, &self->item );
     nn_list_item_term( &self->item );
+    nn_mutex_term( &self->mutex );
 
     /* Dispose all items */
     while ((it = nn_list_begin (&self->items)) != nn_list_end (&self->items)) {
@@ -713,4 +733,16 @@ int nn_ofiw_remove( struct nn_ofiw * self, void * fd )
     /* Success */
     nn_ofiw_unlock_thread( self->parent );
     return 0;
+}
+
+/* Synchronisation lock */
+void nn_ofiw_lock( struct nn_ofiw * worker )
+{
+    nn_mutex_lock( &worker->mutex );
+}
+
+/* Synchronisation unlock */
+void nn_ofiw_unlock( struct nn_ofiw * worker )
+{
+    nn_mutex_unlock( &worker->mutex );
 }

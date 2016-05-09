@@ -8,7 +8,7 @@ CURR_PATH=`pwd`
 popd > /dev/null
 
 # Do some quick-check to make sure that's a nanomsg directory
-[ ! -f "${NANOMSG_DIR}/libnanomsg.pc.in" ] && echo -e "** FAILED **\nThis does not look like a nanomsg directory!" && exit 1
+[ ! -f "${NANOMSG_DIR}/src/nn.h" ] && echo -e "** FAILED **\nThis does not look like a nanomsg directory!" && exit 1
 
 # Prepare some variables
 GIT_VERSION=$(git rev-parse HEAD)
@@ -46,16 +46,8 @@ fi
 # Apply patches
 echo ${NANOMSG_DIR}
 echo "Patching..."
-patch -p0 -d ${NANOMSG_DIR} < ${CURR_PATH}/patch/nanomsg-patch-global.patch
-[ $? -ne 0 ] && echo -e "** FAILED **\nUnable to apply patch to src/core/global.c!" && exit 1
-patch -p0 -d ${NANOMSG_DIR} < ${CURR_PATH}/patch/nanomsg-patch-symbol.patch
-[ $? -ne 0 ] && echo -e "** FAILED **\nUnable to apply patch to src/core/symbol.c!" && exit 1
-patch -p0 -d ${NANOMSG_DIR} < ${CURR_PATH}/patch/nanomsg-patch-maxtransport.patch
-[ $? -ne 0 ] && echo -e "** FAILED **\nUnable to apply patch to src/core/sock.h!" && exit 1
-patch -d ${NANOMSG_DIR} < ${CURR_PATH}/patch/nanomsg-patch-makefile.patch
-[ $? -ne 0 ] && echo -e "** FAILED **\nUnable to apply patch to Makefile.am!" && exit 1
-patch -d ${NANOMSG_DIR} < ${CURR_PATH}/patch/nanomsg-patch-configure.patch
-[ $? -ne 0 ] && echo -e "** FAILED **\nUnable to apply patch to configure.am!" && exit 1
+( cd ${NANOMSG_DIR}; git am --signoff < ${CURR_PATH}/patch/add_ofi_transport.patch )
+[ $? -ne 0 ] && echo -e "** FAILED **\nUnable to apply ofi transport patch!" && exit 1
 
 # Link sources directory
 echo "Copying..."

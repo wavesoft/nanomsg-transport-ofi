@@ -731,14 +731,19 @@ int ofi_cm_listen( struct ofi_passive_endpoint * pep )
 {
     int ret;
 
+    /* Lock worker activity */
+    nn_ofiw_lock( pep->worker );
+
     /* Listen for incoming connection */
     ret = fi_listen(pep->ep);
     if (ret) {
         FT_PRINTERR("fi_listen", ret);
+        nn_ofiw_unlock( pep->worker );
         return ret;
     }
 
     /* Success */
+    nn_ofiw_unlock( pep->worker );
     return 0;
 }
 
@@ -761,14 +766,19 @@ int ofi_cm_accept( struct ofi_active_endpoint * ep, const void *data,
 {
     int ret;
 
+    /* Lock worker activity */
+    nn_ofiw_lock( ep->worker );
+
     /* Accept the incoming connection */
     ret = fi_accept(ep->ep, data, datalen);
     if (ret) {
         FT_PRINTERR("fi_accept", ret);
+        nn_ofiw_unlock( ep->worker );
         return ret;
     }
 
     /* Success */
+    nn_ofiw_unlock( ep->worker );
     return 0;
 }
 
@@ -787,6 +797,9 @@ int ofi_cm_connect( struct ofi_active_endpoint * ep, void *addr,
 {
     int ret;
 
+    /* Lock worker activity */
+    nn_ofiw_lock( ep->worker );
+
     /* Get domain's dest address if addr is null */
     if (!addr) {
         addr = ep->domain->fi->dest_addr;
@@ -796,10 +809,12 @@ int ofi_cm_connect( struct ofi_active_endpoint * ep, void *addr,
     ret = fi_connect(ep->ep, addr, data, datalen);
     if (ret) {
         FT_PRINTERR("fi_connect", ret);
+        nn_ofiw_unlock( ep->worker );
         return ret;
     }
 
     /* Success */
+    nn_ofiw_unlock( ep->worker );
     return 0;
 }
 
@@ -810,14 +825,19 @@ int ofi_cm_reject( struct ofi_passive_endpoint * pep, struct fi_info * fi )
 {
     int ret;
 
+    /* Lock worker activity */
+    nn_ofiw_lock( pep->worker );
+
     /* Reject */
     ret = fi_reject(pep->ep, fi->handle, NULL, 0);
     if (ret) {
         FT_PRINTERR("fi_reject", ret);
+        nn_ofiw_unlock( pep->worker );
         return ret;
     }
 
     /* Success */
+    nn_ofiw_unlock( pep->worker );
     return 0;
 }
 
@@ -852,14 +872,19 @@ int ofi_sendmsg( struct ofi_active_endpoint * ep, const struct fi_msg *msg,
     // printf("§§>> send_ctx=%p, (ptr=%p, len=%zu)\n", msg->context, 
         // msg->msg_iov[0].iov_base, msg->msg_iov[0].iov_len);
 
+    /* Lock worker activity for sending */
+    nn_ofiw_lock( ep->worker );
+
     /* Try to send the message */
     ret = fi_sendmsg( ep->ep, msg, flags );
     if (ret) {
         FT_PRINTERR("fi_sendmsg", ret);
+        nn_ofiw_unlock( ep->worker );
         return ret;
     }
 
     /* Success */
+    nn_ofiw_unlock( ep->worker );
     return 0;
 }
 
@@ -874,14 +899,19 @@ int ofi_recvmsg( struct ofi_active_endpoint * ep, const struct fi_msg *msg,
     // printf("§§>> recv_ctx=%p, (ptr=%p, len=%zu)\n", msg->context, 
         // msg->msg_iov[0].iov_base, msg->msg_iov[0].iov_len);
 
+    /* Lock worker activity for sending */
+    nn_ofiw_lock( ep->worker );
+
     /* Try to send the message */
     ret = fi_recvmsg( ep->ep, msg, flags );
     if (ret) {
         FT_PRINTERR("fi_recvmsg", ret);
+        nn_ofiw_unlock( ep->worker );
         return ret;
     }
 
     /* Success */
+    nn_ofiw_unlock( ep->worker );
     return 0;
 }
 

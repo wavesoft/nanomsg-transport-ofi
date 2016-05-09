@@ -1,0 +1,183 @@
+From 734af36b250f49642a96b330d2a100b2f5b657f1 Mon Sep 17 00:00:00 2001
+From: Ioannis Charalampidis <ioannis.charalampidis@cern.ch>
+Date: Mon, 25 Apr 2016 18:59:21 +0200
+Subject: [PATCH] Modifying nanomsg base for ofi transport support
+
+---
+ Makefile.am       | 24 ++++++++++++++++++++++++
+ configure.ac      | 48 ++++++++++++++++++++++++++++++++++++++++++++++++
+ src/core/global.c |  2 ++
+ src/core/sock.h   |  2 +-
+ src/core/symbol.c |  2 ++
+ 5 files changed, 77 insertions(+), 1 deletion(-)
+
+diff --git a/Makefile.am b/Makefile.am
+index 9cbfa5a..5b3b117 100644
+--- a/Makefile.am
++++ b/Makefile.am
+@@ -43,6 +43,10 @@ nninclude_HEADERS = \
+     src/survey.h \
+     src/bus.h
+ 
++if OFI
++nninclude_HEADERS += src/ofi.h
++endif #OFI
++
+ lib_LTLIBRARIES = libnanomsg.la
+ 
+ NANOMSG_CORE = \
+@@ -304,12 +308,32 @@ TRANSPORTS_WS = \
+     src/transports/ws/sha1.h \
+     src/transports/ws/sha1.c
+ 
++TRANSPORTS_OFI = \
++    src/transports/ofi/sofi.h \
++    src/transports/ofi/sofi.c \
++    src/transports/ofi/bofi.h \
++    src/transports/ofi/bofi.c \
++    src/transports/ofi/cofi.h \
++    src/transports/ofi/cofi.c \
++    src/transports/ofi/ofiw.h \
++    src/transports/ofi/ofiw.c \
++    src/transports/ofi/ofiapi.h \
++    src/transports/ofi/ofiapi.c \
++    src/transports/ofi/ofimr.h \
++    src/transports/ofi/ofimr.c \
++    src/transports/ofi/ofi.h \
++    src/transports/ofi/ofi.c 
++
+ NANOMSG_TRANSPORTS = \
+     $(TRANSPORTS_UTILS) \
+     $(TRANSPORTS_INPROC) \
+     $(TRANSPORTS_IPC) \
+     $(TRANSPORTS_TCP) \
+     $(TRANSPORTS_WS)
++    
++if OFI
++NANOMSG_TRANSPORTS += $(TRANSPORTS_OFI)
++endif #OFI
+ 
+ libnanomsg_la_SOURCES = \
+     src/transport.h \
+diff --git a/configure.ac b/configure.ac
+index 4c55fa6..0dc6e7e 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -165,6 +165,43 @@ if test "x$enable_debug" = "xyes"; then
+ fi
+ 
+ ################################################################################
++#  If --enable-ofi is specified set appropriate compiler options.              #
++################################################################################
++
++AC_ARG_ENABLE([ofi], [AS_HELP_STRING([--enable-ofi],
++    [Enable OpenFabrics Interfaces transport [default=no]])])
++
++AC_ARG_ENABLE([ofi_logs], [AS_HELP_STRING([--enable-ofi-logs],
++    [Enable verbose logs on OFI transport [default=no]])])
++
++AC_ARG_ENABLE([ofi_waitsets], [AS_HELP_STRING([--enable-ofi-waitsets],
++    [Enable waitsets on OFI transport [default=no]])])
++
++## Enable ofi sources
++
++AM_CONDITIONAL([OFI], [test "x$enable_ofi" = "xyes" ])
++
++## Enable verbose logging using --enable-ofi-logs
++
++if test "x$enable_ofi_logs" = "xyes"; then
++    AC_DEFINE([OFI_DEBUG_LOG])
++fi
++
++## Enable waitsets using --enable-ofi-waitsets 
++
++if test "x$enable_ofi_waitsets" = "xyes"; then
++    AC_DEFINE([OFI_USE_WAITSET])
++fi
++
++## Specify custom libfabric path using --with-fabric=
++
++AC_ARG_WITH([fabric],
++    [AS_HELP_STRING([--with-fabric], [installation of libfabric])],
++    [ LDFLAGS="${LDFLAGS} -L${withval}/lib"
++      CFLAGS="${CFLAGS} -I${withval}/include" ]
++)
++
++################################################################################
+ #  Build the documentation.                                                    #
+ ################################################################################
+ 
+@@ -341,6 +378,17 @@ AS_IF([test x"$ac_cv_func_eventfd" = xyes], [
+     ])
+ ])
+ 
++AS_IF([test x"$enable_ofi" == "xyes"], [
++    AC_SEARCH_LIBS([fi_getinfo], [fabric],
++      [],
++      [AC_MSG_FAILURE([cannot find libfabric library])]
++    )
++    AC_CHECK_HEADERS([rdma/fabric.h],
++      [],
++      [AC_MSG_FAILURE([cannot find libfabric header])]
++    )
++])
++
+ LT_INIT
+ 
+ DOLT
+diff --git a/src/core/global.c b/src/core/global.c
+index b0e6d94..403ce15 100644
+--- a/src/core/global.c
++++ b/src/core/global.c
+@@ -48,6 +48,7 @@
+ #include "../transports/ipc/ipc.h"
+ #include "../transports/tcp/tcp.h"
+ #include "../transports/ws/ws.h"
++#include "../transports/ofi/ofi.h"
+ 
+ #include "../protocols/pair/pair.h"
+ #include "../protocols/pair/xpair.h"
+@@ -225,6 +226,7 @@ static void nn_global_init (void)
+     nn_global_add_transport (nn_ipc);
+     nn_global_add_transport (nn_tcp);
+     nn_global_add_transport (nn_ws);
++    nn_global_add_transport (nn_ofi);
+ 
+     /*  Plug in individual socktypes. */
+     nn_global_add_socktype (nn_pair_socktype);
+diff --git a/src/core/sock.h b/src/core/sock.h
+index e00312b..954a22f 100644
+--- a/src/core/sock.h
++++ b/src/core/sock.h
+@@ -37,7 +37,7 @@
+ struct nn_pipe;
+ 
+ /*  The maximum implemented transport ID. */
+-#define NN_MAX_TRANSPORT 4
++#define NN_MAX_TRANSPORT 5
+ 
+ struct nn_sock
+ {
+diff --git a/src/core/symbol.c b/src/core/symbol.c
+index 32af085..c2a16ac 100644
+--- a/src/core/symbol.c
++++ b/src/core/symbol.c
+@@ -28,6 +28,7 @@
+ #include "../inproc.h"
+ #include "../ipc.h"
+ #include "../tcp.h"
++#include "../ofi.h"
+ 
+ #include "../pair.h"
+ #include "../pubsub.h"
+@@ -82,6 +83,7 @@ static const struct nn_symbol_properties sym_value_names [] = {
+     NN_SYM(NN_IPC, TRANSPORT, NONE, NONE),
+     NN_SYM(NN_TCP, TRANSPORT, NONE, NONE),
+     NN_SYM(NN_WS, TRANSPORT, NONE, NONE),
++    NN_SYM(NN_OFI, TRANSPORT, NONE, NONE),
+ 
+     NN_SYM(NN_PAIR, PROTOCOL, NONE, NONE),
+     NN_SYM(NN_PUB, PROTOCOL, NONE, NONE),
+-- 
+1.8.3.4 (Apple Git-47)
+

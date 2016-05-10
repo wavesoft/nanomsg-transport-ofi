@@ -592,10 +592,8 @@ int nn_ofiw_add_cq( struct nn_ofiw * self, struct fid_cq * cq, int cq_count,
 
     /* Put item on list queue */
     nn_list_item_init( &item->item );
-    nn_ofiw_lock_thread( self->parent );
     nn_list_insert (&self->items, &item->item,
         nn_list_end (&self->items));
-    nn_ofiw_unlock_thread( self->parent );
 
     _ofi_debug("OFI[w]: Added CQ fd=%p on worker=%p\n", item, self);
 
@@ -621,10 +619,8 @@ int nn_ofiw_add_eq( struct nn_ofiw * self, struct fid_eq * eq, int src )
 
     /* Put item on list queue */
     nn_list_item_init( &item->item );
-    nn_ofiw_lock_thread( self->parent );
     nn_list_insert (&self->items, &item->item,
         nn_list_end (&self->items));
-    nn_ofiw_unlock_thread( self->parent );
 
     _ofi_debug("OFI[w]: Added EQ fd=%p on worker=%p\n", item, self);
 

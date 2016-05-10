@@ -476,15 +476,14 @@ int ofi_passive_endpoint_open( struct ofi_fabric * fabric, struct nn_ofiw * wrk,
     };
 
     /* Open an event queue for this endpoint, through poller */
-    nn_ofiw_unlock( wrk );
     ret = nn_ofiw_open_eq( wrk, src | OFI_SRC_EQ, context, &eq_attr, &pep->eq );
     if (ret) {
         FT_PRINTERR("nn_ofiw_open_eq", ret);
         nn_free(pep);
         *_pep = NULL;
+        nn_ofiw_unlock( wrk );
         return ret;
     }
-    nn_ofiw_lock( wrk );
 
     /* Bind the EQ to the endpoint */
     ret = fi_pep_bind(pep->ep, &pep->eq->fid, 0);
@@ -608,15 +607,14 @@ int ofi_active_endpoint_open( struct ofi_domain* domain, struct nn_ofiw* wrk,
     };
 
     /* Open an event queue for this endpoint, through poller */
-    nn_ofiw_unlock( wrk );
     ret = nn_ofiw_open_eq( wrk, src | OFI_SRC_EQ, context, &eq_attr, &aep->eq );
     if (ret) {
         FT_PRINTERR("nn_ofiw_open_eq", ret);
         nn_free(aep);
         *a = NULL;
+        nn_ofiw_unlock( wrk );
         return ret;
     }
-    nn_ofiw_lock( wrk );
 
     /* Bind the EQ to the endpoint */
     ret = fi_ep_bind(aep->ep, &aep->eq->fid, 0);
@@ -641,16 +639,15 @@ int ofi_active_endpoint_open( struct ofi_domain* domain, struct nn_ofiw* wrk,
     };
 
     /* Open an event queue for this endpoint, through poller */
-    nn_ofiw_unlock( wrk );
     ret = nn_ofiw_open_cq( wrk, src | OFI_SRC_CQ_TX, ep_domain, context, 
         &cq_attr, &aep->cq_tx );
     if (ret) {
         FT_PRINTERR("nn_ofiw_open_cq", ret);
         nn_free(aep);
         *a = NULL;
+        nn_ofiw_unlock( wrk );
         return ret;
     }
-    nn_ofiw_lock( wrk );
 
     /* Bind the CQ to the endpoint */
     ret = fi_ep_bind(aep->ep, &aep->cq_tx->fid, FI_TRANSMIT | FI_SELECTIVE_COMPLETION);
@@ -668,16 +665,15 @@ int ofi_active_endpoint_open( struct ofi_domain* domain, struct nn_ofiw* wrk,
     cq_attr.size = aep->fi->rx_attr->size;
 
     /* Open an event queue for this endpoint, through poller */
-    nn_ofiw_unlock( wrk );
     ret = nn_ofiw_open_cq( wrk, src | OFI_SRC_CQ_RX, ep_domain, context, 
         &cq_attr, &aep->cq_rx );
     if (ret) {
         FT_PRINTERR("nn_ofiw_open_cq", ret);
         nn_free(aep);
         *a = NULL;
+        nn_ofiw_unlock( wrk );
         return ret;
     }
-    nn_ofiw_lock( wrk );
 
     /* Bind the CQ to the endpoint */
     ret = fi_ep_bind(aep->ep, &aep->cq_rx->fid, FI_RECV);

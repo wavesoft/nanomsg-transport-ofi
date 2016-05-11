@@ -159,6 +159,8 @@ static void nn_ofiw_poller_thread( void *arg )
 
 #endif
 
+        nn_mutex_lock( &self->glob_mutex );
+
         /* Iterate over workers */
         for (it = nn_list_begin (&self->workers);
               it != nn_list_end (&self->workers);
@@ -198,6 +200,7 @@ static void nn_ofiw_poller_thread( void *arg )
 
                             /* Unlock worker mutex */
                             nn_mutex_unlock( &worker->mutex );
+                            nn_mutex_unlock( &self->glob_mutex );
 
                             /* Feed event to the FSM */
                             self->lock_safe = 1;
@@ -233,6 +236,7 @@ static void nn_ofiw_poller_thread( void *arg )
 
                             /* Unlock worker mutex */
                             nn_mutex_unlock( &worker->mutex );
+                            nn_mutex_unlock( &self->glob_mutex );
 
                             /* Feed event to the FSM */
                             self->lock_safe = 1;
@@ -277,6 +281,7 @@ static void nn_ofiw_poller_thread( void *arg )
 
                                 /* Unlock worker mutex */
                                 nn_mutex_unlock( &worker->mutex );
+                                nn_mutex_unlock( &self->glob_mutex );
 
                                 /* Feed event to the FSM */
                                 self->lock_safe = 1;
@@ -297,6 +302,7 @@ static void nn_ofiw_poller_thread( void *arg )
 
                                 /* Unlock worker mutex */
                                 nn_mutex_unlock( &worker->mutex );
+                                nn_mutex_unlock( &self->glob_mutex );
 
                                 /* Feed event to the FSM */
                                 self->lock_safe = 1;
@@ -339,6 +345,9 @@ static void nn_ofiw_poller_thread( void *arg )
 
             }
         }
+
+        // unlock global mutex
+        nn_mutex_unlock( &self->glob_mutex );
 
 continue_outer:
 
@@ -393,6 +402,7 @@ int nn_ofiw_pool_init( struct nn_ofiw_pool * self, struct fid_fabric *fabric )
     /* Initialize structures */
     nn_list_init( &self->workers );
     nn_mutex_init( &self->lock_mutex );
+    nn_mutex_init ( &self->glob_mutex );
 
 #ifdef OFI_USE_WAITSET
 
@@ -430,7 +440,7 @@ int nn_ofiw_pool_init( struct nn_ofiw_pool * self, struct fid_fabric *fabric )
 #endif
     };
     ret = fi_eq_open( fabric, &internal_eq, &self->eq, &self->context);
-    if (ret) {        
+    if (ret) { 
         FT_PRINTERR("fi_eq_open", ret);
         return ret;
     }
@@ -734,11 +744,11 @@ int nn_ofiw_remove( struct nn_ofiw * self, void * fd )
 /* Synchronisation lock */
 void nn_ofiw_lock( struct nn_ofiw * worker )
 {
-    nn_mutex_lock( &worker->mutex );
+    nn_mutex_lock( &worker->parent->glob_mutex ); //mutex );
 }
 
 /* Synchronisation unlock */
 void nn_ofiw_unlock( struct nn_ofiw * worker )
 {
-    nn_mutex_unlock( &worker->mutex );
+    nn_mutex_unlock( &worker->parent->glob_mutex ); //mutex );
 }

@@ -110,6 +110,9 @@ struct nn_ofiw_pool {
     /* Lock mutex */
     struct nn_mutex         lock_mutex;
 
+    /* Lock mutex */
+    struct nn_mutex         glob_mutex;
+
 #ifndef OFI_USE_WAITSET
 
     /* Efd to place lock request */

@@ -1,0 +1,99 @@
+\documentclass[final,a4paper,10pt,abstracton]{scrreprt}
+
+
+\usepackage{draftwatermark}\SetWatermarkScale{5} %_DRAFT watermark
+\include{atex}
+
+\usepackage[underline=false,rounded corners=true]{macros/pgf-umlsd} % UML Sequence Diagrams macro
+
+\title{Technical Report}
+\author{Ioannis Charalampidis}
+
+\providecommand{\ofi}{{\scshape nanomsg-transport-ofi~}}
+\providecommand{\cern}{{\scshape cern~}}
+
+\providecommand{\todo}[1]{\textcolor{red}{#1}}
+\definecolor {light-blue}{rgb}{230,244,255}
+
+\usepackage[nottoc]{tocbibind}
+
+\usepackage{makeidx}
+\makeindex
+
+\setcounter{secnumdepth}{4}
+\setcounter{tocdepth}{4}
+
+\begin{document}
+
+\selectlanguage{english}
+\renewcommand\today{March 2011}
+
+\pagestyle{empty}
+\begin{titlepage}
+	\begin{addmargin}[-\oddsidemargin]{-\evensidemargin}
+  		\newlength{\saveparindent}
+		\setlength{\saveparindent}{\parindent}
+		\setlength{\parindent}{0cm}
+
+  		\sf
+		\center
+		\vspace*{-1cm}
+		\mbox{
+	  		\parbox{4cm}{
+				\resizebox{4cm}{!}{\input{img/IMG_cernlogo}}
+	  		}
+	  		\parbox{9cm}{
+	    			%\LARGE CERN\\
+	    			%\large PH-SFT%\\[0.5cm]
+			}
+		}
+		\vspace*{2.5cm}
+ 
+  		{\large \scshape Data-plane computing system}\\[0.5cm]
+  		\HRule\\[0.4cm]
+		\huge libFabric transport for nanomsg\\
+		\HRule\\[1.5cm]
+		
+%        \includegraphics[height=5cm]{marbles}\\[1.5cm]
+        % \includegraphics{img/IMG_cernvmlogo}\\[1.5cm] 
+		\large Ioannis Charalampidis \qquad Lazaros Lazaridis\\[0.4cm]
+		%\today
+  
+  		\vfill
+		\large Refers to nanomsg-transport-ofi 1.0.2b\\[1ex]
+		%  \LARGE ---DRAFT---\\[1ex]
+		%  \LARGE www.grgen.net\\[6ex]
+		%  \LARGE Jakob Blomer \qquad Rubino Gei\ss\\[3ex]
+		%  \large \today\\
+  
+		\vfill
+		\large Technical Report\\
+		Version: 0.1 (Draft) \today 
+		%	\large ISSN 1432-7864
+
+  		\setlength{\parindent}{\saveparindent}
+	\end{addmargin}
+\end{titlepage}
+\cleardoublepage
+\pagenumbering{roman}
+
+
+
+\abstract{
+The \ofi\ transport is a new transport to nanomsg that enables access to high-performance fabrics, such as usNIC, Infiniband, Omni-Path etc., using the libfabric library. By extending nanomsg we are perserving the Scalability Protocols provided by the library, thus greatly simplifying the integration with existing project.
+}
+
+\tableofcontents
+\clearpage
+\pagenumbering{arabic}
+\pagestyle{headings}
+
+\include{content/overview}
+
+\pagestyle{plain}
+\bibliographystyle{plain}
+\bibliography{ofiRefs}
+
+\printindex
+
+\end{document}
